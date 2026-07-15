@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-07
+last-reviewed: 2026-07-15
 ---
 
 # 60-marketing — 目标说明
@@ -11,6 +11,9 @@ last-reviewed: 2026-07-07
 
 ## 放什么
 产品定位与价值主张、目标受众、发布说明、竞品参考。
+
+## 当前发布
+- [组织管理与组织账单正式上线](./发布说明.md)
 
 ## 不放什么
 - 内部需求细节 -> 00-context/

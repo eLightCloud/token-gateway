@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-07
+last-reviewed: 2026-07-15
 ---
 
 # 文档入口
@@ -10,9 +10,9 @@ last-reviewed: 2026-07-07
 本项目是 Go 实现的 AI API 网关/代理，统一聚合 OpenAI、Claude、Gemini、Azure、AWS Bedrock 等上游模型服务，并提供用户、计费、限流与管理后台能力。
 
 ## 当前阶段
-- 当前阶段：文档结构初始化。
-- 当前重点：建立 AI 与新成员可快速定位约束、命令、架构和临时开发记录的目录边界。
-- 当前禁止：本次不修改 `AGENTS.md`、`CLAUDE.md`、`GEMINI.md` 等 AI 辅助入口文件。
+- 当前阶段：组织管理与组织账单产品已完成并上线，进入生产运行与持续维护阶段。
+- 当前重点：保持个人扣费、组织汇总的产品边界，维护生产稳定性、账单口径和上游兼容性。
+- 当前进度：[组织与账单上线进度](./50-planning/组织与账单上线进度.md)。
 
 ## Read First（AI 与新人按此顺序，不得跳读）
 1. AGENTS.md
