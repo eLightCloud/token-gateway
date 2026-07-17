@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -261,12 +262,16 @@ func registerOrganizationE2ERoutes(router *gin.Engine) {
 		organizationRoute.POST("/current/members", AddCurrentOrganizationMember)
 		organizationRoute.PATCH("/current/members/:user_id", UpdateCurrentOrganizationMember)
 		organizationRoute.DELETE("/current/members/:user_id", DeleteCurrentOrganizationMember)
+		organizationRoute.POST("/current/members/:user_id/billing-start/preview", PreviewCurrentOrganizationMemberBillingStart)
+		organizationRoute.POST("/current/members/:user_id/billing-start", UpdateCurrentOrganizationMemberBillingStart)
 		organizationRoute.GET("/current/billing/summary", GetCurrentOrganizationBillingSummary)
 		organizationRoute.GET("/current/billing/members", GetCurrentOrganizationBillingMembers)
 		organizationRoute.GET("/current/billing/models", GetCurrentOrganizationBillingModels)
 		organizationRoute.GET("/current/billing/channels", GetCurrentOrganizationBillingChannels)
 		organizationRoute.GET("/current/billing/trend", GetCurrentOrganizationBillingTrend)
 		organizationRoute.GET("/current/billing/logs", GetCurrentOrganizationBillingLogs)
+		organizationRoute.GET("/current/billing/logs/export", ExportCurrentOrganizationBillingLogs)
+		organizationRoute.GET("/current/billing/export", ExportCurrentOrganizationBilling)
 	}
 
 	adminOrganizationRoute := router.Group("/api/admin/organizations")
@@ -275,6 +280,8 @@ func registerOrganizationE2ERoutes(router *gin.Engine) {
 		adminOrganizationRoute.GET("/:id", AdminGetOrganization)
 		adminOrganizationRoute.GET("/:id/members", AdminListOrganizationMembers)
 		adminOrganizationRoute.DELETE("/:id/members/:user_id", AdminDeleteOrganizationMember)
+		adminOrganizationRoute.POST("/:id/members/:user_id/billing-start/preview", AdminPreviewOrganizationMemberBillingStart)
+		adminOrganizationRoute.POST("/:id/members/:user_id/billing-start", AdminUpdateOrganizationMemberBillingStart)
 		adminOrganizationRoute.GET("/:id/billing/summary", AdminGetOrganizationBillingSummary)
 	}
 
@@ -585,4 +592,241 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 	require.NoError(t, model.DB.First(&member, 1002).Error)
 	assert.Equal(t, 10000, member.Quota)
 	assert.Equal(t, 300, member.UsedQuota)
+}
+
+// previewOrganizationBillingStart 调预览接口并要求成功，返回预览结果。
+func previewOrganizationBillingStart(t *testing.T, router *gin.Engine, fixture organizationE2EFixture, operatorUserId, targetUserId int, candidate int64) model.OrganizationBillingStartPreview {
+	t.Helper()
+	res := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, operatorUserId, http.MethodPost,
+		fmt.Sprintf("/api/organization/current/members/%d/billing-start/preview", targetUserId),
+		map[string]any{"candidate_billing_start": candidate},
+	))
+	return decodeOrganizationE2EData[model.OrganizationBillingStartPreview](t, res)
+}
+
+// applyOrganizationBillingStartRaw 调应用接口并返回原始响应（不要求成功），用于负面用例。
+// 只传 candidate + expected：增量统计由服务端在事务内重算，不接受客户端回传。
+func applyOrganizationBillingStartRaw(t *testing.T, router *gin.Engine, fixture organizationE2EFixture, operatorUserId, targetUserId int, candidate, expected int64) organizationE2EResponse {
+	t.Helper()
+	return decodeOrganizationE2EResponse(t, performOrganizationE2ERequest(
+		t, router, fixture, operatorUserId, http.MethodPost,
+		fmt.Sprintf("/api/organization/current/members/%d/billing-start", targetUserId),
+		map[string]any{
+			"candidate_billing_start": candidate,
+			"expected_billing_start":  expected,
+		},
+	))
+}
+
+// applyOrganizationBillingStart 以预览+应用两步回填某成员的账单归属起点：用预览返回的当前
+// 生效起点作为乐观锁预期值，并断言预览无冲突、应用成功。
+func applyOrganizationBillingStart(t *testing.T, router *gin.Engine, fixture organizationE2EFixture, operatorUserId, targetUserId int, candidate int64) {
+	t.Helper()
+	preview := previewOrganizationBillingStart(t, router, fixture, operatorUserId, targetUserId, candidate)
+	require.False(t, preview.Conflict, "unexpected billing window conflict")
+	resp := applyOrganizationBillingStartRaw(t, router, fixture, operatorUserId, targetUserId, candidate, preview.CurrentBillingStart)
+	require.True(t, resp.Success, resp.Message)
+}
+
+// TestOrganizationE2EBillingStartBackfill 验证把成员账单归属起点回退到加入前之后，仍保留的
+// 加入前消费日志进入组织账单（420 + 9000 + 8000 = 17420，3 + 2 = 5），同时不破坏 Member
+// 数据隔离与个人计费。
+func TestOrganizationE2EBillingStartBackfill(t *testing.T) {
+	fixture, router := setupOrganizationE2E(t)
+	// 回填后窗口需覆盖最早的加入前日志（user 1001 @1782820800），起点早于该时间。
+	const backfillWindow = "start_timestamp=1782820000&end_timestamp=1783511199"
+
+	// 回填前基线：加入前日志不计入组织账单。
+	baseline := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/summary?"+backfillWindow, nil,
+	)))
+	assert.Equal(t, 420, baseline.TotalQuota)
+	assert.Equal(t, 3, baseline.RequestCount)
+
+	// 以组织 Admin 身份回填两个成员的账单归属起点至其加入前。
+	applyOrganizationBillingStart(t, router, fixture, 1001, 1001, 1782820000)
+	applyOrganizationBillingStart(t, router, fixture, 1001, 1002, 1783160000)
+
+	// 回填后：加入前消费纳入组织账单。
+	backfilled := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/summary?"+backfillWindow, nil,
+	)))
+	assert.Equal(t, 17420, backfilled.TotalQuota)
+	assert.Equal(t, 5, backfilled.RequestCount)
+
+	// Member 视角仍被强制限定为本人范围：user 1002 只能看到自己的回填后用量（8000 + 230 + 70 = 8300）。
+	memberView := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/summary?"+backfillWindow, nil,
+	)))
+	assert.Equal(t, 8300, memberView.TotalQuota)
+
+	// 回填为每次更新写入一条操作审计日志（type=manage），但消费类原始日志条数不变。
+	var manageAudits int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeManage).Count(&manageAudits).Error)
+	assert.Equal(t, int64(2), manageAudits, "two billing-start updates produce two audit logs")
+	consumeFixtureCount := 0
+	for _, lg := range fixture.Logs {
+		if lg.Type == model.LogTypeConsume {
+			consumeFixtureCount++
+		}
+	}
+	var consumeLogs int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&consumeLogs).Error)
+	assert.Equal(t, int64(consumeFixtureCount), consumeLogs, "consume logs are not modified or deleted")
+	// 个人计费不受回填影响。
+	var member model.User
+	require.NoError(t, model.DB.First(&member, 1002).Error)
+	assert.Equal(t, 10000, member.Quota)
+	assert.Equal(t, 300, member.UsedQuota)
+}
+
+// TestOrganizationE2EBillingStartMultiDimensionConsistency 锁定回填后各账单维度的对账不变量：
+// Models/Channels/Trend/Members 的 quota 与请求数之和必须等于 Summary，Logs 条数等于请求数。
+func TestOrganizationE2EBillingStartMultiDimensionConsistency(t *testing.T) {
+	fixture, router := setupOrganizationE2E(t)
+	const backfillWindow = "start_timestamp=1782820000&end_timestamp=1783511199"
+
+	applyOrganizationBillingStart(t, router, fixture, 1001, 1001, 1782820000)
+	applyOrganizationBillingStart(t, router, fixture, 1001, 1002, 1783160000)
+
+	sumDimensions := func(rows []model.OrganizationBillingDimension) (quota, requests int) {
+		for _, r := range rows {
+			quota += r.TotalQuota
+			requests += r.RequestCount
+		}
+		return
+	}
+
+	summary := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/summary?"+backfillWindow, nil,
+	)))
+	require.Equal(t, 17420, summary.TotalQuota)
+	require.Equal(t, 5, summary.RequestCount)
+
+	models := decodeOrganizationE2EData[[]model.OrganizationBillingDimension](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/models?"+backfillWindow, nil,
+	)))
+	mQuota, mReq := sumDimensions(models)
+	assert.Equal(t, summary.TotalQuota, mQuota)
+	assert.Equal(t, summary.RequestCount, mReq)
+
+	channels := decodeOrganizationE2EData[[]model.OrganizationBillingDimension](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/channels?"+backfillWindow, nil,
+	)))
+	cQuota, cReq := sumDimensions(channels)
+	assert.Equal(t, summary.TotalQuota, cQuota)
+	assert.Equal(t, summary.RequestCount, cReq)
+
+	trend := decodeOrganizationE2EData[[]model.OrganizationBillingTrendPoint](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/trend?"+backfillWindow, nil,
+	)))
+	var tQuota, tReq int
+	for _, p := range trend {
+		tQuota += p.TotalQuota
+		tReq += p.RequestCount
+	}
+	assert.Equal(t, summary.TotalQuota, tQuota)
+	assert.Equal(t, summary.RequestCount, tReq)
+
+	members := decodeOrganizationE2EData[[]model.OrganizationBillingDimension](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/members?"+backfillWindow, nil,
+	)))
+	mbQuota, mbReq := sumDimensions(members)
+	assert.Equal(t, summary.TotalQuota, mbQuota)
+	assert.Equal(t, summary.RequestCount, mbReq)
+
+	logs := decodeOrganizationE2EData[organizationE2EPage[model.Log]](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/logs?"+backfillWindow+"&p=1&page_size=20", nil,
+	)))
+	assert.Equal(t, summary.RequestCount, logs.Total)
+}
+
+// TestOrganizationE2EBillingStartIdempotentAndCAS 锁定幂等与乐观锁合同：相同值重复应用不产生
+// 新审计日志；用陈旧 expected 应用必须被拒绝。
+func TestOrganizationE2EBillingStartIdempotentAndCAS(t *testing.T) {
+	fixture, router := setupOrganizationE2E(t)
+
+	// 首次回填 user 1001。
+	preview := previewOrganizationBillingStart(t, router, fixture, 1001, 1001, 1782820000)
+	require.False(t, preview.Conflict)
+	firstApply := applyOrganizationBillingStartRaw(t, router, fixture, 1001, 1001, 1782820000, preview.CurrentBillingStart)
+	require.True(t, firstApply.Success, firstApply.Message)
+
+	var audits int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeManage).Count(&audits).Error)
+	require.Equal(t, int64(1), audits, "first apply writes exactly one audit log")
+
+	// 幂等：相同 candidate 再次应用，expected 为回填后的生效起点（== candidate）。
+	idempotentPreview := previewOrganizationBillingStart(t, router, fixture, 1001, 1001, 1782820000)
+	require.Equal(t, int64(1782820000), idempotentPreview.CurrentBillingStart)
+	idempotentApply := applyOrganizationBillingStartRaw(t, router, fixture, 1001, 1001, 1782820000, idempotentPreview.CurrentBillingStart)
+	require.True(t, idempotentApply.Success, idempotentApply.Message)
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeManage).Count(&audits).Error)
+	assert.Equal(t, int64(1), audits, "idempotent re-apply must not write a new audit log")
+
+	// CAS 失败：用陈旧的 expected 应用必须被拒绝。
+	stale := applyOrganizationBillingStartRaw(t, router, fixture, 1001, 1001, 1782800000, idempotentPreview.CurrentBillingStart+1)
+	assert.False(t, stale.Success)
+	assert.Contains(t, stale.Message, "changed")
+
+	// 向后截断（把已回填的起点调晚）应被拒绝：candidate 不得晚于当前生效起点。
+	shrink := applyOrganizationBillingStartRaw(t, router, fixture, 1001, 1001, 1782840000, idempotentPreview.CurrentBillingStart)
+	assert.False(t, shrink.Success)
+	assert.Contains(t, shrink.Message, "current billing start")
+
+	// 成功变更与失败尝试（CAS、截断）都写入审计，便于追溯高风险操作。
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeManage).Count(&audits).Error)
+	assert.Equal(t, int64(3), audits, "one success + two failed attempts are all audited")
+}
+
+// TestOrganizationE2EBillingStartConflictRejected 锁定同组织窗口不相交不变量：候选窗口与同用户
+// 已有成员段相交时，预览报告冲突且应用被拒绝。
+func TestOrganizationE2EBillingStartConflictRejected(t *testing.T) {
+	fixture, router := setupOrganizationE2E(t)
+
+	// 为 user 1002 插入一段已离开的历史成员段：窗口 [1783100000, 1783150000)。
+	// 已离开成员的 current_key 为空（与 RemoveOrganizationMember 一致），避免与当前记录的 unique key 冲突。
+	require.NoError(t, model.DB.Create(&model.OrganizationMember{
+		OrganizationId: fixture.Organization.Id,
+		UserId:         1002,
+		Role:           model.OrganizationRoleMember,
+		JoinedAt:       1783100000,
+		LeftAt:         1783150000,
+		BillingStartAt: 1783100000,
+	}).Error)
+
+	// 候选 1783120000 落在历史段内 → 预览 conflict=true，应用被拒绝。
+	preview := previewOrganizationBillingStart(t, router, fixture, 1001, 1002, 1783120000)
+	assert.True(t, preview.Conflict, "candidate overlapping an existing segment must report conflict")
+
+	res := applyOrganizationBillingStartRaw(t, router, fixture, 1001, 1002, 1783120000, preview.CurrentBillingStart)
+	assert.False(t, res.Success)
+	assert.Contains(t, res.Message, "overlap")
+}
+
+// TestOrganizationE2EBillingStartExportsBackfill 锁定两类 CSV 导出在回填后纳入加入前消费：
+// logs/export 单表含两条加入前日志；export 六区块含账单汇总段与加入前明细。
+func TestOrganizationE2EBillingStartExportsBackfill(t *testing.T) {
+	fixture, router := setupOrganizationE2E(t)
+	const backfillWindow = "start_timestamp=1782820000&end_timestamp=1783511199"
+
+	applyOrganizationBillingStart(t, router, fixture, 1001, 1001, 1782820000)
+	applyOrganizationBillingStart(t, router, fixture, 1001, 1002, 1783160000)
+
+	logsExport := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/logs/export?"+backfillWindow, nil)
+	require.Equal(t, http.StatusOK, logsExport.Code)
+	logsBody := logsExport.Body.String()
+	assert.Contains(t, logsBody, "req-admin-before-membership")
+	assert.Contains(t, logsBody, "req-member-before-membership")
+	// BOM + 表头 + 5 条消费日志。
+	assert.GreaterOrEqual(t, strings.Count(logsBody, "\n"), 6)
+
+	fullExport := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/export?"+backfillWindow, nil)
+	require.Equal(t, http.StatusOK, fullExport.Code)
+	fullBody := fullExport.Body.String()
+	assert.Contains(t, fullBody, "# 账单汇总")
+	assert.Contains(t, fullBody, "# 消费明细")
+	assert.Contains(t, fullBody, "req-admin-before-membership")
+	assert.Contains(t, fullBody, "req-member-before-membership")
 }

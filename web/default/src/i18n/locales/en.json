@@ -5352,6 +5352,16 @@
     "Zhipu": "Zhipu",
     "Zhipu AI": "Zhipu AI",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Billing start": "Billing start",
+    "Adjust billing start": "Adjust billing start",
+    "Billing start updated": "Billing start updated",
+    "Candidate billing start": "Candidate billing start",
+    "Added requests": "Added requests",
+    "Added quota": "Added quota",
+    "Log range": "Log range",
+    "Earliest retained log": "Earliest retained log",
+    "Window conflict": "Window conflict",
+    "This only affects organization reports, not personal wallet or completed charges.": "This only affects organization reports, not personal wallet or completed charges."
   }
 }

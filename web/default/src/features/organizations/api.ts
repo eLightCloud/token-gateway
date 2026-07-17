@@ -27,6 +27,9 @@ import type {
   MemberPayload,
   Organization,
   OrganizationBillingFilterOptions,
+  OrganizationBillingStartBatchCandidate,
+  OrganizationBillingStartPreview,
+  OrganizationBillingStartUpdatePayload,
   OrganizationDimensionRow,
   OrganizationListParams,
   OrganizationMember,
@@ -130,6 +133,38 @@ export async function removeCurrentOrganizationMember(
   userId: number
 ): Promise<ApiResponse> {
   const res = await api.delete(`/api/organization/current/members/${userId}`)
+  return res.data
+}
+
+export async function previewCurrentOrganizationMemberBillingStart(
+  userId: number,
+  candidateBillingStart: number
+): Promise<ApiResponse<OrganizationBillingStartPreview>> {
+  const res = await api.post(
+    `/api/organization/current/members/${userId}/billing-start/preview`,
+    { candidate_billing_start: candidateBillingStart }
+  )
+  return res.data
+}
+
+export async function updateCurrentOrganizationMemberBillingStart(
+  userId: number,
+  payload: OrganizationBillingStartUpdatePayload
+): Promise<ApiResponse<OrganizationMember>> {
+  const res = await api.post(
+    `/api/organization/current/members/${userId}/billing-start`,
+    payload
+  )
+  return res.data
+}
+
+export async function previewCurrentOrganizationBillingStartBatch(
+  candidates: OrganizationBillingStartBatchCandidate[]
+): Promise<ApiResponse<OrganizationBillingStartPreview[]>> {
+  const res = await api.post(
+    '/api/organization/current/billing/billing-start/preview-batch',
+    { candidates }
+  )
   return res.data
 }
 
@@ -332,6 +367,41 @@ export async function removeAdminOrganizationMember(
 ): Promise<ApiResponse> {
   const res = await api.delete(
     `/api/admin/organizations/${id}/members/${userId}`
+  )
+  return res.data
+}
+
+export async function previewAdminOrganizationMemberBillingStart(
+  id: number,
+  userId: number,
+  candidateBillingStart: number
+): Promise<ApiResponse<OrganizationBillingStartPreview>> {
+  const res = await api.post(
+    `/api/admin/organizations/${id}/members/${userId}/billing-start/preview`,
+    { candidate_billing_start: candidateBillingStart }
+  )
+  return res.data
+}
+
+export async function updateAdminOrganizationMemberBillingStart(
+  id: number,
+  userId: number,
+  payload: OrganizationBillingStartUpdatePayload
+): Promise<ApiResponse<OrganizationMember>> {
+  const res = await api.post(
+    `/api/admin/organizations/${id}/members/${userId}/billing-start`,
+    payload
+  )
+  return res.data
+}
+
+export async function previewAdminOrganizationBillingStartBatch(
+  id: number,
+  candidates: OrganizationBillingStartBatchCandidate[]
+): Promise<ApiResponse<OrganizationBillingStartPreview[]>> {
+  const res = await api.post(
+    `/api/admin/organizations/${id}/billing/billing-start/preview-batch`,
+    { candidates }
   )
   return res.data
 }

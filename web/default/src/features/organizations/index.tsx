@@ -24,6 +24,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Building2,
+  CalendarClock,
   Database,
   Download,
   Plus,
@@ -36,11 +37,12 @@ import {
   Wallet,
   type LucideIcon,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -126,6 +128,10 @@ import {
   updateAdminOrganizationMember,
   updateCurrentOrganization,
   updateCurrentOrganizationMember,
+  previewCurrentOrganizationMemberBillingStart,
+  previewAdminOrganizationMemberBillingStart,
+  updateCurrentOrganizationMemberBillingStart,
+  updateAdminOrganizationMemberBillingStart,
 } from './api'
 import {
   ORGANIZATION_STATUS_DISABLED,
@@ -133,6 +139,8 @@ import {
   type Organization,
   type OrganizationBillingFilterOptions,
   type OrganizationDimensionRow,
+  type OrganizationBillingStartPreview,
+  type OrganizationBillingStartUpdatePayload,
   type OrganizationMember,
   type OrganizationRole,
   type OrganizationStatus,
@@ -358,6 +366,19 @@ function Panel({
   )
 }
 
+function OrgSectionTitle({ title, name }: { title: string; name: string }) {
+  return (
+    <SectionPageLayout.Title>
+      <span className='flex min-w-0 flex-col gap-0.5'>
+        <span className='truncate'>{title}</span>
+        <span className='text-muted-foreground truncate text-xs font-normal sm:text-sm'>
+          {name}
+        </span>
+      </span>
+    </SectionPageLayout.Title>
+  )
+}
+
 function PageHeader({
   title,
   description,
@@ -471,6 +492,16 @@ function dateToUnix(value: string) {
 
 function unixEndOfDate(value: string) {
   return utcDateBoundaryToUnix(value, true)
+}
+
+// unixUtcDateInput 把 Unix 秒（UTC）转成 <input type="date"> 需要的 YYYY-MM-DD。
+function unixUtcDateInput(timestamp: number): string {
+  if (!timestamp) return ''
+  const d = new Date(timestamp * 1000)
+  const yyyy = d.getUTCFullYear()
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(d.getUTCDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
 }
 
 function useUsageFilters() {
@@ -1213,17 +1244,199 @@ function SettingsDialog({
   )
 }
 
+function BillingStartAdjustDialog({
+  member,
+  organizationId,
+  open,
+  onOpenChange,
+  onApplied,
+}: {
+  member: OrganizationMember | null
+  organizationId?: number
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onApplied: () => void
+}) {
+  const { t } = useTranslation()
+  const currentEffective = member
+    ? member.billing_start_at || member.joined_at
+    : 0
+  const [candidateDate, setCandidateDate] = useState('')
+  const [preview, setPreview] =
+    useState<OrganizationBillingStartPreview | null>(null)
+
+  useEffect(() => {
+    if (member) {
+      setCandidateDate(unixUtcDateInput(currentEffective))
+      setPreview(null)
+    }
+  }, [member, currentEffective])
+
+  const previewMutation = useMutation({
+    mutationFn: ({
+      userId,
+      candidate,
+    }: {
+      userId: number
+      candidate: number
+    }) =>
+      organizationId !== undefined
+        ? previewAdminOrganizationMemberBillingStart(
+            organizationId,
+            userId,
+            candidate
+          )
+        : previewCurrentOrganizationMemberBillingStart(userId, candidate),
+    onSuccess: (res) => {
+      if (!res.success) return
+      setPreview(res.data ?? null)
+    },
+  })
+
+  const applyMutation = useMutation({
+    mutationFn: ({
+      userId,
+      payload,
+    }: {
+      userId: number
+      payload: OrganizationBillingStartUpdatePayload
+    }) =>
+      organizationId !== undefined
+        ? updateAdminOrganizationMemberBillingStart(
+            organizationId,
+            userId,
+            payload
+          )
+        : updateCurrentOrganizationMemberBillingStart(userId, payload),
+    onSuccess: (res) => {
+      if (!res.success) return
+      toast.success(t('Billing start updated'))
+      onOpenChange(false)
+      onApplied()
+    },
+  })
+
+  const candidate = candidateDate ? (dateToUnix(candidateDate) ?? 0) : 0
+  const conflict = Boolean(preview?.conflict)
+  const previewMatches = preview?.candidate_billing_start === candidate
+  const canApply = Boolean(preview) && previewMatches && !conflict
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='sm:max-w-lg'>
+        <DialogHeader>
+          <DialogTitle>{t('Adjust billing start')}</DialogTitle>
+          <DialogDescription>
+            {t(
+              'This only affects organization reports, not personal wallet or completed charges.'
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <div className='space-y-3'>
+          <FieldLabel label={t('Candidate billing start')}>
+            <Input
+              type='date'
+              value={candidateDate}
+              max={unixUtcDateInput(member?.joined_at || 0)}
+              onChange={(event) => {
+                setCandidateDate(event.target.value)
+                setPreview(null)
+              }}
+            />
+          </FieldLabel>
+          {preview ? (
+            <div className='bg-muted/30 space-y-1.5 rounded-md p-3 text-sm'>
+              <div className='flex justify-between gap-4'>
+                <span className='text-muted-foreground'>
+                  {t('Added requests')}
+                </span>
+                <span>{preview.added_request_count}</span>
+              </div>
+              <div className='flex justify-between gap-4'>
+                <span className='text-muted-foreground'>
+                  {t('Added quota')}
+                </span>
+                <span>{preview.added_quota}</span>
+              </div>
+              {preview.earliest_log_at ? (
+                <div className='flex justify-between gap-4'>
+                  <span className='text-muted-foreground'>
+                    {t('Log range')}
+                  </span>
+                  <span className='whitespace-nowrap'>
+                    {formatTimestampToDate(preview.earliest_log_at)} ~{' '}
+                    {formatTimestampToDate(preview.latest_log_at)}
+                  </span>
+                </div>
+              ) : null}
+              {preview.earliest_retained_at ? (
+                <div className='flex justify-between gap-4'>
+                  <span className='text-muted-foreground'>
+                    {t('Earliest retained log')}
+                  </span>
+                  <span>
+                    {formatTimestampToDate(preview.earliest_retained_at)}
+                  </span>
+                </div>
+              ) : null}
+              {conflict ? (
+                <div className='text-destructive'>{t('Window conflict')}</div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button
+            variant='outline'
+            disabled={
+              !candidate ||
+              !member ||
+              candidate === currentEffective ||
+              previewMutation.isPending
+            }
+            onClick={() =>
+              member &&
+              candidate &&
+              previewMutation.mutate({ userId: member.user_id, candidate })
+            }
+          >
+            {t('Preview')}
+          </Button>
+          <Button
+            disabled={!canApply || !member || applyMutation.isPending}
+            onClick={() =>
+              member &&
+              preview &&
+              applyMutation.mutate({
+                userId: member.user_id,
+                payload: {
+                  candidate_billing_start: preview.candidate_billing_start,
+                  expected_billing_start: preview.current_billing_start,
+                },
+              })
+            }
+          >
+            {t('Apply')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function MembersTable({
   members,
   currentRole,
   onRoleChange,
   onRemove,
+  onAdjustBillingStart,
   isMutating,
 }: {
   members?: OrganizationMember[]
   currentRole?: OrganizationRole
   onRoleChange: (userId: number, role: OrganizationRole) => void
   onRemove: (member: OrganizationMember) => void
+  onAdjustBillingStart: (member: OrganizationMember) => void
   isMutating: boolean
 }) {
   const { t } = useTranslation()
@@ -1236,6 +1449,7 @@ function MembersTable({
           <TableHead>{t('User')}</TableHead>
           <TableHead>{t('Role')}</TableHead>
           <TableHead>{t('Joined at')}</TableHead>
+          <TableHead>{t('Billing start')}</TableHead>
           <TableHead>{t('Status')}</TableHead>
           <TableHead className='text-right'>{t('Actions')}</TableHead>
         </TableRow>
@@ -1292,6 +1506,11 @@ function MembersTable({
               <TableCell className='whitespace-nowrap'>
                 {formatTimestampToDate(member.joined_at)}
               </TableCell>
+              <TableCell className='whitespace-nowrap'>
+                {formatTimestampToDate(
+                  member.billing_start_at || member.joined_at
+                )}
+              </TableCell>
               <TableCell>
                 {member.left_at ? (
                   <DotBadge tone='muted'>{t('Removed')}</DotBadge>
@@ -1300,20 +1519,31 @@ function MembersTable({
                 )}
               </TableCell>
               <TableCell className='text-right'>
-                <Button
-                  variant='ghost'
-                  size='icon-sm'
-                  disabled={disabled || Boolean(member.left_at)}
-                  onClick={() => onRemove(member)}
-                >
-                  <Trash2 />
-                  <span className='sr-only'>{t('Remove')}</span>
-                </Button>
+                <div className='flex items-center justify-end gap-1'>
+                  <Button
+                    variant='ghost'
+                    size='icon-sm'
+                    disabled={disabled || Boolean(member.left_at)}
+                    onClick={() => onAdjustBillingStart(member)}
+                  >
+                    <CalendarClock />
+                    <span className='sr-only'>{t('Adjust billing start')}</span>
+                  </Button>
+                  <Button
+                    variant='ghost'
+                    size='icon-sm'
+                    disabled={disabled || Boolean(member.left_at)}
+                    onClick={() => onRemove(member)}
+                  >
+                    <Trash2 />
+                    <span className='sr-only'>{t('Remove')}</span>
+                  </Button>
+                </div>
               </TableCell>
             </TableRow>
           )
         })}
-        {!members?.length ? <EmptyTableRow colSpan={5} /> : null}
+        {!members?.length ? <EmptyTableRow colSpan={6} /> : null}
       </TableBody>
     </Table>
   )
@@ -1367,49 +1597,53 @@ export function OrganizationUsagePage() {
   }
 
   return (
-    <div className='space-y-4 p-4 sm:p-6'>
-      <PageHeader
+    <SectionPageLayout>
+      <OrgSectionTitle
         title={t('Organization billing')}
-        description={self.organization.name}
-        actions={
-          <DotBadge tone={orgStatusTone(self.organization.status)}>
-            {statusLabel(self.organization.status, t)}
-          </DotBadge>
-        }
+        name={self.organization.name}
       />
-      <UsageFilters
-        filters={filters}
-        options={filterOptionsQuery.data?.data}
-        showMemberFilter={role === 'admin'}
-        onRefresh={refresh}
-        onExport={() => {
-          void downloadOrganizationExport(
-            buildOrganizationExportUrl(filters.params)
-          )
-        }}
-      />
-      <SummaryGrid summary={summaryQuery.data?.data} />
-      <div className='grid gap-4 xl:grid-cols-2'>
-        <Panel title={t('Usage trend')}>
-          <TrendTable rows={trendQuery.data?.data} />
-        </Panel>
-        <Panel title={t('Model usage')}>
-          <DimensionTable
-            rows={modelsQuery.data?.data}
-            nameLabel={t('Model')}
-            totalQuota={summaryQuery.data?.data?.total_quota}
-            showPricing
+      <SectionPageLayout.Actions>
+        <DotBadge tone={orgStatusTone(self.organization.status)}>
+          {statusLabel(self.organization.status, t)}
+        </DotBadge>
+      </SectionPageLayout.Actions>
+      <SectionPageLayout.Content>
+        <div className='space-y-4'>
+          <UsageFilters
+            filters={filters}
+            options={filterOptionsQuery.data?.data}
+            showMemberFilter={role === 'admin'}
+            onRefresh={refresh}
+            onExport={() => {
+              void downloadOrganizationExport(
+                buildOrganizationExportUrl(filters.params)
+              )
+            }}
           />
-        </Panel>
-        <Panel title={t('Channel usage')}>
-          <DimensionTable
-            rows={channelsQuery.data?.data}
-            nameLabel={t('Channel')}
-            totalQuota={summaryQuery.data?.data?.total_quota}
-          />
-        </Panel>
-      </div>
-    </div>
+          <SummaryGrid summary={summaryQuery.data?.data} />
+          <div className='grid gap-4 xl:grid-cols-2'>
+            <Panel title={t('Usage trend')}>
+              <TrendTable rows={trendQuery.data?.data} />
+            </Panel>
+            <Panel title={t('Model usage')}>
+              <DimensionTable
+                rows={modelsQuery.data?.data}
+                nameLabel={t('Model')}
+                totalQuota={summaryQuery.data?.data?.total_quota}
+                showPricing
+              />
+            </Panel>
+            <Panel title={t('Channel usage')}>
+              <DimensionTable
+                rows={channelsQuery.data?.data}
+                nameLabel={t('Channel')}
+                totalQuota={summaryQuery.data?.data?.total_quota}
+              />
+            </Panel>
+          </div>
+        </div>
+      </SectionPageLayout.Content>
+    </SectionPageLayout>
   )
 }
 
@@ -1420,6 +1654,8 @@ export function OrganizationMembersPage() {
   const [memberDialogOpen, setMemberDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [removingMember, setRemovingMember] =
+    useState<OrganizationMember | null>(null)
+  const [adjustingMember, setAdjustingMember] =
     useState<OrganizationMember | null>(null)
   const contextQuery = useOrganizationContext()
   const self = contextQuery.data?.data
@@ -1489,84 +1725,93 @@ export function OrganizationMembersPage() {
   if (!canManageMembers(role)) return <AccessDeniedState />
 
   return (
-    <div className='space-y-4 p-4 sm:p-6'>
-      <PageHeader
+    <SectionPageLayout>
+      <OrgSectionTitle
         title={t('Organization members')}
-        description={self.organization.name}
-        actions={
-          <>
-            <Button variant='outline' onClick={() => setSettingsOpen(true)}>
-              <Settings />
-              {t('Settings')}
-            </Button>
-            <Button onClick={() => setMemberDialogOpen(true)}>
-              <Plus />
-              {t('Add member')}
-            </Button>
-          </>
-        }
+        name={self.organization.name}
       />
-      <Panel
-        title={t('Members')}
-        description={t('Manage roles and organization membership.')}
-        actions={
-          <NativeSelect
-            size='sm'
-            value={showHistory ? 'history' : 'active'}
-            onChange={(event) =>
-              setShowHistory(event.target.value === 'history')
+      <SectionPageLayout.Actions>
+        <Button variant='outline' onClick={() => setSettingsOpen(true)}>
+          <Settings />
+          {t('Settings')}
+        </Button>
+        <Button onClick={() => setMemberDialogOpen(true)}>
+          <Plus />
+          {t('Add member')}
+        </Button>
+      </SectionPageLayout.Actions>
+      <SectionPageLayout.Content>
+        <div className='space-y-4'>
+          <Panel
+            title={t('Members')}
+            description={t('Manage roles and organization membership.')}
+            actions={
+              <NativeSelect
+                size='sm'
+                value={showHistory ? 'history' : 'active'}
+                onChange={(event) =>
+                  setShowHistory(event.target.value === 'history')
+                }
+              >
+                <NativeSelectOption value='active'>
+                  {t('Active')}
+                </NativeSelectOption>
+                <NativeSelectOption value='history'>
+                  {t('Include removed')}
+                </NativeSelectOption>
+              </NativeSelect>
             }
           >
-            <NativeSelectOption value='active'>
-              {t('Active')}
-            </NativeSelectOption>
-            <NativeSelectOption value='history'>
-              {t('Include removed')}
-            </NativeSelectOption>
-          </NativeSelect>
-        }
-      >
-        <MembersTable
-          members={membersQuery.data?.data}
-          currentRole={role}
-          isMutating={
-            addMutation.isPending ||
-            roleMutation.isPending ||
-            removeMutation.isPending
-          }
-          onRoleChange={(userId, memberRole) =>
-            roleMutation.mutate({ userId, memberRole })
-          }
-          onRemove={setRemovingMember}
-        />
-      </Panel>
-      <MemberDialog
-        open={memberDialogOpen}
-        onOpenChange={setMemberDialogOpen}
-        isPending={addMutation.isPending}
-        onSubmit={(userId, memberRole) =>
-          addMutation.mutate({ userId, memberRole })
-        }
-      />
-      <SettingsDialog
-        organization={self.organization}
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        isPending={settingsMutation.isPending}
-        onSubmit={(payload) => settingsMutation.mutate(payload)}
-      />
-      <ConfirmDialog
-        open={Boolean(removingMember)}
-        onOpenChange={(open) => !open && setRemovingMember(null)}
-        title={t('Remove member')}
-        desc={t('This user will lose access to the organization.')}
-        destructive
-        isLoading={removeMutation.isPending}
-        handleConfirm={() =>
-          removingMember && removeMutation.mutate(removingMember.user_id)
-        }
-      />
-    </div>
+            <MembersTable
+              members={membersQuery.data?.data}
+              currentRole={role}
+              isMutating={
+                addMutation.isPending ||
+                roleMutation.isPending ||
+                removeMutation.isPending
+              }
+              onRoleChange={(userId, memberRole) =>
+                roleMutation.mutate({ userId, memberRole })
+              }
+              onRemove={setRemovingMember}
+              onAdjustBillingStart={setAdjustingMember}
+            />
+          </Panel>
+          <MemberDialog
+            open={memberDialogOpen}
+            onOpenChange={setMemberDialogOpen}
+            isPending={addMutation.isPending}
+            onSubmit={(userId, memberRole) =>
+              addMutation.mutate({ userId, memberRole })
+            }
+          />
+          <BillingStartAdjustDialog
+            member={adjustingMember}
+            open={Boolean(adjustingMember)}
+            onOpenChange={(open) => !open && setAdjustingMember(null)}
+            onApplied={invalidate}
+          />
+          <SettingsDialog
+            organization={self.organization}
+            open={settingsOpen}
+            onOpenChange={setSettingsOpen}
+            isPending={settingsMutation.isPending}
+            onSubmit={(payload) => settingsMutation.mutate(payload)}
+          />
+          <ConfirmDialog
+            open={Boolean(removingMember)}
+            onOpenChange={(open) => !open && setRemovingMember(null)}
+            title={t('Remove member')}
+            desc={t('This user will lose access to the organization.')}
+            destructive
+            isLoading={removeMutation.isPending}
+            handleConfirm={() =>
+              removingMember && removeMutation.mutate(removingMember.user_id)
+            }
+          />
+        </div>
+      </SectionPageLayout.Content>
+    </SectionPageLayout>
   )
 }
 
@@ -1597,35 +1842,39 @@ export function OrganizationLogsPage() {
   const pageData = logsQuery.data?.data
 
   return (
-    <div className='space-y-4 p-4 sm:p-6'>
-      <PageHeader
+    <SectionPageLayout>
+      <OrgSectionTitle
         title={t('Organization billing logs')}
-        description={self.organization.name}
+        name={self.organization.name}
       />
-      <UsageFilters
-        filters={filters}
-        options={filterOptionsQuery.data?.data}
-        showMemberFilter={role === 'admin'}
-        onRefresh={() => {
-          void filterOptionsQuery.refetch()
-          void logsQuery.refetch()
-        }}
-        onExport={() => {
-          void downloadOrganizationExport(
-            buildOrganizationLogsExportUrl(filters.params)
-          )
-        }}
-      />
-      <Panel title={t('Billing logs')}>
-        <LogsTable rows={pageData?.items} />
-        <Pager
-          page={pageData?.page ?? filters.page}
-          total={pageData?.total ?? 0}
-          pageSize={pageData?.page_size ?? 20}
-          onPageChange={filters.setPage}
-        />
-      </Panel>
-    </div>
+      <SectionPageLayout.Content>
+        <div className='space-y-4'>
+          <UsageFilters
+            filters={filters}
+            options={filterOptionsQuery.data?.data}
+            showMemberFilter={role === 'admin'}
+            onRefresh={() => {
+              void filterOptionsQuery.refetch()
+              void logsQuery.refetch()
+            }}
+            onExport={() => {
+              void downloadOrganizationExport(
+                buildOrganizationLogsExportUrl(filters.params)
+              )
+            }}
+          />
+          <Panel title={t('Billing logs')}>
+            <LogsTable rows={pageData?.items} />
+            <Pager
+              page={pageData?.page ?? filters.page}
+              total={pageData?.total ?? 0}
+              pageSize={pageData?.page_size ?? 20}
+              onPageChange={filters.setPage}
+            />
+          </Panel>
+        </div>
+      </SectionPageLayout.Content>
+    </SectionPageLayout>
   )
 }
 
@@ -1827,6 +2076,8 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
   const [showHistory, setShowHistory] = useState(false)
   const [removingMember, setRemovingMember] =
     useState<OrganizationMember | null>(null)
+  const [adjustingMember, setAdjustingMember] =
+    useState<OrganizationMember | null>(null)
   const filters = useUsageFilters()
 
   const filterOptionsQuery = useQuery({
@@ -1941,7 +2192,7 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
   }
 
   return (
-    <div className='flex flex-col gap-6 p-4 sm:p-6'>
+    <div className='flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-4 sm:p-6'>
       <header className='border-b'>
         <div className='flex flex-col gap-4 pb-4 sm:flex-row sm:items-center sm:justify-between'>
           <div className='flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1'>
@@ -2027,6 +2278,7 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
                 roleMutation.mutate({ userId, memberRole })
               }
               onRemove={setRemovingMember}
+              onAdjustBillingStart={setAdjustingMember}
             />
           </div>
         </section>
@@ -2115,6 +2367,13 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
         onSubmit={(userId, memberRole) =>
           addMutation.mutate({ userId, memberRole })
         }
+      />
+      <BillingStartAdjustDialog
+        member={adjustingMember}
+        organizationId={id}
+        open={Boolean(adjustingMember)}
+        onOpenChange={(open) => !open && setAdjustingMember(null)}
+        onApplied={invalidate}
       />
       <SettingsDialog
         organization={organization}

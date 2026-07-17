@@ -52,6 +52,7 @@ export interface OrganizationMember {
   role: OrganizationRole
   joined_at: number
   left_at: number
+  billing_start_at: number
   username?: string
   display_name?: string
   email?: string
@@ -150,4 +151,31 @@ export interface MemberPayload {
 export interface OrganizationPayload {
   name?: string
   status?: OrganizationStatus
+}
+
+export interface OrganizationBillingStartPreview {
+  member_id: number
+  organization_id: number
+  user_id: number
+  joined_at: number
+  current_billing_start: number
+  candidate_billing_start: number
+  earliest_log_at: number
+  latest_log_at: number
+  earliest_retained_at: number
+  added_request_count: number
+  added_quota: number
+  added_prompt_tokens: number
+  added_completion_tokens: number
+  conflict: boolean
+}
+
+export interface OrganizationBillingStartUpdatePayload {
+  candidate_billing_start: number
+  expected_billing_start: number
+}
+
+export interface OrganizationBillingStartBatchCandidate {
+  user_id: number
+  candidate_billing_start: number
 }

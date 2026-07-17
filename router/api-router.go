@@ -247,6 +247,9 @@ func SetApiRouter(router *gin.Engine) {
 			organizationRoute.GET("/current/billing/logs", controller.GetCurrentOrganizationBillingLogs)
 			organizationRoute.GET("/current/billing/logs/export", controller.ExportCurrentOrganizationBillingLogs)
 			organizationRoute.GET("/current/billing/export", controller.ExportCurrentOrganizationBilling)
+			organizationRoute.POST("/current/members/:user_id/billing-start/preview", controller.PreviewCurrentOrganizationMemberBillingStart)
+			organizationRoute.POST("/current/members/:user_id/billing-start", controller.UpdateCurrentOrganizationMemberBillingStart)
+			organizationRoute.POST("/current/billing/billing-start/preview-batch", controller.PreviewCurrentOrganizationMemberBillingStartBatch)
 		}
 		adminOrganizationRoute := apiRouter.Group("/admin/organizations")
 		adminOrganizationRoute.Use(middleware.AdminAuth())
@@ -267,6 +270,9 @@ func SetApiRouter(router *gin.Engine) {
 			adminOrganizationRoute.GET("/:id/billing/logs", controller.AdminGetOrganizationBillingLogs)
 			adminOrganizationRoute.GET("/:id/billing/logs/export", controller.AdminExportOrganizationBillingLogs)
 			adminOrganizationRoute.GET("/:id/billing/export", controller.AdminExportOrganizationBilling)
+			adminOrganizationRoute.POST("/:id/members/:user_id/billing-start/preview", controller.AdminPreviewOrganizationMemberBillingStart)
+			adminOrganizationRoute.POST("/:id/members/:user_id/billing-start", controller.AdminUpdateOrganizationMemberBillingStart)
+			adminOrganizationRoute.POST("/:id/billing/billing-start/preview-batch", controller.AdminPreviewOrganizationMemberBillingStartBatch)
 		}
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())

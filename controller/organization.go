@@ -890,3 +890,188 @@ func exportOrganizationBilling(c *gin.Context, organizationId int, filters model
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"organization-%d-billing.csv\"", organizationId))
 	c.Data(200, "text/csv; charset=utf-8", buf.Bytes())
 }
+
+// 组织账单归属起点预览/应用：把"成员加入时间"与"报表归属起点"拆分后，管理员可显式为历史
+// 账号补齐加入前的消费归属。预览只读、复用账单筛选口径；应用走事务 + 乐观锁 + 窗口不相交校验。
+
+type organizationBillingStartPreviewRequest struct {
+	CandidateBillingStart *int64 `json:"candidate_billing_start"`
+}
+
+type organizationBillingStartUpdateRequest struct {
+	CandidateBillingStart *int64 `json:"candidate_billing_start"`
+	ExpectedBillingStart  *int64 `json:"expected_billing_start"`
+}
+
+type organizationBillingStartBatchPreviewRequest struct {
+	Candidates []organizationBillingStartCandidate `json:"candidates"`
+}
+
+type organizationBillingStartCandidate struct {
+	UserId                int   `json:"user_id"`
+	CandidateBillingStart int64 `json:"candidate_billing_start"`
+}
+
+// parseBillingStartCandidate 解析单成员预览请求体并要求显式提供候选起点。
+func parseBillingStartCandidate(c *gin.Context) (int64, bool) {
+	var req organizationBillingStartPreviewRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiError(c, err)
+		return 0, false
+	}
+	if req.CandidateBillingStart == nil {
+		common.ApiErrorMsg(c, "candidate_billing_start is required")
+		return 0, false
+	}
+	return *req.CandidateBillingStart, true
+}
+
+func handlePreviewOrganizationMemberBillingStart(c *gin.Context, organizationId int) {
+	userId, err := strconv.Atoi(c.Param("user_id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	candidate, ok := parseBillingStartCandidate(c)
+	if !ok {
+		return
+	}
+	preview, err := model.PreviewOrganizationMemberBillingStart(organizationId, userId, candidate)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, preview)
+}
+
+func handlePreviewOrganizationMemberBillingStartBatch(c *gin.Context, organizationId int) {
+	var req organizationBillingStartBatchPreviewRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	candidates := make(map[int]int64, len(req.Candidates))
+	for _, item := range req.Candidates {
+		candidates[item.UserId] = item.CandidateBillingStart
+	}
+	previews, err := model.PreviewOrganizationBillingStartBatch(organizationId, candidates)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, previews)
+}
+
+// handleUpdateOrganizationMemberBillingStart 应用归属起点更新：服务端在事务内重算增量并写
+// 审计（不接受客户端回传统计值）；实际变更写成功审计，CAS/冲突/向后截断等失败写失败审计，
+// 幂等重应用（相同值）不写审计。
+func handleUpdateOrganizationMemberBillingStart(c *gin.Context, organizationId int) {
+	userId, err := strconv.Atoi(c.Param("user_id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var req organizationBillingStartUpdateRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if req.CandidateBillingStart == nil {
+		common.ApiErrorMsg(c, "candidate_billing_start is required")
+		return
+	}
+	if req.ExpectedBillingStart == nil {
+		common.ApiErrorMsg(c, "expected_billing_start is required")
+		return
+	}
+	result, err := model.UpdateOrganizationMemberBillingStart(organizationId, userId, *req.CandidateBillingStart, *req.ExpectedBillingStart)
+	if err != nil {
+		// 失败也写审计：账单归属是高风险操作，记录"谁尝试改、为何被拒"（CAS 失败、
+		// 窗口冲突、向后截断被拒等）便于追溯，即使最终未变更。
+		recordManageAuditFor(c, userId, "organization.billing_start_update_failed", map[string]interface{}{
+			"organization_id":         organizationId,
+			"target_user_id":          userId,
+			"candidate_billing_start": *req.CandidateBillingStart,
+			"expected_billing_start":  *req.ExpectedBillingStart,
+			"error":                   err.Error(),
+		})
+		common.ApiError(c, err)
+		return
+	}
+	// 仅在实际变更时写成功审计；幂等重应用（相同值）不产生新审计记录。
+	// added_* 来自服务端在事务内权威计算的增量，不接受客户端回传。
+	if result.Changed {
+		recordManageAuditFor(c, result.Member.UserId, "organization.billing_start_update", map[string]interface{}{
+			"organization_id":         organizationId,
+			"target_user_id":          result.Member.UserId,
+			"member_id":               result.Member.Id,
+			"from":                    *req.ExpectedBillingStart,
+			"to":                      *req.CandidateBillingStart,
+			"added_request_count":     result.AddedRequestCount,
+			"added_quota":             result.AddedQuota,
+			"added_prompt_tokens":     result.AddedPromptTokens,
+			"added_completion_tokens": result.AddedCompletionTokens,
+		})
+	}
+	common.ApiSuccess(c, result.Member)
+}
+
+func PreviewCurrentOrganizationMemberBillingStart(c *gin.Context) {
+	current, ok := requireCurrentOrganization(c)
+	if !ok {
+		return
+	}
+	if !requireOrganizationManager(c, current.Organization.Id) {
+		return
+	}
+	handlePreviewOrganizationMemberBillingStart(c, current.Organization.Id)
+}
+
+func PreviewCurrentOrganizationMemberBillingStartBatch(c *gin.Context) {
+	current, ok := requireCurrentOrganization(c)
+	if !ok {
+		return
+	}
+	if !requireOrganizationManager(c, current.Organization.Id) {
+		return
+	}
+	handlePreviewOrganizationMemberBillingStartBatch(c, current.Organization.Id)
+}
+
+func UpdateCurrentOrganizationMemberBillingStart(c *gin.Context) {
+	current, ok := requireCurrentOrganization(c)
+	if !ok {
+		return
+	}
+	if !requireOrganizationManager(c, current.Organization.Id) {
+		return
+	}
+	handleUpdateOrganizationMemberBillingStart(c, current.Organization.Id)
+}
+
+func AdminPreviewOrganizationMemberBillingStart(c *gin.Context) {
+	organizationId, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	handlePreviewOrganizationMemberBillingStart(c, organizationId)
+}
+
+func AdminPreviewOrganizationMemberBillingStartBatch(c *gin.Context) {
+	organizationId, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	handlePreviewOrganizationMemberBillingStartBatch(c, organizationId)
+}
+
+func AdminUpdateOrganizationMemberBillingStart(c *gin.Context) {
+	organizationId, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	handleUpdateOrganizationMemberBillingStart(c, organizationId)
+}

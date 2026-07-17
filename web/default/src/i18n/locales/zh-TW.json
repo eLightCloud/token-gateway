@@ -5352,6 +5352,16 @@
     "Zhipu": "智譜",
     "Zhipu AI": "智谱 AI",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Billing start": "帳單歸屬起點",
+    "Adjust billing start": "調整帳單歸屬起點",
+    "Billing start updated": "帳單歸屬起點已更新",
+    "Candidate billing start": "候選帳單起點",
+    "Added requests": "新增請求數",
+    "Added quota": "新增額度",
+    "Log range": "日誌範圍",
+    "Earliest retained log": "最早保留日誌",
+    "Window conflict": "窗口衝突",
+    "This only affects organization reports, not personal wallet or completed charges.": "此設定只影響組織報表，不改變個人餘額和已完成扣費。"
   }
 }

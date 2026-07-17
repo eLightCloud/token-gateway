@@ -37,6 +37,7 @@ type OrganizationMember struct {
 	Role           string  `json:"role" gorm:"type:varchar(32);default:'member';index"`
 	JoinedAt       int64   `json:"joined_at" gorm:"bigint;index"`
 	LeftAt         int64   `json:"left_at" gorm:"bigint;default:0;index"`
+	BillingStartAt int64   `json:"billing_start_at" gorm:"bigint;default:0"`
 	CurrentKey     *string `json:"-" gorm:"type:varchar(64);uniqueIndex"`
 	Username       string  `json:"username,omitempty" gorm:"-:all"`
 	DisplayName    string  `json:"display_name,omitempty" gorm:"-:all"`
@@ -314,6 +315,7 @@ func AddOrganizationMember(organizationId int, userId int, role string) (*Organi
 		UserId:         userId,
 		Role:           normalizedRole,
 		JoinedAt:       now,
+		BillingStartAt: now,
 		CurrentKey:     activeOrganizationCurrentKey(userId),
 	}
 	err = DB.Transaction(func(tx *gorm.DB) error {
@@ -422,8 +424,18 @@ func activeAndHistoricalOrganizationMembers(organizationId int, userId int) ([]O
 	return members, nil
 }
 
+// effectiveBillingStart 返回该段成员关系的组织账单归属起点：BillingStartAt > 0 时取
+// BillingStartAt，否则回退 JoinedAt。回退分支仅服务功能上线前的存量记录（零值过渡态）；
+// 新代码路径永不写入 0：新增成员写 JoinedAt，回填写经校验的大于零的候选值。
+func effectiveBillingStart(member OrganizationMember) int64 {
+	if member.BillingStartAt > 0 {
+		return member.BillingStartAt
+	}
+	return member.JoinedAt
+}
+
 func logMembershipBounds(member OrganizationMember, filters OrganizationBillingFilters) (int64, int64, bool, bool) {
-	start := member.JoinedAt
+	start := effectiveBillingStart(member)
 	if filters.StartTimestamp > start {
 		start = filters.StartTimestamp
 	}
@@ -940,6 +952,266 @@ func hydrateLogChannelNames(logs []*Log) {
 	for i := range logs {
 		logs[i].ChannelName = channelMap[logs[i].ChannelId]
 	}
+}
+
+// OrganizationBillingStartPreview 描述把某成员的账单归属起点设为候选值后的预览结果：
+// 相对当前生效窗口新增纳入的日志统计、候选窗口内的日志时间范围、该用户日志库最早保留
+// 时间，以及候选窗口是否与同组织其他成员记录冲突。
+type OrganizationBillingStartPreview struct {
+	MemberId              int   `json:"member_id"`
+	OrganizationId        int   `json:"organization_id"`
+	UserId                int   `json:"user_id"`
+	JoinedAt              int64 `json:"joined_at"`
+	CurrentBillingStart   int64 `json:"current_billing_start"`
+	CandidateBillingStart int64 `json:"candidate_billing_start"`
+	EarliestLogAt         int64 `json:"earliest_log_at"`
+	LatestLogAt           int64 `json:"latest_log_at"`
+	EarliestRetainedAt    int64 `json:"earliest_retained_at"`
+	AddedRequestCount     int   `json:"added_request_count"`
+	AddedQuota            int   `json:"added_quota"`
+	AddedPromptTokens     int   `json:"added_prompt_tokens"`
+	AddedCompletionTokens int   `json:"added_completion_tokens"`
+	Conflict              bool  `json:"conflict"`
+}
+
+type organizationBillingStartPreviewRow struct {
+	TotalQuota       int
+	RequestCount     int
+	PromptTokens     int
+	CompletionTokens int
+	Earliest         int64 `gorm:"column:earliest"`
+	Latest           int64 `gorm:"column:latest"`
+}
+
+// currentOrganizationMember 读取某用户在某组织的当前在职成员记录（left_at = 0）。
+func currentOrganizationMember(organizationId, userId int) (OrganizationMember, error) {
+	var member OrganizationMember
+	if err := DB.Where("organization_id = ? AND user_id = ? AND left_at = 0", organizationId, userId).
+		First(&member).Error; err != nil {
+		return OrganizationMember{}, err
+	}
+	return member, nil
+}
+
+// validateCandidateBillingStart 校验候选账单起点的基本业务规则（不含窗口重叠校验）。
+// 返回该记录当前的生效起点，供调用方构造差集窗口与乐观锁预期值。
+//
+// 上界收紧为 currentEffective（≤ JoinedAt）：本能力只允许向前补历史，禁止把已回填的
+// 起点调晚以从报表中截断已纳入的消费——否则预览会因 candidate >= currentEffective 而
+// 返回 Added=0，却实际移除历史，造成"预览零影响、应用后账单缩小"的不一致。
+func validateCandidateBillingStart(member OrganizationMember, candidate int64) (int64, error) {
+	currentEffective := effectiveBillingStart(member)
+	if candidate <= 0 {
+		return 0, errors.New("billing_start_at must be greater than zero")
+	}
+	if candidate > currentEffective {
+		return 0, errors.New("billing_start_at must not be later than the current billing start")
+	}
+	if candidate > common.GetTimestamp() {
+		return 0, errors.New("billing_start_at must not be in the future")
+	}
+	return currentEffective, nil
+}
+
+// intervalsOverlap 判断两个半开区间 [s1, l1) 与 [s2, l2) 是否相交，l==0 表示开向 +∞。
+func intervalsOverlap(s1, l1, s2, l2 int64) bool {
+	if l1 > 0 && l1 <= s2 {
+		return false
+	}
+	if l2 > 0 && l2 <= s1 {
+		return false
+	}
+	return true
+}
+
+// billingWindowOverlaps 检查候选窗口 [candidateStart, candidateLeft) 是否与该用户在同组织内
+// 的其他成员记录（排除 excludeMemberId）账单窗口相交。窗口不相交是防止同一条日志在同组织内
+// 被两段成员关系重复统计的不变量；跨组织窗口允许重叠，此处不做跨组织校验。
+func billingWindowOverlaps(tx *gorm.DB, organizationId, userId, excludeMemberId int, candidateStart, candidateLeft int64) (bool, error) {
+	var others []OrganizationMember
+	if err := tx.Where("organization_id = ? AND user_id = ? AND id <> ?", organizationId, userId, excludeMemberId).
+		Find(&others).Error; err != nil {
+		return false, err
+	}
+	for _, other := range others {
+		if intervalsOverlap(candidateStart, candidateLeft, effectiveBillingStart(other), other.LeftAt) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// previewAddedBillingRange 统计把 member.BillingStartAt 设为 candidate 后、相对当前生效起点
+// 新增纳入的日志：即落在 [candidate, currentEffective) 区间内的日志。预览固定为全消费口径
+// （与 Summary 默认一致），不接受外部 type/model/channel 筛选——更新会全局改变账单窗口，
+// 预览口径必须与之统一，否则预览值与实际影响漂移。
+func previewAddedBillingRange(member OrganizationMember, candidate, currentEffective int64) (organizationLogAggregate, int64, int64, error) {
+	if candidate <= 0 || candidate >= currentEffective {
+		return organizationLogAggregate{}, 0, 0, nil
+	}
+	previewMember := member
+	previewMember.BillingStartAt = candidate
+	previewFilters := OrganizationBillingFilters{
+		StartTimestamp: candidate,
+		EndTimestamp:   currentEffective - 1,
+	}
+	tx, ok, err := applyOrganizationLogFilters(LOG_DB.Model(&Log{}), previewMember, previewFilters)
+	if err != nil {
+		return organizationLogAggregate{}, 0, 0, err
+	}
+	if !ok {
+		return organizationLogAggregate{}, 0, 0, nil
+	}
+	var row organizationBillingStartPreviewRow
+	if err := tx.Select("COALESCE(sum(quota), 0) AS total_quota, count(*) AS request_count, COALESCE(sum(prompt_tokens), 0) AS prompt_tokens, COALESCE(sum(completion_tokens), 0) AS completion_tokens, COALESCE(min(created_at), 0) AS earliest, COALESCE(max(created_at), 0) AS latest").Scan(&row).Error; err != nil {
+		return organizationLogAggregate{}, 0, 0, err
+	}
+	return organizationLogAggregate{
+		TotalQuota:       row.TotalQuota,
+		RequestCount:     row.RequestCount,
+		PromptTokens:     row.PromptTokens,
+		CompletionTokens: row.CompletionTokens,
+	}, row.Earliest, row.Latest, nil
+}
+
+// earliestRetainedLogAt 返回某用户在日志库中最早一条日志的时间，供前端提示"最早可回填到哪"。
+// 无任何日志时返回 0；查询失败时返回错误，调用方必须显式处理，避免把"查询失败"伪装成"无历史"。
+func earliestRetainedLogAt(userId int) (int64, error) {
+	var earliest int64
+	err := LOG_DB.Model(&Log{}).Where("user_id = ?", userId).
+		Select("COALESCE(min(created_at), 0)").Scan(&earliest).Error
+	return earliest, err
+}
+
+// PreviewOrganizationMemberBillingStart 预览把某当前在职成员的 BillingStartAt 设为 candidate
+// 后相对当前窗口新增纳入的日志统计，以及是否与同组织其他成员窗口冲突。预览只读、不加锁，
+// 口径固定为全消费（不受查询参数影响）。
+func PreviewOrganizationMemberBillingStart(organizationId, userId int, candidate int64) (*OrganizationBillingStartPreview, error) {
+	member, err := currentOrganizationMember(organizationId, userId)
+	if err != nil {
+		return nil, err
+	}
+	currentEffective, err := validateCandidateBillingStart(member, candidate)
+	if err != nil {
+		return nil, err
+	}
+	added, earliest, latest, err := previewAddedBillingRange(member, candidate, currentEffective)
+	if err != nil {
+		return nil, err
+	}
+	conflict, err := billingWindowOverlaps(DB, organizationId, userId, member.Id, candidate, member.LeftAt)
+	if err != nil {
+		return nil, err
+	}
+	earliestRetained, err := earliestRetainedLogAt(userId)
+	if err != nil {
+		return nil, err
+	}
+	return &OrganizationBillingStartPreview{
+		MemberId:              member.Id,
+		OrganizationId:        organizationId,
+		UserId:                member.UserId,
+		JoinedAt:              member.JoinedAt,
+		CurrentBillingStart:   currentEffective,
+		CandidateBillingStart: candidate,
+		EarliestLogAt:         earliest,
+		LatestLogAt:           latest,
+		EarliestRetainedAt:    earliestRetained,
+		AddedRequestCount:     added.RequestCount,
+		AddedQuota:            added.TotalQuota,
+		AddedPromptTokens:     added.PromptTokens,
+		AddedCompletionTokens: added.CompletionTokens,
+		Conflict:              conflict,
+	}, nil
+}
+
+// PreviewOrganizationBillingStartBatch 批量预览多个成员的候选起点，供管理员一次性评估回填影响。
+func PreviewOrganizationBillingStartBatch(organizationId int, candidates map[int]int64) ([]OrganizationBillingStartPreview, error) {
+	results := make([]OrganizationBillingStartPreview, 0, len(candidates))
+	for userId, candidate := range candidates {
+		preview, err := PreviewOrganizationMemberBillingStart(organizationId, userId, candidate)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, *preview)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].UserId < results[j].UserId
+	})
+	return results, nil
+}
+
+// OrganizationBillingStartUpdateResult 描述一次归属起点更新的结果：是否实际变更（幂等指标）
+// 与服务端权威计算的增量统计。增量由服务端在更新前重算，用于审计，不信任客户端回传。
+type OrganizationBillingStartUpdateResult struct {
+	Member                OrganizationMember
+	Changed               bool
+	AddedRequestCount     int
+	AddedQuota            int
+	AddedPromptTokens     int
+	AddedCompletionTokens int
+	EarliestLogAt         int64
+	LatestLogAt           int64
+}
+
+// UpdateOrganizationMemberBillingStart 在事务内更新某当前在职成员的账单归属起点。
+// expectedBillingStart 为乐观锁预期值，必须等于更新前的生效起点；candidate 在事务内重新
+// 校验（不得晚于 joined_at、不得未来、同组织窗口不相交）。增量由服务端在更新前重算并随
+// 结果返回；相同目标值重复应用时 Changed=false（不产生新数据）。
+func UpdateOrganizationMemberBillingStart(organizationId, userId int, candidate, expectedBillingStart int64) (*OrganizationBillingStartUpdateResult, error) {
+	result := &OrganizationBillingStartUpdateResult{}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockOrganizationForMembershipChange(tx, organizationId); err != nil {
+			return err
+		}
+		var updated OrganizationMember
+		if err := lockForUpdate(tx).Where("organization_id = ? AND user_id = ? AND left_at = 0", organizationId, userId).
+			First(&updated).Error; err != nil {
+			return err
+		}
+		oldEffective := effectiveBillingStart(updated)
+		if oldEffective != expectedBillingStart {
+			return errors.New("billing_start_at was changed by another operation, please retry")
+		}
+		if _, err := validateCandidateBillingStart(updated, candidate); err != nil {
+			return err
+		}
+		conflict, err := billingWindowOverlaps(tx, organizationId, userId, updated.Id, candidate, updated.LeftAt)
+		if err != nil {
+			return err
+		}
+		if conflict {
+			return errors.New("billing window overlaps existing membership record")
+		}
+		// 服务端权威计算增量：差集 [candidate, oldEffective) 内的消费日志。必须在更新前计算
+		// （oldEffective 为旧生效起点），口径与预览/汇总一致。
+		added, earliest, latest, err := previewAddedBillingRange(updated, candidate, oldEffective)
+		if err != nil {
+			return err
+		}
+		result.AddedRequestCount = added.RequestCount
+		result.AddedQuota = added.TotalQuota
+		result.AddedPromptTokens = added.PromptTokens
+		result.AddedCompletionTokens = added.CompletionTokens
+		result.EarliestLogAt = earliest
+		result.LatestLogAt = latest
+		result.Changed = updated.BillingStartAt != candidate
+		if !result.Changed {
+			result.Member = updated
+			return nil
+		}
+		if err := tx.Model(&OrganizationMember{}).Where("id = ?", updated.Id).Update("billing_start_at", candidate).Error; err != nil {
+			return err
+		}
+		updated.BillingStartAt = candidate
+		result.Member = updated
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	fillOrganizationMemberUsersInPlace(&result.Member)
+	return result, nil
 }
 
 func sortBillingDimensions(items []OrganizationBillingDimension) {

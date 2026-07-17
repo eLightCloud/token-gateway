@@ -5352,6 +5352,16 @@
     "Zhipu": "Zhipu",
     "Zhipu AI": "智譜 AI",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Billing start": "課金開始",
+    "Adjust billing start": "課金開始を調整",
+    "Billing start updated": "課金開始を更新しました",
+    "Candidate billing start": "課金開始の候補",
+    "Added requests": "追加リクエスト数",
+    "Added quota": "追加クォータ",
+    "Log range": "ログ範囲",
+    "Earliest retained log": "最古の保持ログ",
+    "Window conflict": "期間の競合",
+    "This only affects organization reports, not personal wallet or completed charges.": "これは組織のレポートにのみ影響し、個人ウォレットや完了した課金には影響しません。"
   }
 }

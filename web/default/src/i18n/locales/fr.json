@@ -5352,6 +5352,16 @@
     "Zhipu": "Zhipu",
     "Zhipu AI": "Zhipu AI",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Billing start": "Début de facturation",
+    "Adjust billing start": "Ajuster le début de facturation",
+    "Billing start updated": "Début de facturation mis à jour",
+    "Candidate billing start": "Début de facturation candidat",
+    "Added requests": "Requêtes ajoutées",
+    "Added quota": "Quota ajouté",
+    "Log range": "Plage de journaux",
+    "Earliest retained log": "Journal le plus ancien conservé",
+    "Window conflict": "Conflit de fenêtre",
+    "This only affects organization reports, not personal wallet or completed charges.": "Cela affecte uniquement les rapports de l'organisation, pas le portefeuille personnel ni les frais déjà facturés."
   }
 }
