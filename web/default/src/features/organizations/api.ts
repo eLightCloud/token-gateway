@@ -242,8 +242,9 @@ export function buildOrganizationExportUrl(params: OrganizationUsageParams) {
 export function buildOrganizationLogsExportUrl(
   params: OrganizationUsageParams
 ) {
-  const query = buildQuery(params)
-  return `/api/organization/current/billing/logs/export?${query}`
+  const query = new URLSearchParams(buildQuery(params))
+  query.set('timezone_offset', String(new Date().getTimezoneOffset()))
+  return `/api/organization/current/billing/logs/display-export?${query}`
 }
 
 // Exports must go through the shared axios instance so the request carries the
@@ -281,7 +282,7 @@ function readExportFilename(
   disposition: string | undefined,
   url: string
 ): string {
-  const fallback = url.includes('/billing/logs/export')
+  const fallback = url.includes('/billing/logs/')
     ? 'organization-billing-logs.csv'
     : 'organization-billing.csv'
   if (!disposition) return fallback
@@ -506,6 +507,7 @@ export function buildAdminOrganizationLogsExportUrl(
   id: number,
   params: OrganizationUsageParams
 ) {
-  const query = buildQuery(params)
-  return `/api/admin/organizations/${id}/billing/logs/export?${query}`
+  const query = new URLSearchParams(buildQuery(params))
+  query.set('timezone_offset', String(new Date().getTimezoneOffset()))
+  return `/api/admin/organizations/${id}/billing/logs/display-export?${query}`
 }

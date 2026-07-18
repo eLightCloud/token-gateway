@@ -3,8 +3,10 @@ package controller
 import (
 	"bytes"
 	"encoding/csv"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -148,5 +150,59 @@ func TestWriteOrganizationBillingLogsCsvKeepsLegacyContract(t *testing.T) {
 		"req-local",
 		"req-upstream",
 		"consume test",
+	}, records[1])
+}
+
+func TestWriteOrganizationBillingDisplayLogsCsvMatchesTableView(t *testing.T) {
+	originalGeneralSetting := *operation_setting.GetGeneralSetting()
+	t.Cleanup(func() {
+		*operation_setting.GetGeneralSetting() = originalGeneralSetting
+	})
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+
+	logs := []*model.Log{{
+		CreatedAt:        time.Date(2025, time.July, 15, 0, 0, 0, 0, time.UTC).Unix(),
+		UserId:           11,
+		Username:         "alice",
+		ModelName:        "gpt-test",
+		Quota:            int(common.QuotaPerUnit),
+		PromptTokens:     120,
+		CompletionTokens: 30,
+		ChannelId:        9,
+		ChannelName:      "primary",
+	}}
+
+	var buffer bytes.Buffer
+	writer := csv.NewWriter(&buffer)
+	writeOrganizationBillingDisplayLogsCsv(
+		writer,
+		logs,
+		time.FixedZone("UTC+8", 8*60*60),
+	)
+	writer.Flush()
+	require.NoError(t, writer.Error())
+
+	records, err := csv.NewReader(strings.NewReader(buffer.String())).ReadAll()
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	assert.Equal(t, []string{
+		"时间",
+		"用户",
+		"模型",
+		"渠道",
+		"消费金额",
+		"币种",
+		"消费额度(quota)",
+		"Tokens",
+	}, records[0])
+	assert.Equal(t, []string{
+		"2025-07-15 08:00:00",
+		"alice",
+		"gpt-test",
+		"primary",
+		"1.000000",
+		"USD",
+		strconv.Itoa(int(common.QuotaPerUnit)),
+		"150",
 	}, records[1])
 }

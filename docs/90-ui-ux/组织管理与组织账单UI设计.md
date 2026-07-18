@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-15
+last-reviewed: 2026-07-18
 ---
 
 # 组织管理与组织账单 UI 设计
@@ -132,7 +132,7 @@ Start date | End date | User | Model | Channel | Refresh | Export
 Time | User | Model | Channel | Consumption amount | Raw Quota | Tokens
 ```
 
-日志使用服务端分页。Logs 页的 Export 保留既有 `billing/logs/export` 单表 CSV；当前表格不展示 `content`、request ID 和 upstream request ID，但该兼容 CSV 会包含这些字段，因此导出入口应视为高权限排障能力。
+日志使用服务端分页。Logs 页的 Export 使用 `billing/logs/display-export` 单表 CSV，导出 Time、User、Model、Channel、Consumption amount、Raw Quota、Tokens，并把 Unix 时间转换为浏览器所在时区的可读日期。既有 `billing/logs/export` 继续保留原始排障列和时间戳，供兼容消费者使用，不再作为页面导出入口。
 
 Billing 页的 Export 使用新增 `billing/export`。完整 CSV 的汇总、用户、模型、渠道、趋势和明细区块均按“消费金额、币种、原始 quota”顺序提供金额信息；消费金额为不带货币符号的 6 位小数，确保可直接在表格软件中求和。模型区块额外提供当前计价规则。
 

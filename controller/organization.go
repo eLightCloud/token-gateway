@@ -322,6 +322,14 @@ func ExportCurrentOrganizationBillingLogs(c *gin.Context) {
 	exportOrganizationBillingLogs(c, organizationId, filters)
 }
 
+func ExportCurrentOrganizationBillingDisplayLogs(c *gin.Context) {
+	organizationId, filters, ok := scopedCurrentOrganizationBillingFilters(c)
+	if !ok {
+		return
+	}
+	exportOrganizationBillingDisplayLogs(c, organizationId, filters)
+}
+
 func ExportCurrentOrganizationBilling(c *gin.Context) {
 	organizationId, filters, ok := scopedCurrentOrganizationBillingFilters(c)
 	if !ok {
@@ -570,6 +578,14 @@ func AdminExportOrganizationBillingLogs(c *gin.Context) {
 		return
 	}
 	exportOrganizationBillingLogs(c, organizationId, filters)
+}
+
+func AdminExportOrganizationBillingDisplayLogs(c *gin.Context) {
+	organizationId, filters, ok := adminOrganizationBillingScope(c)
+	if !ok {
+		return
+	}
+	exportOrganizationBillingDisplayLogs(c, organizationId, filters)
 }
 
 func AdminExportOrganizationBilling(c *gin.Context) {
@@ -848,6 +864,56 @@ func writeOrganizationBillingLogsCsv(writer *csv.Writer, logs []*model.Log) {
 	}
 }
 
+// writeOrganizationBillingDisplayLogsCsv 与组织日志页面保持同一列口径：
+// 时间可读、金额按站点币种换算，同时保留原始 quota 便于审计。
+func writeOrganizationBillingDisplayLogsCsv(writer *csv.Writer, logs []*model.Log, location *time.Location) {
+	amountFormatter := newOrganizationBillingExportAmountFormatter()
+	_ = writer.Write([]string{
+		"时间",
+		"用户",
+		"模型",
+		"渠道",
+		"消费金额",
+		"币种",
+		"消费额度(quota)",
+		"Tokens",
+	})
+	for _, item := range logs {
+		createdAt := "-"
+		if item.CreatedAt > 0 {
+			createdAt = time.Unix(item.CreatedAt, 0).In(location).Format("2006-01-02 15:04:05")
+		}
+		username := item.Username
+		if username == "" {
+			username = "-"
+			if item.UserId > 0 {
+				username = strconv.Itoa(item.UserId)
+			}
+		}
+		modelName := item.ModelName
+		if modelName == "" {
+			modelName = "-"
+		}
+		channelName := item.ChannelName
+		if channelName == "" {
+			channelName = "-"
+			if item.ChannelId > 0 {
+				channelName = strconv.Itoa(item.ChannelId)
+			}
+		}
+		_ = writer.Write([]string{
+			createdAt,
+			username,
+			modelName,
+			channelName,
+			amountFormatter.amount(item.Quota),
+			amountFormatter.currency,
+			strconv.Itoa(item.Quota),
+			strconv.Itoa(item.PromptTokens + item.CompletionTokens),
+		})
+	}
+}
+
 // exportOrganizationBillingLogs 保留既有 logs/export 的单表 CSV 合同，避免破坏上游消费者。
 func exportOrganizationBillingLogs(c *gin.Context, organizationId int, filters model.OrganizationBillingFilters) {
 	const maxExportRows = 10000
@@ -860,6 +926,34 @@ func exportOrganizationBillingLogs(c *gin.Context, organizationId int, filters m
 	buf.WriteString("\xEF\xBB\xBF")
 	writer := csv.NewWriter(&buf)
 	writeOrganizationBillingLogsCsv(writer, logs)
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"organization-%d-billing-logs.csv\"", organizationId))
+	c.Data(200, "text/csv; charset=utf-8", buf.Bytes())
+}
+
+// exportOrganizationBillingDisplayLogs 为组织日志页面提供展示型单表 CSV；
+// 旧 logs/export 端点继续保持上游兼容，不承载新的列或格式。
+func exportOrganizationBillingDisplayLogs(c *gin.Context, organizationId int, filters model.OrganizationBillingFilters) {
+	const maxExportRows = 10000
+	logs, _, err := model.GetOrganizationBillingLogs(organizationId, filters, 0, maxExportRows)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	location := time.Local
+	if timezoneOffset, err := strconv.Atoi(c.Query("timezone_offset")); err == nil &&
+		timezoneOffset >= -14*60 && timezoneOffset <= 14*60 {
+		location = time.FixedZone("organization-billing-export", -timezoneOffset*60)
+	}
+	var buf bytes.Buffer
+	buf.WriteString("\xEF\xBB\xBF")
+	writer := csv.NewWriter(&buf)
+	writeOrganizationBillingDisplayLogsCsv(writer, logs, location)
 	writer.Flush()
 	if err := writer.Error(); err != nil {
 		common.ApiError(c, err)

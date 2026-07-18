@@ -271,6 +271,7 @@ func registerOrganizationE2ERoutes(router *gin.Engine) {
 		organizationRoute.GET("/current/billing/trend", GetCurrentOrganizationBillingTrend)
 		organizationRoute.GET("/current/billing/logs", GetCurrentOrganizationBillingLogs)
 		organizationRoute.GET("/current/billing/logs/export", ExportCurrentOrganizationBillingLogs)
+		organizationRoute.GET("/current/billing/logs/display-export", ExportCurrentOrganizationBillingDisplayLogs)
 		organizationRoute.GET("/current/billing/export", ExportCurrentOrganizationBilling)
 	}
 
@@ -805,8 +806,8 @@ func TestOrganizationE2EBillingStartConflictRejected(t *testing.T) {
 	assert.Contains(t, res.Message, "overlap")
 }
 
-// TestOrganizationE2EBillingStartExportsBackfill 锁定两类 CSV 导出在回填后纳入加入前消费：
-// logs/export 单表含两条加入前日志；export 六区块含账单汇总段与加入前明细。
+// TestOrganizationE2EBillingStartExportsBackfill 锁定三类 CSV 导出在回填后纳入加入前消费：
+// logs/export 保持旧合同，display-export 对齐页面，export 六区块含账单汇总段与加入前明细。
 func TestOrganizationE2EBillingStartExportsBackfill(t *testing.T) {
 	fixture, router := setupOrganizationE2E(t)
 	const backfillWindow = "start_timestamp=1782820000&end_timestamp=1783511199"
@@ -821,6 +822,16 @@ func TestOrganizationE2EBillingStartExportsBackfill(t *testing.T) {
 	assert.Contains(t, logsBody, "req-member-before-membership")
 	// BOM + 表头 + 5 条消费日志。
 	assert.GreaterOrEqual(t, strings.Count(logsBody, "\n"), 6)
+
+	displayLogsExport := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/logs/display-export?timezone_offset=-480&"+backfillWindow, nil)
+	require.Equal(t, http.StatusOK, displayLogsExport.Code)
+	displayLogsBody := displayLogsExport.Body.String()
+	assert.Contains(t, displayLogsBody, "时间,用户,模型,渠道,消费金额,币种,消费额度(quota),Tokens")
+	assert.Contains(t, displayLogsBody, "2026-06-30 20:00:00")
+	assert.Contains(t, displayLogsBody, "2026-07-04 20:00:00")
+	assert.Contains(t, displayLogsBody, "USD")
+	assert.GreaterOrEqual(t, strings.Count(displayLogsBody, "\n"), 6)
+	assert.NotContains(t, displayLogsBody, "created_at")
 
 	fullExport := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/export?"+backfillWindow, nil)
 	require.Equal(t, http.StatusOK, fullExport.Code)
