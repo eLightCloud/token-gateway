@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-07
+last-reviewed: 2026-07-19
 ---
 
 # 00-context — 目标说明
@@ -15,4 +15,4 @@ last-reviewed: 2026-07-07
 ## 不放什么
 - 实现与架构 -> 20-architecture/
 - 命令与开发流程 -> 30-engineering/
-- 编码过程中的临时问题分析/方案 -> 80-dev/
+- 编码现场的一次性草稿 -> 不进入 docs；任务结束前提炼到对应主题目录

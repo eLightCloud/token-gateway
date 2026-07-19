@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-10
+last-reviewed: 2026-07-19
 ---
 
 # 30-engineering — 目标说明
@@ -20,4 +20,4 @@ last-reviewed: 2026-07-10
 ## 不放什么
 - 架构决策 -> 20-architecture/decisions/
 - 生产环境与运维 -> 40-operations/
-- 临时问题分析与验证记录 -> 80-dev/
+- 一次性问题分析与验证记录 -> 不进入 docs；可复用规则和命令才进入本目录

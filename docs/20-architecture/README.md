@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-15
+last-reviewed: 2026-07-19
 ---
 
 # 20-architecture — 目标说明
@@ -23,4 +23,4 @@ last-reviewed: 2026-07-15
 ## 不放什么
 - 产品需求与流程 -> 10-product/
 - 运维手册与监控 -> 40-operations/
-- 编码过程中的临时修复方案 -> 80-dev/
+- 一次性排障过程 -> 不进入 docs；已确认结论直接更新本目录，过时历史进入 99-archive/

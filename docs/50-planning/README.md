@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-15
+last-reviewed: 2026-07-19
 ---
 
 # 50-planning — 目标说明
@@ -20,4 +20,4 @@ last-reviewed: 2026-07-15
 ## 不放什么
 - 产品验收标准 -> 10-product/验收标准.md
 - 架构决策 -> 20-architecture/decisions/
-- 编码过程中的临时问题分析 -> 80-dev/
+- 一次性编码草稿 -> 不进入 docs；阶段结果、未决事项和正式变更才进入本目录

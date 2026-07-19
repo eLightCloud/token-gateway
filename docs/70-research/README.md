@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-07
+last-reviewed: 2026-07-19
 ---
 
 # 70-research — 目标说明
@@ -15,4 +15,4 @@ last-reviewed: 2026-07-07
 ## 不放什么
 - 已采纳的架构决策 -> 20-architecture/decisions/
 - 当前有效规范 -> 30-engineering/编码规范.md
-- 编码现场临时排障和实施方案 -> 80-dev/
+- 编码现场一次性排障 -> 不进入 docs；有长期参考价值的调研和方案对比才进入本目录

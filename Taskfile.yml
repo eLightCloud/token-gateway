@@ -15,7 +15,6 @@ tasks:
       - test -s docs/50-planning/README.md
       - test -s docs/60-marketing/README.md
       - test -s docs/70-research/README.md
-      - test -s docs/80-dev/README.md
       - test -s docs/90-ui-ux/README.md
       - test -s docs/99-archive/README.md
       - test -s docs/00-context/项目简介.md
@@ -25,7 +24,7 @@ tasks:
       - test -s docs/10-product/验收标准.md
       - test -s docs/20-architecture/架构概览.md
       - test -s docs/20-architecture/数据模型.md
-      - test -d docs/20-architecture/decisions
+      - test -s docs/20-architecture/decisions/README.md
       - test -s docs/30-engineering/本地环境搭建.md
       - test -s docs/30-engineering/命令清单.md
       - test -s docs/30-engineering/AI编码指南.md
