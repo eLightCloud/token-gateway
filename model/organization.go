@@ -185,10 +185,21 @@ func GetOrganizationById(id int) (*Organization, error) {
 }
 
 func GetCurrentOrganizationForUser(userId int) (*OrganizationWithMember, error) {
-	var member OrganizationMember
-	if err := DB.Where("user_id = ? AND left_at = 0", userId).First(&member).Error; err != nil {
+	var members []OrganizationMember
+	if err := DB.
+		Where("user_id = ? AND left_at = 0", userId).
+		Order("id asc").
+		Limit(2).
+		Find(&members).Error; err != nil {
 		return nil, err
 	}
+	if len(members) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if len(members) > 1 {
+		return nil, errors.New("user has multiple active organization memberships")
+	}
+	member := members[0]
 	var org Organization
 	if err := DB.First(&org, "id = ?", member.OrganizationId).Error; err != nil {
 		return nil, err
@@ -776,13 +787,14 @@ type organizationTrendAggregate struct {
 }
 
 func organizationTrendPeriodExpr() string {
+	const beijingOffsetSeconds = 8 * 60 * 60
 	switch common.LogDatabaseType() {
 	case common.DatabaseTypeClickHouse:
-		return "intDiv(created_at, 86400)"
+		return fmt.Sprintf("intDiv(created_at + %d, 86400)", beijingOffsetSeconds)
 	case common.DatabaseTypeMySQL:
-		return "FLOOR(created_at / 86400)"
+		return fmt.Sprintf("FLOOR((created_at + %d) / 86400)", beijingOffsetSeconds)
 	default:
-		return "created_at / 86400"
+		return fmt.Sprintf("(created_at + %d) / 86400", beijingOffsetSeconds)
 	}
 }
 
@@ -851,6 +863,83 @@ func GetOrganizationBillingLogs(organizationId int, filters OrganizationBillingF
 	}
 	hydrateLogChannelNames(page)
 	return page, total, nil
+}
+
+func StreamOrganizationBillingLogs(
+	organizationId int,
+	filters OrganizationBillingFilters,
+	batchSize int,
+	consume func([]*Log) error,
+) error {
+	if batchSize <= 0 {
+		return errors.New("organization billing log stream batch size must be positive")
+	}
+	if consume == nil {
+		return errors.New("organization billing log stream consumer is required")
+	}
+	members, err := activeAndHistoricalOrganizationMembers(organizationId, filters.UserId)
+	if err != nil {
+		return err
+	}
+	cursors := make([]organizationLogCursor, 0, len(members))
+	for _, member := range members {
+		cursor := organizationLogCursor{member: member}
+		if err := cursor.loadMore(filters, 1); err != nil {
+			return err
+		}
+		if cursor.current() != nil {
+			cursors = append(cursors, cursor)
+		}
+	}
+
+	const maxCursorBatchSize = 100
+	cursorBatchSize := batchSize
+	if cursorBatchSize > maxCursorBatchSize {
+		cursorBatchSize = maxCursorBatchSize
+	}
+	batch := make([]*Log, 0, batchSize)
+	streamed := 0
+	for {
+		bestCursorIndex := -1
+		var bestLog *Log
+		for i := range cursors {
+			current := cursors[i].current()
+			if current == nil {
+				continue
+			}
+			if bestLog == nil || organizationLogComesBefore(current, bestLog) {
+				bestLog = current
+				bestCursorIndex = i
+			}
+		}
+		if bestCursorIndex < 0 || bestLog == nil {
+			break
+		}
+		batch = append(batch, bestLog)
+		if err := cursors[bestCursorIndex].advance(filters, cursorBatchSize); err != nil {
+			return err
+		}
+		if len(batch) < batchSize {
+			continue
+		}
+		if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+			assignDisplayLogIds(batch, streamed)
+		}
+		hydrateLogChannelNames(batch)
+		if err := consume(batch); err != nil {
+			return err
+		}
+		streamed += len(batch)
+		batch = make([]*Log, 0, batchSize)
+	}
+	if len(batch) == 0 {
+		return nil
+	}
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		assignDisplayLogIds(batch, streamed)
+	}
+	hydrateLogChannelNames(batch)
+	return consume(batch)
 }
 
 type organizationLogCursor struct {

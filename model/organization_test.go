@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 func setupOrganizationTestState(t *testing.T) {
 	t.Helper()
 	require.NoError(t, DB.Exec("DELETE FROM logs").Error)
+	require.NoError(t, DB.Exec("DELETE FROM organization_billing_settlement_rules").Error)
 	require.NoError(t, DB.Exec("DELETE FROM organization_members").Error)
 	require.NoError(t, DB.Exec("DELETE FROM organizations").Error)
 	require.NoError(t, DB.Exec("DELETE FROM users").Error)
@@ -181,6 +183,23 @@ func TestMigrateOrganizationRolesNormalizesLegacyValues(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, members, 2)
 	assert.ElementsMatch(t, []string{OrganizationRoleAdmin, OrganizationRoleMember}, []string{members[0].Role, members[1].Role})
+}
+
+func TestGetCurrentOrganizationForUserRejectsMultipleActiveMemberships(t *testing.T) {
+	setupOrganizationTestState(t)
+	insertOrganizationTestUser(t, 1, "duplicate-member")
+	require.NoError(t, DB.Create(&[]Organization{
+		{Id: 100, Name: "first", Status: OrganizationStatusEnabled},
+		{Id: 101, Name: "second", Status: OrganizationStatusEnabled},
+	}).Error)
+	require.NoError(t, DB.Create(&[]OrganizationMember{
+		{OrganizationId: 100, UserId: 1, Role: OrganizationRoleAdmin},
+		{OrganizationId: 101, UserId: 1, Role: OrganizationRoleMember},
+	}).Error)
+
+	_, err := GetCurrentOrganizationForUser(1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multiple active organization memberships")
 }
 
 func TestOrganizationMemberMutationsRetainAdmin(t *testing.T) {
@@ -362,16 +381,16 @@ func TestOrganizationBillingChannelsAggregatesAndHydratesNames(t *testing.T) {
 	assert.Equal(t, "fallback", items[1].ChannelName)
 }
 
-func TestOrganizationBillingTrendAggregatesByUtcDay(t *testing.T) {
+func TestOrganizationBillingTrendAggregatesByBeijingDay(t *testing.T) {
 	setupOrganizationTestState(t)
 	organizationId := createOrganizationBillingTestFixture(t)
-	firstDay := time.Date(2026, 7, 8, 0, 30, 0, 0, time.UTC).Unix()
-	firstDayLate := time.Date(2026, 7, 8, 23, 59, 0, 0, time.UTC).Unix()
-	secondDay := time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC).Unix()
+	firstDay := time.Date(2026, 7, 8, 15, 59, 0, 0, time.UTC).Unix()
+	secondDayStart := time.Date(2026, 7, 8, 16, 0, 0, 0, time.UTC).Unix()
+	secondDayLate := time.Date(2026, 7, 9, 15, 59, 0, 0, time.UTC).Unix()
 	require.NoError(t, LOG_DB.Create(&[]Log{
 		{UserId: 10, CreatedAt: firstDay, Type: LogTypeConsume, Quota: 100, PromptTokens: 1},
-		{UserId: 11, CreatedAt: firstDayLate, Type: LogTypeConsume, Quota: 200, CompletionTokens: 2},
-		{UserId: 10, CreatedAt: secondDay, Type: LogTypeConsume, Quota: 300, PromptTokens: 3, CompletionTokens: 4},
+		{UserId: 11, CreatedAt: secondDayStart, Type: LogTypeConsume, Quota: 200, CompletionTokens: 2},
+		{UserId: 10, CreatedAt: secondDayLate, Type: LogTypeConsume, Quota: 300, PromptTokens: 3, CompletionTokens: 4},
 	}).Error)
 
 	points, err := GetOrganizationBillingTrend(organizationId, OrganizationBillingFilters{Types: []int{LogTypeConsume}})
@@ -379,12 +398,15 @@ func TestOrganizationBillingTrendAggregatesByUtcDay(t *testing.T) {
 	require.Len(t, points, 2)
 
 	assert.Equal(t, "2026-07-08", points[0].Period)
-	assert.Equal(t, 300, points[0].TotalQuota)
-	assert.Equal(t, 2, points[0].RequestCount)
+	assert.Equal(t, 100, points[0].TotalQuota)
+	assert.Equal(t, 1, points[0].RequestCount)
 	assert.Equal(t, 1, points[0].PromptTokens)
-	assert.Equal(t, 2, points[0].CompletionTokens)
+	assert.Zero(t, points[0].CompletionTokens)
 	assert.Equal(t, "2026-07-09", points[1].Period)
-	assert.Equal(t, 300, points[1].TotalQuota)
+	assert.Equal(t, 500, points[1].TotalQuota)
+	assert.Equal(t, 2, points[1].RequestCount)
+	assert.Equal(t, 3, points[1].PromptTokens)
+	assert.Equal(t, 6, points[1].CompletionTokens)
 }
 
 func TestOrganizationBillingLogsPaginatesAcrossMembers(t *testing.T) {
@@ -406,6 +428,48 @@ func TestOrganizationBillingLogsPaginatesAcrossMembers(t *testing.T) {
 	assert.Equal(t, 90, logs[0].Quota)
 	assert.Equal(t, 85, logs[1].Quota)
 	assert.Equal(t, 80, logs[2].Quota)
+}
+
+func TestStreamOrganizationBillingLogsReturnsOrderedBoundedBatches(t *testing.T) {
+	setupOrganizationTestState(t)
+	organizationId := createOrganizationBillingTestFixture(t)
+	require.NoError(t, LOG_DB.Create(&[]Log{
+		{UserId: 10, CreatedAt: 100, Type: LogTypeConsume, Quota: 100},
+		{UserId: 11, CreatedAt: 95, Type: LogTypeConsume, Quota: 95},
+		{UserId: 10, CreatedAt: 90, Type: LogTypeConsume, Quota: 90},
+		{UserId: 11, CreatedAt: 85, Type: LogTypeConsume, Quota: 85},
+	}).Error)
+
+	var batches [][]int
+	err := StreamOrganizationBillingLogs(
+		organizationId,
+		OrganizationBillingFilters{Types: []int{LogTypeConsume}},
+		2,
+		func(logs []*Log) error {
+			quotas := make([]int, 0, len(logs))
+			for _, log := range logs {
+				quotas = append(quotas, log.Quota)
+			}
+			batches = append(batches, quotas)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, [][]int{{100, 95}, {90, 85}}, batches)
+
+	stop := errors.New("stop export")
+	callbacks := 0
+	err = StreamOrganizationBillingLogs(
+		organizationId,
+		OrganizationBillingFilters{Types: []int{LogTypeConsume}},
+		2,
+		func(_ []*Log) error {
+			callbacks++
+			return stop
+		},
+	)
+	require.ErrorIs(t, err, stop)
+	assert.Equal(t, 1, callbacks)
 }
 
 func TestListOrganizationsFiltersByKeywordAndStatus(t *testing.T) {

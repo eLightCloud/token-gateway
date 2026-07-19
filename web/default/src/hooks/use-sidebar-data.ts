@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -17,11 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
   Building2,
   Box,
   CreditCard,
+  FileSpreadsheet,
   FileText,
   FlaskConical,
   Key,
@@ -72,6 +73,11 @@ export function useSidebarData(): SidebarData {
     },
     ...(organizationRole === 'admin'
       ? [
+          {
+            title: t('Organization invoice'),
+            url: '/organization/invoice',
+            icon: FileSpreadsheet,
+          },
           {
             title: t('Organization members'),
             url: '/organization/members',

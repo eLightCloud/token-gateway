@@ -58,6 +58,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
   organization: {
     enabled: true,
     usage: true,
+    invoice: true,
     members: true,
     logs: true,
   },
@@ -116,6 +117,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/profile': { section: 'personal', module: 'personal' },
   '/organization': { section: 'organization', module: 'usage' },
   '/organization/usage': { section: 'organization', module: 'usage' },
+  '/organization/invoice': { section: 'organization', module: 'invoice' },
   '/organization/members': { section: 'organization', module: 'members' },
   '/organization/logs': { section: 'organization', module: 'logs' },
   '/channels': { section: 'admin', module: 'channel' },

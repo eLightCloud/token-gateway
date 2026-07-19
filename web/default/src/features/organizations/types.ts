@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 export type OrganizationRole = 'admin' | 'member'
 export const ORGANIZATION_STATUS_ENABLED = 1
 export const ORGANIZATION_STATUS_DISABLED = 2

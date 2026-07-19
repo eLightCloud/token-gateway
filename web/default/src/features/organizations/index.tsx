@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -25,7 +24,6 @@ import {
   ArrowUpFromLine,
   Building2,
   CalendarClock,
-  Database,
   Download,
   Plus,
   RefreshCw,
@@ -134,6 +132,12 @@ import {
   updateAdminOrganizationMemberBillingStart,
 } from './api'
 import {
+  beijingDateBoundaryToUnix,
+  formatTimestampInBeijingTime,
+  unixTimestampToBeijingDateInput,
+} from './beijing-time'
+import { OrganizationInvoicePanel } from './invoice'
+import {
   ORGANIZATION_STATUS_DISABLED,
   ORGANIZATION_STATUS_ENABLED,
   type Organization,
@@ -151,13 +155,12 @@ import {
 } from './types'
 
 const ROLE_OPTIONS: OrganizationRole[] = ['admin', 'member']
-type OrganizationDetailTab = 'members' | 'billing' | 'logs'
+type OrganizationDetailTab = 'members' | 'billing' | 'invoice' | 'logs'
 
 // 摘要骨架屏占位槽位（稳定 key，避免使用数组 index 作为 key）。
 const SUMMARY_CARD_SKELETONS = [
   'requests',
   'amount',
-  'raw-quota',
   'prompt',
   'completion',
   'members',
@@ -193,6 +196,7 @@ function organizationDetailTabLabel(
 ) {
   if (tab === 'members') return t('Members')
   if (tab === 'billing') return t('Billing')
+  if (tab === 'invoice') return t('Invoice')
   return t('Logs')
 }
 
@@ -454,7 +458,7 @@ function LoadingBlock({ label }: { label: string }) {
         <Skeleton className='h-6 w-20 rounded-full' />
       </div>
       <Skeleton className='h-24 w-full rounded-lg' />
-      <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-6'>
+      <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-5'>
         {SUMMARY_CARD_SKELETONS.map((slot) => (
           <Skeleton key={slot} className='h-24 rounded-lg' />
         ))}
@@ -474,34 +478,12 @@ function useOrganizationContext() {
   })
 }
 
-function utcDateBoundaryToUnix(value: string, endOfDay: boolean) {
-  if (!value) return undefined
-  const [year, month, day] = value.split('-').map(Number)
-  if (!year || !month || !day) return undefined
-  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined
-  const ms = endOfDay
-    ? Date.UTC(year, month - 1, day, 23, 59, 59)
-    : Date.UTC(year, month - 1, day, 0, 0, 0)
-  if (!Number.isFinite(ms)) return undefined
-  return Math.floor(ms / 1000)
-}
-
 function dateToUnix(value: string) {
-  return utcDateBoundaryToUnix(value, false)
+  return beijingDateBoundaryToUnix(value, false)
 }
 
 function unixEndOfDate(value: string) {
-  return utcDateBoundaryToUnix(value, true)
-}
-
-// unixUtcDateInput 把 Unix 秒（UTC）转成 <input type="date"> 需要的 YYYY-MM-DD。
-function unixUtcDateInput(timestamp: number): string {
-  if (!timestamp) return ''
-  const d = new Date(timestamp * 1000)
-  const yyyy = d.getUTCFullYear()
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(d.getUTCDate()).padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
+  return beijingDateBoundaryToUnix(value, true)
 }
 
 function useUsageFilters() {
@@ -547,13 +529,17 @@ function UsageFilters({
   options,
   onRefresh,
   onExport,
+  exportHint,
   showMemberFilter,
+  showChannelFilter,
 }: {
   filters: ReturnType<typeof useUsageFilters>
   options?: OrganizationBillingFilterOptions
   onRefresh: () => void
   onExport?: () => void
+  exportHint?: string
   showMemberFilter: boolean
+  showChannelFilter: boolean
 }) {
   const { t } = useTranslation()
   const memberOptions = useMemo(() => {
@@ -577,24 +563,49 @@ function UsageFilters({
         .sort((a, b) => (a.model_name ?? '').localeCompare(b.model_name ?? '')),
     [options?.models]
   )
-  const channelOptions = useMemo(
-    () =>
-      [...(options?.channels ?? [])]
-        .filter((row) => row.channel_id != null)
-        .sort((a, b) =>
-          (a.channel_name || String(a.channel_id)).localeCompare(
-            b.channel_name || String(b.channel_id)
-          )
-        ),
-    [options?.channels]
-  )
+  const channelOptions = useMemo(() => {
+    if (!showChannelFilter) return []
+    return [...(options?.channels ?? [])]
+      .filter((row) => row.channel_id != null)
+      .sort((a, b) =>
+        (a.channel_name || String(a.channel_id)).localeCompare(
+          b.channel_name || String(b.channel_id)
+        )
+      )
+  }, [options?.channels, showChannelFilter])
+  let exportControl: React.ReactNode = null
+  if (onExport) {
+    exportControl = (
+      <Button variant='outline' size='sm' onClick={onExport}>
+        <Download />
+        {t('Export')}
+      </Button>
+    )
+  }
+  if (onExport && exportHint) {
+    exportControl = (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button variant='outline' size='sm' onClick={onExport}>
+                <Download />
+                {t('Export')}
+              </Button>
+            }
+          />
+          <TooltipContent className='max-w-xs'>{exportHint}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    )
+  }
   return (
     <section className='bg-background rounded-lg border p-4'>
       <div className='text-muted-foreground mb-3 text-xs font-medium tracking-wide'>
         {t('Filters')}
       </div>
       <div className='grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[repeat(5,minmax(0,1fr))_auto]'>
-        <FieldLabel label={t('Start date')}>
+        <FieldLabel label={`${t('Start date')} (${t('Beijing Time')})`}>
           <Input
             type='date'
             value={filters.startDate}
@@ -604,7 +615,7 @@ function UsageFilters({
             }}
           />
         </FieldLabel>
-        <FieldLabel label={t('End date')}>
+        <FieldLabel label={`${t('End date')} (${t('Beijing Time')})`}>
           <Input
             type='date'
             value={filters.endDate}
@@ -650,45 +661,31 @@ function UsageFilters({
             ))}
           </NativeSelect>
         </FieldLabel>
-        <FieldLabel label={t('Channel')}>
-          <NativeSelect
-            className='w-full'
-            value={filters.channelId}
-            onChange={(event) => {
-              filters.setChannelId(event.target.value)
-              filters.setPage(1)
-            }}
-          >
-            <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
-            {channelOptions.map((row) => (
-              <NativeSelectOption key={row.channel_id} value={row.channel_id}>
-                {row.channel_name || `${t('Channel')} ${row.channel_id}`}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-        </FieldLabel>
+        {showChannelFilter ? (
+          <FieldLabel label={t('Channel')}>
+            <NativeSelect
+              className='w-full'
+              value={filters.channelId}
+              onChange={(event) => {
+                filters.setChannelId(event.target.value)
+                filters.setPage(1)
+              }}
+            >
+              <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
+              {channelOptions.map((row) => (
+                <NativeSelectOption key={row.channel_id} value={row.channel_id}>
+                  {row.channel_name || `${t('Channel')} ${row.channel_id}`}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </FieldLabel>
+        ) : null}
         <div className='flex gap-2'>
           <Button variant='outline' size='sm' onClick={onRefresh}>
             <RefreshCw />
             {t('Refresh')}
           </Button>
-          {onExport ? (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button variant='outline' size='sm' onClick={onExport}>
-                      <Download />
-                      {t('Export')}
-                    </Button>
-                  }
-                />
-                <TooltipContent className='max-w-xs'>
-                  {t('Export includes raw log content and request IDs')}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          ) : null}
+          {exportControl}
         </div>
       </div>
     </section>
@@ -714,13 +711,6 @@ function SummaryGrid({ summary }: { summary?: OrganizationSummary }) {
       emphasis: true,
     },
     {
-      label: t('Raw Quota'),
-      value: formatNumber(summary?.total_quota),
-      description: t('Internal quota units'),
-      icon: Database,
-      iconTone: 'neutral' as IconBadgeTone,
-    },
-    {
       label: t('Prompt tokens'),
       value: formatNumber(summary?.prompt_tokens),
       description: t('Input tokens'),
@@ -744,7 +734,7 @@ function SummaryGrid({ summary }: { summary?: OrganizationSummary }) {
   ]
 
   return (
-    <div className='grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6'>
+    <div className='grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5'>
       {items.map((item) => (
         <BillingStatCard
           key={item.label}
@@ -826,7 +816,6 @@ function DimensionTable(props: {
             <TableHead className='text-right'>
               {t('Consumption amount')}
             </TableHead>
-            <TableHead className='text-right'>{t('Raw Quota')}</TableHead>
             <TableHead className='text-right'>{t('Share')}</TableHead>
             <TableHead className='text-right'>{t('Requests')}</TableHead>
             <TableHead className='text-right'>{t('Prompt tokens')}</TableHead>
@@ -849,9 +838,6 @@ function DimensionTable(props: {
                 </TableCell>
                 <TableCell className='text-right whitespace-nowrap tabular-nums'>
                   {formatBillingAmountFromQuota(row.total_quota)}
-                </TableCell>
-                <TableCell className='text-right whitespace-nowrap tabular-nums'>
-                  {formatNumber(row.total_quota)}
                 </TableCell>
                 <TableCell className='text-right whitespace-nowrap'>
                   <div className='ml-auto w-16 lg:w-24'>
@@ -890,7 +876,7 @@ function DimensionTable(props: {
             )
           })}
           {!props.rows?.length ? (
-            <EmptyTableRow colSpan={props.showPricing ? 9 : 8} />
+            <EmptyTableRow colSpan={props.showPricing ? 8 : 7} />
           ) : null}
         </TableBody>
       </Table>
@@ -909,11 +895,10 @@ function TrendTable({ rows }: { rows?: OrganizationTrendRow[] }) {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>{t('Date')}</TableHead>
+          <TableHead>{`${t('Date')} (${t('Beijing Time')})`}</TableHead>
           <TableHead className='text-right'>
             {t('Consumption amount')}
           </TableHead>
-          <TableHead className='text-right'>{t('Raw Quota')}</TableHead>
           <TableHead className='text-right'>{t('Requests')}</TableHead>
           <TableHead className='text-right'>{t('Tokens')}</TableHead>
         </TableRow>
@@ -936,9 +921,6 @@ function TrendTable({ rows }: { rows?: OrganizationTrendRow[] }) {
                 </div>
               </TableCell>
               <TableCell className='text-right whitespace-nowrap tabular-nums'>
-                {formatNumber(row.total_quota)}
-              </TableCell>
-              <TableCell className='text-right whitespace-nowrap tabular-nums'>
                 {formatNumber(row.request_count)}
               </TableCell>
               <TableCell className='text-right whitespace-nowrap tabular-nums'>
@@ -949,7 +931,7 @@ function TrendTable({ rows }: { rows?: OrganizationTrendRow[] }) {
             </TableRow>
           )
         })}
-        {!trendRows.length ? <EmptyTableRow colSpan={5} /> : null}
+        {!trendRows.length ? <EmptyTableRow colSpan={4} /> : null}
       </TableBody>
     </Table>
   )
@@ -961,38 +943,36 @@ function LogsTable({ rows }: { rows?: OrganizationUsageRow[] }) {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>{t('Time')}</TableHead>
+          <TableHead>{`${t('Time')} (${t('Beijing Time')})`}</TableHead>
           <TableHead>{t('User')}</TableHead>
           <TableHead>{t('Model')}</TableHead>
-          <TableHead>{t('Channel')}</TableHead>
           <TableHead className='text-right'>
             {t('Consumption amount')}
           </TableHead>
-          <TableHead className='text-right'>{t('Raw Quota')}</TableHead>
-          <TableHead className='text-right'>{t('Tokens')}</TableHead>
+          <TableHead className='text-right'>{t('Prompt tokens')}</TableHead>
+          <TableHead className='text-right'>{t('Completion tokens')}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {(rows ?? []).map((row, index) => (
           <TableRow key={`${row.id ?? index}-${row.created_at ?? ''}`}>
-            <TableCell>{formatTimestampToDate(row.created_at)}</TableCell>
+            <TableCell>
+              {formatTimestampInBeijingTime(row.created_at)}
+            </TableCell>
             <TableCell>{row.username || row.user_id || '-'}</TableCell>
             <TableCell>{row.model_name || '-'}</TableCell>
-            <TableCell>{row.channel_name || row.channel_id || '-'}</TableCell>
             <TableCell className='text-right whitespace-nowrap tabular-nums'>
               {formatBillingAmountFromQuota(row.quota ?? 0)}
             </TableCell>
             <TableCell className='text-right whitespace-nowrap tabular-nums'>
-              {formatNumber(row.quota)}
+              {formatNumber(row.prompt_tokens)}
             </TableCell>
             <TableCell className='text-right whitespace-nowrap tabular-nums'>
-              {formatNumber(
-                (row.prompt_tokens ?? 0) + (row.completion_tokens ?? 0)
-              )}
+              {formatNumber(row.completion_tokens)}
             </TableCell>
           </TableRow>
         ))}
-        {!rows?.length ? <EmptyTableRow colSpan={7} /> : null}
+        {!rows?.length ? <EmptyTableRow colSpan={6} /> : null}
       </TableBody>
     </Table>
   )
@@ -1267,7 +1247,7 @@ function BillingStartAdjustDialog({
 
   useEffect(() => {
     if (member) {
-      setCandidateDate(unixUtcDateInput(currentEffective))
+      setCandidateDate(unixTimestampToBeijingDateInput(currentEffective))
       setPreview(null)
     }
   }, [member, currentEffective])
@@ -1333,11 +1313,13 @@ function BillingStartAdjustDialog({
           </DialogDescription>
         </DialogHeader>
         <div className='space-y-3'>
-          <FieldLabel label={t('Candidate billing start')}>
+          <FieldLabel
+            label={`${t('Candidate billing start')} (${t('Beijing Time')})`}
+          >
             <Input
               type='date'
               value={candidateDate}
-              max={unixUtcDateInput(member?.joined_at || 0)}
+              max={unixTimestampToBeijingDateInput(member?.joined_at || 0)}
               onChange={(event) => {
                 setCandidateDate(event.target.value)
                 setPreview(null)
@@ -1361,21 +1343,21 @@ function BillingStartAdjustDialog({
               {preview.earliest_log_at ? (
                 <div className='flex justify-between gap-4'>
                   <span className='text-muted-foreground'>
-                    {t('Log range')}
+                    {`${t('Log range')} (${t('Beijing Time')})`}
                   </span>
                   <span className='whitespace-nowrap'>
-                    {formatTimestampToDate(preview.earliest_log_at)} ~{' '}
-                    {formatTimestampToDate(preview.latest_log_at)}
+                    {formatTimestampInBeijingTime(preview.earliest_log_at)} ~{' '}
+                    {formatTimestampInBeijingTime(preview.latest_log_at)}
                   </span>
                 </div>
               ) : null}
               {preview.earliest_retained_at ? (
                 <div className='flex justify-between gap-4'>
                   <span className='text-muted-foreground'>
-                    {t('Earliest retained log')}
+                    {`${t('Earliest retained log')} (${t('Beijing Time')})`}
                   </span>
                   <span>
-                    {formatTimestampToDate(preview.earliest_retained_at)}
+                    {formatTimestampInBeijingTime(preview.earliest_retained_at)}
                   </span>
                 </div>
               ) : null}
@@ -1448,8 +1430,8 @@ function MembersTable({
         <TableRow>
           <TableHead>{t('User')}</TableHead>
           <TableHead>{t('Role')}</TableHead>
-          <TableHead>{t('Joined at')}</TableHead>
-          <TableHead>{t('Billing start')}</TableHead>
+          <TableHead>{`${t('Joined at')} (${t('Beijing Time')})`}</TableHead>
+          <TableHead>{`${t('Billing start')} (${t('Beijing Time')})`}</TableHead>
           <TableHead>{t('Status')}</TableHead>
           <TableHead className='text-right'>{t('Actions')}</TableHead>
         </TableRow>
@@ -1504,10 +1486,10 @@ function MembersTable({
                 )}
               </TableCell>
               <TableCell className='whitespace-nowrap'>
-                {formatTimestampToDate(member.joined_at)}
+                {formatTimestampInBeijingTime(member.joined_at)}
               </TableCell>
               <TableCell className='whitespace-nowrap'>
-                {formatTimestampToDate(
+                {formatTimestampInBeijingTime(
                   member.billing_start_at || member.joined_at
                 )}
               </TableCell>
@@ -1613,7 +1595,9 @@ export function OrganizationUsagePage() {
             filters={filters}
             options={filterOptionsQuery.data?.data}
             showMemberFilter={role === 'admin'}
+            showChannelFilter
             onRefresh={refresh}
+            exportHint={t('Export includes raw log content and request IDs')}
             onExport={() => {
               void downloadOrganizationExport(
                 buildOrganizationExportUrl(filters.params)
@@ -1853,6 +1837,7 @@ export function OrganizationLogsPage() {
             filters={filters}
             options={filterOptionsQuery.data?.data}
             showMemberFilter={role === 'admin'}
+            showChannelFilter={false}
             onRefresh={() => {
               void filterOptionsQuery.refetch()
               void logsQuery.refetch()
@@ -2079,6 +2064,10 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
   const [adjustingMember, setAdjustingMember] =
     useState<OrganizationMember | null>(null)
   const filters = useUsageFilters()
+  const logsParams = useMemo<OrganizationUsageParams>(
+    () => ({ ...filters.params, channel: undefined }),
+    [filters.params]
+  )
 
   const filterOptionsQuery = useQuery({
     queryKey: organizationKeys.adminFilterOptions(id),
@@ -2120,8 +2109,8 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
     enabled: tab === 'billing',
   })
   const logsQuery = useQuery({
-    queryKey: organizationKeys.adminLogs(id, filters.params),
-    queryFn: () => getAdminOrganizationBillingLogs(id, filters.params),
+    queryKey: organizationKeys.adminLogs(id, logsParams),
+    queryFn: () => getAdminOrganizationBillingLogs(id, logsParams),
     enabled: tab === 'logs',
   })
 
@@ -2227,15 +2216,17 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
             variant='line'
             className='h-10 gap-6 p-0 group-data-horizontal/tabs:h-10'
           >
-            {(['members', 'billing', 'logs'] as const).map((item) => (
-              <TabsTrigger
-                key={item}
-                value={item}
-                className='data-active:text-primary after:bg-primary min-w-14 px-0'
-              >
-                {organizationDetailTabLabel(item, t)}
-              </TabsTrigger>
-            ))}
+            {(['members', 'billing', 'invoice', 'logs'] as const).map(
+              (item) => (
+                <TabsTrigger
+                  key={item}
+                  value={item}
+                  className='data-active:text-primary after:bg-primary min-w-14 px-0'
+                >
+                  {organizationDetailTabLabel(item, t)}
+                </TabsTrigger>
+              )
+            )}
           </TabsList>
         </Tabs>
       </header>
@@ -2289,6 +2280,7 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
             filters={filters}
             options={filterOptionsQuery.data?.data}
             showMemberFilter
+            showChannelFilter
             onRefresh={() => {
               void filterOptionsQuery.refetch()
               void summaryQuery.refetch()
@@ -2297,6 +2289,7 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
               void billingModelsQuery.refetch()
               void billingChannelsQuery.refetch()
             }}
+            exportHint={t('Export includes raw log content and request IDs')}
             onExport={() => {
               void downloadOrganizationExport(
                 buildAdminOrganizationExportUrl(id, filters.params)
@@ -2333,19 +2326,23 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
           </div>
         </div>
       ) : null}
+      {tab === 'invoice' ? (
+        <OrganizationInvoicePanel organizationId={id} />
+      ) : null}
       {tab === 'logs' ? (
         <div className='space-y-4'>
           <UsageFilters
             filters={filters}
             options={filterOptionsQuery.data?.data}
             showMemberFilter
+            showChannelFilter={false}
             onRefresh={() => {
               void filterOptionsQuery.refetch()
               void logsQuery.refetch()
             }}
             onExport={() => {
               void downloadOrganizationExport(
-                buildAdminOrganizationLogsExportUrl(id, filters.params)
+                buildAdminOrganizationLogsExportUrl(id, logsParams)
               )
             }}
           />

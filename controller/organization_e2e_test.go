@@ -18,6 +18,7 @@ import (
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -129,6 +130,7 @@ func setupOrganizationE2E(t *testing.T) (organizationE2EFixture, *gin.Engine) {
 		&model.User{},
 		&model.Organization{},
 		&model.OrganizationMember{},
+		&model.OrganizationBillingSettlementRule{},
 		&model.Token{},
 		&model.Channel{},
 		&model.Ability{},
@@ -273,6 +275,10 @@ func registerOrganizationE2ERoutes(router *gin.Engine) {
 		organizationRoute.GET("/current/billing/logs/export", ExportCurrentOrganizationBillingLogs)
 		organizationRoute.GET("/current/billing/logs/display-export", ExportCurrentOrganizationBillingDisplayLogs)
 		organizationRoute.GET("/current/billing/export", ExportCurrentOrganizationBilling)
+		organizationRoute.GET("/current/invoice", GetCurrentOrganizationInvoice)
+		organizationRoute.GET("/current/invoice/export", ExportCurrentOrganizationInvoice)
+		organizationRoute.GET("/current/invoice/settlement-rules", GetCurrentOrganizationSettlementRules)
+		organizationRoute.PUT("/current/invoice/settlement-rules", UpdateCurrentOrganizationSettlementRule)
 	}
 
 	adminOrganizationRoute := router.Group("/api/admin/organizations")
@@ -284,6 +290,10 @@ func registerOrganizationE2ERoutes(router *gin.Engine) {
 		adminOrganizationRoute.POST("/:id/members/:user_id/billing-start/preview", AdminPreviewOrganizationMemberBillingStart)
 		adminOrganizationRoute.POST("/:id/members/:user_id/billing-start", AdminUpdateOrganizationMemberBillingStart)
 		adminOrganizationRoute.GET("/:id/billing/summary", AdminGetOrganizationBillingSummary)
+		adminOrganizationRoute.GET("/:id/invoice", AdminGetOrganizationInvoice)
+		adminOrganizationRoute.GET("/:id/invoice/export", AdminExportOrganizationInvoice)
+		adminOrganizationRoute.GET("/:id/invoice/settlement-rules", AdminGetOrganizationSettlementRules)
+		adminOrganizationRoute.PUT("/:id/invoice/settlement-rules", AdminUpdateOrganizationSettlementRule)
 	}
 
 	tokenRoute := router.Group("/api/token")
@@ -826,12 +836,13 @@ func TestOrganizationE2EBillingStartExportsBackfill(t *testing.T) {
 	displayLogsExport := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/logs/display-export?timezone_offset=-480&"+backfillWindow, nil)
 	require.Equal(t, http.StatusOK, displayLogsExport.Code)
 	displayLogsBody := displayLogsExport.Body.String()
-	assert.Contains(t, displayLogsBody, "时间,用户,模型,渠道,消费金额,币种,消费额度(quota),Tokens")
+	assert.Contains(t, displayLogsBody, "时间,用户,模型,消费金额,币种,提示词 Token,补全 Token")
 	assert.Contains(t, displayLogsBody, "2026-06-30 20:00:00")
 	assert.Contains(t, displayLogsBody, "2026-07-04 20:00:00")
 	assert.Contains(t, displayLogsBody, "USD")
 	assert.GreaterOrEqual(t, strings.Count(displayLogsBody, "\n"), 6)
 	assert.NotContains(t, displayLogsBody, "created_at")
+	assert.NotContains(t, displayLogsBody, "消费额度(quota)")
 
 	fullExport := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/export?"+backfillWindow, nil)
 	require.Equal(t, http.StatusOK, fullExport.Code)
@@ -840,4 +851,167 @@ func TestOrganizationE2EBillingStartExportsBackfill(t *testing.T) {
 	assert.Contains(t, fullBody, "# 消费明细")
 	assert.Contains(t, fullBody, "req-admin-before-membership")
 	assert.Contains(t, fullBody, "req-member-before-membership")
+}
+
+func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
+	fixture, router := setupOrganizationE2E(t)
+	organizationId := fixture.Organization.Id
+	invoiceQuery := "start_date=2026-07-01&end_date=2026-07-31"
+
+	memberResponse := performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1002,
+		http.MethodGet,
+		"/api/organization/current/invoice?"+invoiceQuery,
+		nil,
+	)
+	memberBody := decodeOrganizationE2EResponse(t, memberResponse)
+	assert.False(t, memberBody.Success)
+	assert.Contains(t, memberBody.Message, "no organization management permission")
+
+	currentInvoiceResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1001,
+		http.MethodGet,
+		"/api/organization/current/invoice?"+invoiceQuery,
+		nil,
+	))
+	currentInvoice := decodeOrganizationE2EData[model.OrganizationInvoice](t, currentInvoiceResponse)
+	assert.Equal(t, int64(420), currentInvoice.GrossTotalQuota)
+	assert.Len(t, currentInvoice.Accounts, 2)
+	require.Len(t, currentInvoice.CategoryRows, 1)
+	assert.Equal(t, "gpt", currentInvoice.CategoryRows[0].CategoryKey)
+	assert.Equal(t, "1.0000", currentInvoice.CategoryRows[0].Factor)
+
+	adminInvoiceResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1000,
+		http.MethodGet,
+		fmt.Sprintf("/api/admin/organizations/%d/invoice?%s", organizationId, invoiceQuery),
+		nil,
+	))
+	adminInvoice := decodeOrganizationE2EData[model.OrganizationInvoice](t, adminInvoiceResponse)
+	assert.Equal(t, currentInvoice.GrossTotalAmountUSD, adminInvoice.GrossTotalAmountUSD)
+
+	rulesResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1001,
+		http.MethodGet,
+		"/api/organization/current/invoice/settlement-rules?effective_month=2026-07",
+		nil,
+	))
+	rules := decodeOrganizationE2EData[[]model.OrganizationSettlementRuleOption](t, rulesResponse)
+	require.Len(t, rules, 1)
+	assert.Equal(t, "1.0000", rules[0].Factor)
+	assert.True(t, rules[0].Inherited)
+
+	updateResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1001,
+		http.MethodPut,
+		"/api/organization/current/invoice/settlement-rules",
+		map[string]any{
+			"category_key":     "gpt",
+			"factor":           "0.5000",
+			"effective_month":  "2026-07",
+			"expected_version": 0,
+		},
+	))
+	update := decodeOrganizationE2EData[organizationSettlementRuleUpdateResponse](t, updateResponse)
+	assert.True(t, update.Changed)
+	assert.Equal(t, 1, update.Version)
+
+	settledResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1001,
+		http.MethodGet,
+		"/api/organization/current/invoice?"+invoiceQuery,
+		nil,
+	))
+	settledInvoice := decodeOrganizationE2EData[model.OrganizationInvoice](t, settledResponse)
+	expectedSettled := decimal.NewFromInt(420).
+		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+		Mul(decimal.NewFromFloat(0.5)).
+		StringFixed(10)
+	assert.Equal(t, expectedSettled, settledInvoice.SettledTotalAmountUSD)
+
+	conflictResponse := performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1001,
+		http.MethodPut,
+		"/api/organization/current/invoice/settlement-rules",
+		map[string]any{
+			"category_key":     "gpt",
+			"factor":           "0.8000",
+			"effective_month":  "2026-07",
+			"expected_version": 0,
+		},
+	)
+	assert.Equal(t, http.StatusConflict, conflictResponse.Code)
+	conflictBody := decodeOrganizationE2EResponse(t, conflictResponse)
+	assert.False(t, conflictBody.Success)
+	assert.Contains(t, conflictBody.Message, "version conflict")
+
+	exportResponse := performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1001,
+		http.MethodGet,
+		"/api/organization/current/invoice/export?"+invoiceQuery,
+		nil,
+	)
+	require.Equal(t, http.StatusOK, exportResponse.Code)
+	assert.Contains(t, exportResponse.Header().Get("Content-Disposition"), "organization-7001-invoice-2026-07-01-2026-07-31.csv")
+	assert.Contains(t, exportResponse.Body.String(), "# 模型归类结算汇总")
+	assert.Contains(t, exportResponse.Body.String(), "0.5000")
+	exportedSettledAmount, err := invoiceCSVAmount(settledInvoice.SettledTotalAmountUSD)
+	require.NoError(t, err)
+	assert.Contains(t, exportResponse.Body.String(), exportedSettledAmount)
+}
+
+func TestOrganizationE2EInvoiceInvalidFactorWritesFailureAudit(t *testing.T) {
+	fixture, router := setupOrganizationE2E(t)
+
+	response := performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1001,
+		http.MethodPut,
+		"/api/organization/current/invoice/settlement-rules",
+		map[string]any{
+			"category_key":     "gpt",
+			"factor":           "-0.0001",
+			"effective_month":  "2026-07",
+			"expected_version": 0,
+		},
+	)
+	body := decodeOrganizationE2EResponse(t, response)
+	assert.False(t, body.Success)
+	assert.Contains(t, body.Message, "decimal number")
+
+	var audits []model.Log
+	require.NoError(t, model.LOG_DB.
+		Where("type = ?", model.LogTypeManage).
+		Order("id asc").
+		Find(&audits).Error)
+	require.Len(t, audits, 1)
+	assert.Contains(t, audits[0].Content, "Failed to update org")
+	assert.Contains(t, audits[0].Other, `"action":"organization.settlement_rule_update_failed"`)
+	assert.Contains(t, audits[0].Other, `"factor":"-0.0001"`)
 }

@@ -16,12 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 import { t } from 'i18next'
 import { toast } from 'sonner'
 
 import { api } from '@/lib/api'
 
+import {
+  BEIJING_TIMEZONE_OFFSET_MINUTES,
+  getBeijingMonthUnixRange,
+} from './beijing-time'
 import type {
   ApiResponse,
   MemberPayload,
@@ -242,9 +245,21 @@ export function buildOrganizationExportUrl(params: OrganizationUsageParams) {
 export function buildOrganizationLogsExportUrl(
   params: OrganizationUsageParams
 ) {
-  const query = new URLSearchParams(buildQuery(params))
-  query.set('timezone_offset', String(new Date().getTimezoneOffset()))
+  const query = buildOrganizationLogsExportQuery(params)
+  query.set('timezone_offset', String(BEIJING_TIMEZONE_OFFSET_MINUTES))
   return `/api/organization/current/billing/logs/display-export?${query}`
+}
+
+function buildOrganizationLogsExportQuery(
+  params: OrganizationUsageParams
+): URLSearchParams {
+  const query = new URLSearchParams(buildQuery(params))
+  if (params.start_timestamp || params.end_timestamp) return query
+
+  const range = getBeijingMonthUnixRange()
+  query.set('start_timestamp', String(range.startTimestamp))
+  query.set('end_timestamp', String(range.endTimestamp))
+  return query
 }
 
 // Exports must go through the shared axios instance so the request carries the
@@ -282,9 +297,12 @@ function readExportFilename(
   disposition: string | undefined,
   url: string
 ): string {
-  const fallback = url.includes('/billing/logs/')
-    ? 'organization-billing-logs.csv'
-    : 'organization-billing.csv'
+  let fallback = 'organization-billing.csv'
+  if (url.includes('/billing/logs/')) {
+    fallback = 'organization-billing-logs.csv'
+  } else if (url.includes('/invoice/')) {
+    fallback = 'organization-invoice.csv'
+  }
   if (!disposition) return fallback
   const match = disposition.match(/filename="?([^";]+)"?/i)
   return match?.[1] ?? fallback
@@ -507,7 +525,7 @@ export function buildAdminOrganizationLogsExportUrl(
   id: number,
   params: OrganizationUsageParams
 ) {
-  const query = new URLSearchParams(buildQuery(params))
-  query.set('timezone_offset', String(new Date().getTimezoneOffset()))
+  const query = buildOrganizationLogsExportQuery(params)
+  query.set('timezone_offset', String(BEIJING_TIMEZONE_OFFSET_MINUTES))
   return `/api/admin/organizations/${id}/billing/logs/display-export?${query}`
 }

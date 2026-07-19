@@ -50,8 +50,10 @@ var auditContentTemplates = map[string]string{
 	"subscription.plan_reset":      "Reset active subscriptions for plan ${plan_id}",
 	"subscription.user_plan_reset": "Reset active plan ${plan_id} subscriptions for user ${target_user_id}",
 
-	"organization.billing_start_update":        "Updated org ${organization_id} member ${target_user_id} billing_start from ${from} to ${to}",
-	"organization.billing_start_update_failed": "Failed to update org ${organization_id} member ${target_user_id} billing_start to ${candidate_billing_start}: ${error}",
+	"organization.billing_start_update":          "Updated org ${organization_id} member ${target_user_id} billing_start from ${from} to ${to}",
+	"organization.billing_start_update_failed":   "Failed to update org ${organization_id} member ${target_user_id} billing_start to ${candidate_billing_start}: ${error}",
+	"organization.settlement_rule_update":        "Updated org ${organization_id} settlement factor ${category_key} for ${effective_month} from ${from} to ${to}",
+	"organization.settlement_rule_update_failed": "Failed to update org ${organization_id} settlement factor ${category_key} for ${effective_month}: ${error}",
 }
 
 // auditContentEN 按 action 模板渲染英文兜底文本；未登记的 action 退回 action 本身。

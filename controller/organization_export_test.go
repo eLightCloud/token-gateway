@@ -3,7 +3,6 @@ package controller
 import (
 	"bytes"
 	"encoding/csv"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -189,20 +188,53 @@ func TestWriteOrganizationBillingDisplayLogsCsvMatchesTableView(t *testing.T) {
 		"时间",
 		"用户",
 		"模型",
-		"渠道",
 		"消费金额",
 		"币种",
-		"消费额度(quota)",
-		"Tokens",
+		"提示词 Token",
+		"补全 Token",
 	}, records[0])
 	assert.Equal(t, []string{
 		"2025-07-15 08:00:00",
 		"alice",
 		"gpt-test",
-		"primary",
 		"1.000000",
 		"USD",
-		strconv.Itoa(int(common.QuotaPerUnit)),
-		"150",
+		"120",
+		"30",
 	}, records[1])
+}
+
+func TestDefaultOrganizationBillingLogExportRangeUsesCurrentLocalMonth(t *testing.T) {
+	location := time.FixedZone("UTC+8", 8*60*60)
+	now := time.Date(2026, time.July, 19, 12, 30, 0, 0, location)
+
+	filters := defaultOrganizationBillingLogExportRange(
+		model.OrganizationBillingFilters{},
+		location,
+		now,
+	)
+
+	assert.Equal(t, time.Date(2026, time.July, 1, 0, 0, 0, 0, location).Unix(), filters.StartTimestamp)
+	assert.Equal(t, time.Date(2026, time.August, 1, 0, 0, 0, 0, location).Unix()-1, filters.EndTimestamp)
+}
+
+func TestDefaultOrganizationBillingLogExportRangePreservesSelectedRange(t *testing.T) {
+	selected := model.OrganizationBillingFilters{
+		StartTimestamp: 100,
+		EndTimestamp:   200,
+	}
+
+	filters := defaultOrganizationBillingLogExportRange(
+		selected,
+		time.UTC,
+		time.Date(2026, time.July, 19, 0, 0, 0, 0, time.UTC),
+	)
+
+	assert.Equal(t, selected, filters)
+}
+
+func TestInvoiceCSVAmountRejectsInvalidInternalAmount(t *testing.T) {
+	_, err := invoiceCSVAmount("not-an-amount")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid organization invoice amount")
 }

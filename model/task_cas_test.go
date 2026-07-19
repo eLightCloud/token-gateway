@@ -39,6 +39,7 @@ func TestMain(m *testing.M) {
 		&User{},
 		&Organization{},
 		&OrganizationMember{},
+		&OrganizationBillingSettlementRule{},
 		&Token{},
 		&PasskeyCredential{},
 		&TwoFA{},
@@ -67,6 +68,7 @@ func truncateTables(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
 		DB.Exec("DELETE FROM tasks")
+		DB.Exec("DELETE FROM organization_billing_settlement_rules")
 		DB.Exec("DELETE FROM passkey_credentials")
 		DB.Exec("DELETE FROM two_fa_backup_codes")
 		DB.Exec("DELETE FROM two_fas")

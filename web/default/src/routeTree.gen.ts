@@ -54,6 +54,7 @@ import { Route as AuthenticatedUsageLogsSectionRouteImport } from './routes/_aut
 import { Route as AuthenticatedOrganizationUsageRouteImport } from './routes/_authenticated/organization/usage'
 import { Route as AuthenticatedOrganizationMembersRouteImport } from './routes/_authenticated/organization/members'
 import { Route as AuthenticatedOrganizationLogsRouteImport } from './routes/_authenticated/organization/logs'
+import { Route as AuthenticatedOrganizationInvoiceRouteImport } from './routes/_authenticated/organization/invoice'
 import { Route as AuthenticatedModelsSectionRouteImport } from './routes/_authenticated/models/$section'
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
 import { Route as AuthenticatedDashboardSectionRouteImport } from './routes/_authenticated/dashboard/$section'
@@ -316,6 +317,12 @@ const AuthenticatedOrganizationLogsRoute =
     path: '/organization/logs',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedOrganizationInvoiceRoute =
+  AuthenticatedOrganizationInvoiceRouteImport.update({
+    id: '/organization/invoice',
+    path: '/organization/invoice',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedModelsSectionRoute =
   AuthenticatedModelsSectionRouteImport.update({
     id: '/models/$section',
@@ -471,6 +478,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
+  '/organization/invoice': typeof AuthenticatedOrganizationInvoiceRoute
   '/organization/logs': typeof AuthenticatedOrganizationLogsRoute
   '/organization/members': typeof AuthenticatedOrganizationMembersRoute
   '/organization/usage': typeof AuthenticatedOrganizationUsageRoute
@@ -536,6 +544,7 @@ export interface FileRoutesByTo {
   '/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/models/$section': typeof AuthenticatedModelsSectionRoute
+  '/organization/invoice': typeof AuthenticatedOrganizationInvoiceRoute
   '/organization/logs': typeof AuthenticatedOrganizationLogsRoute
   '/organization/members': typeof AuthenticatedOrganizationMembersRoute
   '/organization/usage': typeof AuthenticatedOrganizationUsageRoute
@@ -605,6 +614,7 @@ export interface FileRoutesById {
   '/_authenticated/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/_authenticated/models/$section': typeof AuthenticatedModelsSectionRoute
+  '/_authenticated/organization/invoice': typeof AuthenticatedOrganizationInvoiceRoute
   '/_authenticated/organization/logs': typeof AuthenticatedOrganizationLogsRoute
   '/_authenticated/organization/members': typeof AuthenticatedOrganizationMembersRoute
   '/_authenticated/organization/usage': typeof AuthenticatedOrganizationUsageRoute
@@ -673,6 +683,7 @@ export interface FileRouteTypes {
     | '/dashboard/$section'
     | '/errors/$error'
     | '/models/$section'
+    | '/organization/invoice'
     | '/organization/logs'
     | '/organization/members'
     | '/organization/usage'
@@ -738,6 +749,7 @@ export interface FileRouteTypes {
     | '/dashboard/$section'
     | '/errors/$error'
     | '/models/$section'
+    | '/organization/invoice'
     | '/organization/logs'
     | '/organization/members'
     | '/organization/usage'
@@ -806,6 +818,7 @@ export interface FileRouteTypes {
     | '/_authenticated/dashboard/$section'
     | '/_authenticated/errors/$error'
     | '/_authenticated/models/$section'
+    | '/_authenticated/organization/invoice'
     | '/_authenticated/organization/logs'
     | '/_authenticated/organization/members'
     | '/_authenticated/organization/usage'
@@ -1181,6 +1194,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedOrganizationLogsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/organization/invoice': {
+      id: '/_authenticated/organization/invoice'
+      path: '/organization/invoice'
+      fullPath: '/organization/invoice'
+      preLoaderRoute: typeof AuthenticatedOrganizationInvoiceRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/models/$section': {
       id: '/_authenticated/models/$section'
       path: '/models/$section'
@@ -1421,6 +1441,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDashboardSectionRoute: typeof AuthenticatedDashboardSectionRoute
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
   AuthenticatedModelsSectionRoute: typeof AuthenticatedModelsSectionRoute
+  AuthenticatedOrganizationInvoiceRoute: typeof AuthenticatedOrganizationInvoiceRoute
   AuthenticatedOrganizationLogsRoute: typeof AuthenticatedOrganizationLogsRoute
   AuthenticatedOrganizationMembersRoute: typeof AuthenticatedOrganizationMembersRoute
   AuthenticatedOrganizationUsageRoute: typeof AuthenticatedOrganizationUsageRoute
@@ -1450,6 +1471,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDashboardSectionRoute: AuthenticatedDashboardSectionRoute,
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,
   AuthenticatedModelsSectionRoute: AuthenticatedModelsSectionRoute,
+  AuthenticatedOrganizationInvoiceRoute: AuthenticatedOrganizationInvoiceRoute,
   AuthenticatedOrganizationLogsRoute: AuthenticatedOrganizationLogsRoute,
   AuthenticatedOrganizationMembersRoute: AuthenticatedOrganizationMembersRoute,
   AuthenticatedOrganizationUsageRoute: AuthenticatedOrganizationUsageRoute,

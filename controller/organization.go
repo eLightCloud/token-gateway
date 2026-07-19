@@ -652,9 +652,9 @@ func organizationModelPricingLabel(pricing *model.PricingSnapshot) string {
 	return fmt.Sprintf("模型倍率 %s", strconv.FormatFloat(pricing.ModelRatio, 'f', -1, 64))
 }
 
-// fetchOrganizationBillingExport 汇总组织账单的全部六张表，供 CSV 多段导出复用。
+// fetchOrganizationBillingExport 汇总组织账单中有界的五张聚合表。
+// 消费明细由导出端点另行流式读取，避免日志量增长时占用无界内存。
 func fetchOrganizationBillingExport(organizationId int, filters model.OrganizationBillingFilters) (organizationBillingExportData, error) {
-	const maxExportRows = 10000
 	summary, err := model.GetOrganizationBillingSummary(organizationId, filters)
 	if err != nil {
 		return organizationBillingExportData{}, err
@@ -675,17 +675,12 @@ func fetchOrganizationBillingExport(organizationId int, filters model.Organizati
 	if err != nil {
 		return organizationBillingExportData{}, err
 	}
-	logs, _, err := model.GetOrganizationBillingLogs(organizationId, filters, 0, maxExportRows)
-	if err != nil {
-		return organizationBillingExportData{}, err
-	}
 	return organizationBillingExportData{
 		Summary:  summary,
 		Members:  members,
 		Models:   models,
 		Channels: channels,
 		Trend:    trend,
-		Logs:     logs,
 	}, nil
 }
 
@@ -783,7 +778,15 @@ func writeOrganizationBillingCsv(writer *csv.Writer, data organizationBillingExp
 
 	_ = writer.Write([]string{"# 消费明细"})
 	_ = writer.Write([]string{"时间", "类型", "用户", "令牌", "模型", "渠道", "消费金额", "币种", "消费额度(quota)", "输入Token", "输出Token", "请求ID", "上游请求ID", "内容"})
-	for _, item := range data.Logs {
+	writeOrganizationBillingDetailRows(writer, data.Logs, amountFormatter)
+}
+
+func writeOrganizationBillingDetailRows(
+	writer *csv.Writer,
+	logs []*model.Log,
+	amountFormatter organizationBillingExportAmountFormatter,
+) {
+	for _, item := range logs {
 		_ = writer.Write([]string{
 			time.Unix(item.CreatedAt, 0).Format("2006-01-02 15:04:05"),
 			billingLogTypeLabel(item.Type),
@@ -826,6 +829,11 @@ func billingLogTypeLabel(logType int) string {
 }
 
 func writeOrganizationBillingLogsCsv(writer *csv.Writer, logs []*model.Log) {
+	writeOrganizationBillingLogsCsvHeader(writer)
+	writeOrganizationBillingLogsCsvRows(writer, logs)
+}
+
+func writeOrganizationBillingLogsCsvHeader(writer *csv.Writer) {
 	_ = writer.Write([]string{
 		"id",
 		"created_at",
@@ -843,6 +851,9 @@ func writeOrganizationBillingLogsCsv(writer *csv.Writer, logs []*model.Log) {
 		"upstream_request_id",
 		"content",
 	})
+}
+
+func writeOrganizationBillingLogsCsvRows(writer *csv.Writer, logs []*model.Log) {
 	for _, item := range logs {
 		_ = writer.Write([]string{
 			strconv.Itoa(item.Id),
@@ -865,19 +876,26 @@ func writeOrganizationBillingLogsCsv(writer *csv.Writer, logs []*model.Log) {
 }
 
 // writeOrganizationBillingDisplayLogsCsv 与组织日志页面保持同一列口径：
-// 时间可读、金额按站点币种换算，同时保留原始 quota 便于审计。
+// 时间可读、金额按站点币种换算，并分别展示输入与输出 Token。
 func writeOrganizationBillingDisplayLogsCsv(writer *csv.Writer, logs []*model.Log, location *time.Location) {
-	amountFormatter := newOrganizationBillingExportAmountFormatter()
+	writeOrganizationBillingDisplayLogsCsvHeader(writer)
+	writeOrganizationBillingDisplayLogsCsvRows(writer, logs, location)
+}
+
+func writeOrganizationBillingDisplayLogsCsvHeader(writer *csv.Writer) {
 	_ = writer.Write([]string{
 		"时间",
 		"用户",
 		"模型",
-		"渠道",
 		"消费金额",
 		"币种",
-		"消费额度(quota)",
-		"Tokens",
+		"提示词 Token",
+		"补全 Token",
 	})
+}
+
+func writeOrganizationBillingDisplayLogsCsvRows(writer *csv.Writer, logs []*model.Log, location *time.Location) {
+	amountFormatter := newOrganizationBillingExportAmountFormatter()
 	for _, item := range logs {
 		createdAt := "-"
 		if item.CreatedAt > 0 {
@@ -894,74 +912,128 @@ func writeOrganizationBillingDisplayLogsCsv(writer *csv.Writer, logs []*model.Lo
 		if modelName == "" {
 			modelName = "-"
 		}
-		channelName := item.ChannelName
-		if channelName == "" {
-			channelName = "-"
-			if item.ChannelId > 0 {
-				channelName = strconv.Itoa(item.ChannelId)
-			}
-		}
 		_ = writer.Write([]string{
 			createdAt,
 			username,
 			modelName,
-			channelName,
 			amountFormatter.amount(item.Quota),
 			amountFormatter.currency,
-			strconv.Itoa(item.Quota),
-			strconv.Itoa(item.PromptTokens + item.CompletionTokens),
+			strconv.Itoa(item.PromptTokens),
+			strconv.Itoa(item.CompletionTokens),
 		})
+	}
+}
+
+func organizationBillingLogExportLocation(c *gin.Context) *time.Location {
+	timezoneOffset, err := strconv.Atoi(c.Query("timezone_offset"))
+	if err != nil || timezoneOffset < -14*60 || timezoneOffset > 14*60 {
+		return time.FixedZone(model.OrganizationInvoiceTimezone, 8*60*60)
+	}
+	return time.FixedZone("organization-billing-export", -timezoneOffset*60)
+}
+
+func defaultOrganizationBillingLogExportRange(filters model.OrganizationBillingFilters, location *time.Location, now time.Time) model.OrganizationBillingFilters {
+	if filters.StartTimestamp > 0 || filters.EndTimestamp > 0 {
+		return filters
+	}
+	localNow := now.In(location)
+	monthStart := time.Date(localNow.Year(), localNow.Month(), 1, 0, 0, 0, 0, location)
+	nextMonthStart := monthStart.AddDate(0, 1, 0)
+	filters.StartTimestamp = monthStart.Unix()
+	filters.EndTimestamp = nextMonthStart.Unix() - 1
+	return filters
+}
+
+func streamOrganizationBillingLogsCsv(
+	c *gin.Context,
+	organizationId int,
+	filters model.OrganizationBillingFilters,
+	filename string,
+	writeHeader func(*csv.Writer),
+	writeRows func(*csv.Writer, []*model.Log),
+) {
+	const streamBatchSize = 1000
+	started := false
+	writer := csv.NewWriter(c.Writer)
+	startResponse := func() error {
+		if started {
+			return nil
+		}
+		c.Header("Content-Type", "text/csv; charset=utf-8")
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+		started = true
+		if _, err := c.Writer.Write([]byte("\xEF\xBB\xBF")); err != nil {
+			return err
+		}
+		writeHeader(writer)
+		return nil
+	}
+	flush := func() error {
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			return err
+		}
+		c.Writer.Flush()
+		return nil
+	}
+	err := model.StreamOrganizationBillingLogs(
+		organizationId,
+		filters,
+		streamBatchSize,
+		func(logs []*model.Log) error {
+			if err := startResponse(); err != nil {
+				return err
+			}
+			writeRows(writer, logs)
+			return flush()
+		},
+	)
+	if err != nil {
+		if !started {
+			common.ApiError(c, err)
+			return
+		}
+		common.SysError(fmt.Sprintf("organization billing log stream failed after response started: %s", err.Error()))
+		return
+	}
+	if err := startResponse(); err != nil {
+		common.SysError(fmt.Sprintf("organization billing log stream failed to start response: %s", err.Error()))
+		return
+	}
+	if err := flush(); err != nil {
+		common.SysError(fmt.Sprintf("organization billing log stream failed to flush response: %s", err.Error()))
 	}
 }
 
 // exportOrganizationBillingLogs 保留既有 logs/export 的单表 CSV 合同，避免破坏上游消费者。
 func exportOrganizationBillingLogs(c *gin.Context, organizationId int, filters model.OrganizationBillingFilters) {
-	const maxExportRows = 10000
-	logs, _, err := model.GetOrganizationBillingLogs(organizationId, filters, 0, maxExportRows)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	var buf bytes.Buffer
-	buf.WriteString("\xEF\xBB\xBF")
-	writer := csv.NewWriter(&buf)
-	writeOrganizationBillingLogsCsv(writer, logs)
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"organization-%d-billing-logs.csv\"", organizationId))
-	c.Data(200, "text/csv; charset=utf-8", buf.Bytes())
+	location := organizationBillingLogExportLocation(c)
+	filters = defaultOrganizationBillingLogExportRange(filters, location, time.Now())
+	streamOrganizationBillingLogsCsv(
+		c,
+		organizationId,
+		filters,
+		fmt.Sprintf("organization-%d-billing-logs.csv", organizationId),
+		writeOrganizationBillingLogsCsvHeader,
+		writeOrganizationBillingLogsCsvRows,
+	)
 }
 
 // exportOrganizationBillingDisplayLogs 为组织日志页面提供展示型单表 CSV；
 // 旧 logs/export 端点继续保持上游兼容，不承载新的列或格式。
 func exportOrganizationBillingDisplayLogs(c *gin.Context, organizationId int, filters model.OrganizationBillingFilters) {
-	const maxExportRows = 10000
-	logs, _, err := model.GetOrganizationBillingLogs(organizationId, filters, 0, maxExportRows)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	location := time.Local
-	if timezoneOffset, err := strconv.Atoi(c.Query("timezone_offset")); err == nil &&
-		timezoneOffset >= -14*60 && timezoneOffset <= 14*60 {
-		location = time.FixedZone("organization-billing-export", -timezoneOffset*60)
-	}
-	var buf bytes.Buffer
-	buf.WriteString("\xEF\xBB\xBF")
-	writer := csv.NewWriter(&buf)
-	writeOrganizationBillingDisplayLogsCsv(writer, logs, location)
-	writer.Flush()
-	if err := writer.Error(); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"organization-%d-billing-logs.csv\"", organizationId))
-	c.Data(200, "text/csv; charset=utf-8", buf.Bytes())
+	location := organizationBillingLogExportLocation(c)
+	filters = defaultOrganizationBillingLogExportRange(filters, location, time.Now())
+	streamOrganizationBillingLogsCsv(
+		c,
+		organizationId,
+		filters,
+		fmt.Sprintf("organization-%d-billing-logs.csv", organizationId),
+		writeOrganizationBillingDisplayLogsCsvHeader,
+		func(writer *csv.Writer, logs []*model.Log) {
+			writeOrganizationBillingDisplayLogsCsvRows(writer, logs, location)
+		},
+	)
 }
 
 // exportOrganizationBilling 导出包含全部账单表的多段 CSV，复用账单筛选与角色范围。
@@ -971,18 +1043,67 @@ func exportOrganizationBilling(c *gin.Context, organizationId int, filters model
 		common.ApiError(c, err)
 		return
 	}
-	var buf bytes.Buffer
-	buf.WriteString("\xEF\xBB\xBF")
-	writer := csv.NewWriter(&buf)
-	writeOrganizationBillingCsv(writer, data)
-	writer.Flush()
-	if err := writer.Error(); err != nil {
+	var preamble bytes.Buffer
+	preamble.WriteString("\xEF\xBB\xBF")
+	preambleWriter := csv.NewWriter(&preamble)
+	writeOrganizationBillingCsv(preambleWriter, data)
+	preambleWriter.Flush()
+	if err := preambleWriter.Error(); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	c.Header("Content-Type", "text/csv; charset=utf-8")
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"organization-%d-billing.csv\"", organizationId))
-	c.Data(200, "text/csv; charset=utf-8", buf.Bytes())
+
+	const streamBatchSize = 1000
+	started := false
+	writer := csv.NewWriter(c.Writer)
+	amountFormatter := newOrganizationBillingExportAmountFormatter()
+	startResponse := func() error {
+		if started {
+			return nil
+		}
+		c.Header("Content-Type", "text/csv; charset=utf-8")
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"organization-%d-billing.csv\"", organizationId))
+		started = true
+		if _, err := c.Writer.Write(preamble.Bytes()); err != nil {
+			return err
+		}
+		return nil
+	}
+	flush := func() error {
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			return err
+		}
+		c.Writer.Flush()
+		return nil
+	}
+	err = model.StreamOrganizationBillingLogs(
+		organizationId,
+		filters,
+		streamBatchSize,
+		func(logs []*model.Log) error {
+			if err := startResponse(); err != nil {
+				return err
+			}
+			writeOrganizationBillingDetailRows(writer, logs, amountFormatter)
+			return flush()
+		},
+	)
+	if err != nil {
+		if !started {
+			common.ApiError(c, err)
+			return
+		}
+		common.SysError(fmt.Sprintf("organization billing export stream failed after response started: %s", err.Error()))
+		return
+	}
+	if err := startResponse(); err != nil {
+		common.SysError(fmt.Sprintf("organization billing export stream failed to start response: %s", err.Error()))
+		return
+	}
+	if err := flush(); err != nil {
+		common.SysError(fmt.Sprintf("organization billing export stream failed to flush response: %s", err.Error()))
+	}
 }
 
 // 组织账单归属起点预览/应用：把"成员加入时间"与"报表归属起点"拆分后，管理员可显式为历史
