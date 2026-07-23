@@ -59,7 +59,12 @@ func TestWriteOrganizationBillingCsvIncludesConsumptionAmountContract(t *testing
 
 	data := organizationBillingExportData{
 		Summary: &model.OrganizationBillingSummary{TotalQuota: int(common.QuotaPerUnit)},
-		Members: []model.OrganizationBillingDimension{{Username: "alice", TotalQuota: int(common.QuotaPerUnit) / 2}},
+		Members: []model.OrganizationBillingDimension{{
+			UserId:      11,
+			Username:    "alice",
+			DisplayName: "Alice Zhang",
+			TotalQuota:  int(common.QuotaPerUnit) / 2,
+		}},
 		Models: []model.OrganizationBillingDimension{{
 			ModelName:  "gpt-test",
 			TotalQuota: int(common.QuotaPerUnit),
@@ -85,6 +90,8 @@ func TestWriteOrganizationBillingCsvIncludesConsumptionAmountContract(t *testing
 	assert.Contains(t, exported, "渠道,消费金额,币种,消费额度(quota)")
 	assert.Contains(t, exported, "日期,消费金额,币种,消费额度(quota)")
 	assert.Contains(t, exported, "模型,渠道,消费金额,币种,消费额度(quota)")
+	assert.Contains(t, exported, "alice,A*********g")
+	assert.NotContains(t, exported, "Alice Zhang")
 	assert.False(t, strings.Contains(exported, "金额,$"), "amount must remain numeric for spreadsheet aggregation")
 }
 

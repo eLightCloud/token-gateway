@@ -98,6 +98,27 @@ type OrganizationBillingTrendPoint struct {
 	CompletionTokens int    `json:"completion_tokens"`
 }
 
+func MaskOrganizationBillingName(value string) string {
+	name := []rune(strings.TrimSpace(value))
+	switch len(name) {
+	case 0:
+		return ""
+	case 1:
+		return "*"
+	case 2:
+		return string(name[0]) + "*"
+	default:
+		return string(name[0]) + strings.Repeat("*", len(name)-2) + string(name[len(name)-1])
+	}
+}
+
+func OrganizationBillingUsername(username string, userId int) string {
+	if strings.TrimSpace(username) == "" && userId > 0 {
+		return fmt.Sprintf("用户 #%d", userId)
+	}
+	return username
+}
+
 func normalizeOrganizationRole(role string) (string, error) {
 	role = strings.ToLower(strings.TrimSpace(role))
 	if role == "" {
@@ -604,10 +625,11 @@ func fillBillingDimensionUsers(items []OrganizationBillingDimension) {
 	for i := range items {
 		user, ok := userMap[items[i].UserId]
 		if !ok {
+			items[i].Username = OrganizationBillingUsername("", items[i].UserId)
 			continue
 		}
-		items[i].Username = user.Username
-		items[i].DisplayName = user.DisplayName
+		items[i].Username = OrganizationBillingUsername(user.Username, items[i].UserId)
+		items[i].DisplayName = MaskOrganizationBillingName(user.DisplayName)
 	}
 }
 
@@ -862,6 +884,7 @@ func GetOrganizationBillingLogs(organizationId int, filters OrganizationBillingF
 		assignDisplayLogIds(page, startIdx)
 	}
 	hydrateLogChannelNames(page)
+	fillOrganizationBillingLogUsernames(page)
 	return page, total, nil
 }
 
@@ -926,6 +949,7 @@ func StreamOrganizationBillingLogs(
 			assignDisplayLogIds(batch, streamed)
 		}
 		hydrateLogChannelNames(batch)
+		fillOrganizationBillingLogUsernames(batch)
 		if err := consume(batch); err != nil {
 			return err
 		}
@@ -939,6 +963,7 @@ func StreamOrganizationBillingLogs(
 		assignDisplayLogIds(batch, streamed)
 	}
 	hydrateLogChannelNames(batch)
+	fillOrganizationBillingLogUsernames(batch)
 	return consume(batch)
 }
 
@@ -1040,6 +1065,12 @@ func hydrateLogChannelNames(logs []*Log) {
 	}
 	for i := range logs {
 		logs[i].ChannelName = channelMap[logs[i].ChannelId]
+	}
+}
+
+func fillOrganizationBillingLogUsernames(logs []*Log) {
+	for _, log := range logs {
+		log.Username = OrganizationBillingUsername(log.Username, log.UserId)
 	}
 }
 

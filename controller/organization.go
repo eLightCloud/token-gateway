@@ -707,8 +707,8 @@ func writeOrganizationBillingCsv(writer *csv.Writer, data organizationBillingExp
 	_ = writer.Write([]string{"用户名", "显示名", "消费金额", "币种", "消费额度(quota)", "请求数", "输入Token", "输出Token"})
 	for _, item := range data.Members {
 		_ = writer.Write([]string{
-			item.Username,
-			item.DisplayName,
+			model.OrganizationBillingUsername(item.Username, item.UserId),
+			model.MaskOrganizationBillingName(item.DisplayName),
 			amountFormatter.amount(item.TotalQuota),
 			amountFormatter.currency,
 			strconv.Itoa(item.TotalQuota),
@@ -790,7 +790,7 @@ func writeOrganizationBillingDetailRows(
 		_ = writer.Write([]string{
 			time.Unix(item.CreatedAt, 0).Format("2006-01-02 15:04:05"),
 			billingLogTypeLabel(item.Type),
-			item.Username,
+			model.OrganizationBillingUsername(item.Username, item.UserId),
 			item.TokenName,
 			item.ModelName,
 			item.ChannelName,
@@ -860,7 +860,7 @@ func writeOrganizationBillingLogsCsvRows(writer *csv.Writer, logs []*model.Log) 
 			strconv.FormatInt(item.CreatedAt, 10),
 			strconv.Itoa(item.Type),
 			strconv.Itoa(item.UserId),
-			item.Username,
+			model.OrganizationBillingUsername(item.Username, item.UserId),
 			item.TokenName,
 			item.ModelName,
 			strconv.Itoa(item.Quota),
@@ -901,12 +901,9 @@ func writeOrganizationBillingDisplayLogsCsvRows(writer *csv.Writer, logs []*mode
 		if item.CreatedAt > 0 {
 			createdAt = time.Unix(item.CreatedAt, 0).In(location).Format("2006-01-02 15:04:05")
 		}
-		username := item.Username
+		username := model.OrganizationBillingUsername(item.Username, item.UserId)
 		if username == "" {
 			username = "-"
-			if item.UserId > 0 {
-				username = strconv.Itoa(item.UserId)
-			}
 		}
 		modelName := item.ModelName
 		if modelName == "" {

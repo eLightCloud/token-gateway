@@ -120,7 +120,7 @@ export interface OrganizationDimensionRow {
 }
 
 export interface OrganizationBillingFilterOptions {
-  members: OrganizationMember[]
+  members: OrganizationDimensionRow[]
   models: OrganizationDimensionRow[]
   channels: OrganizationDimensionRow[]
 }

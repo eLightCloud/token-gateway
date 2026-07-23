@@ -562,6 +562,9 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 	assert.Equal(t, "req-member-in-membership-2", logs.Items[0].RequestId)
 	assert.Equal(t, "req-member-in-membership-1", logs.Items[1].RequestId)
 	assert.Equal(t, "req-admin-in-membership", logs.Items[2].RequestId)
+	assert.Equal(t, "org-member", logs.Items[0].Username)
+	assert.Equal(t, "org-member", logs.Items[1].Username)
+	assert.Equal(t, "org-admin", logs.Items[2].Username)
 
 	modelsResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/models?"+billingWindow, nil,
@@ -851,6 +854,10 @@ func TestOrganizationE2EBillingStartExportsBackfill(t *testing.T) {
 	assert.Contains(t, fullBody, "# 消费明细")
 	assert.Contains(t, fullBody, "req-admin-before-membership")
 	assert.Contains(t, fullBody, "req-member-before-membership")
+	assert.Contains(t, fullBody, "org-admin")
+	assert.Contains(t, fullBody, "org-member")
+	assert.NotContains(t, fullBody, "org-admin display")
+	assert.NotContains(t, fullBody, "org-member display")
 }
 
 func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
@@ -883,6 +890,10 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	currentInvoice := decodeOrganizationE2EData[model.OrganizationInvoice](t, currentInvoiceResponse)
 	assert.Equal(t, int64(420), currentInvoice.GrossTotalQuota)
 	assert.Len(t, currentInvoice.Accounts, 2)
+	for _, account := range currentInvoice.Accounts {
+		assert.Contains(t, account.Username, "org-")
+		assert.NotContains(t, account.DisplayName, "org-")
+	}
 	require.Len(t, currentInvoice.CategoryRows, 1)
 	assert.Equal(t, "gpt", currentInvoice.CategoryRows[0].CategoryKey)
 	assert.Equal(t, "1.0000", currentInvoice.CategoryRows[0].Factor)
@@ -979,6 +990,8 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	assert.Contains(t, exportResponse.Header().Get("Content-Disposition"), "organization-7001-invoice-2026-07-01-2026-07-31.csv")
 	assert.Contains(t, exportResponse.Body.String(), "# 模型归类结算汇总")
 	assert.Contains(t, exportResponse.Body.String(), "0.5000")
+	assert.Contains(t, exportResponse.Body.String(), "org-admin")
+	assert.Contains(t, exportResponse.Body.String(), "org-member")
 	exportedSettledAmount, err := invoiceCSVAmount(settledInvoice.SettledTotalAmountUSD)
 	require.NoError(t, err)
 	assert.Contains(t, exportResponse.Body.String(), exportedSettledAmount)

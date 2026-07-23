@@ -321,7 +321,10 @@ func writeOrganizationInvoiceCSV(writer *csv.Writer, organizationId int, invoice
 
 	categoryHeader := []string{"模型类别"}
 	for _, account := range invoice.Accounts {
-		categoryHeader = append(categoryHeader, account.Username)
+		categoryHeader = append(
+			categoryHeader,
+			model.OrganizationBillingUsername(account.Username, account.UserId),
+		)
 	}
 	categoryHeader = append(categoryHeader, "折前合计", "结算系数", "规则明细", "结算后金额", "折前额度(quota)")
 	_ = writer.Write([]string{"# 模型归类结算汇总"})
@@ -358,7 +361,10 @@ func writeOrganizationInvoiceCSV(writer *csv.Writer, organizationId int, invoice
 
 	modelHeader := []string{"模型"}
 	for _, account := range invoice.Accounts {
-		modelHeader = append(modelHeader, account.Username)
+		modelHeader = append(
+			modelHeader,
+			model.OrganizationBillingUsername(account.Username, account.UserId),
+		)
 	}
 	modelHeader = append(modelHeader, "合计", "占比", "折前额度(quota)")
 	_ = writer.Write([]string{"# AI 模型消费汇总"})

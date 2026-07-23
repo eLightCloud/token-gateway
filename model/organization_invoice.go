@@ -601,14 +601,10 @@ func buildOrganizationInvoiceAccounts(accountQuotas map[int]int64) ([]Organizati
 	accounts := make([]OrganizationInvoiceAccount, 0, len(accountQuotas))
 	for userId, quota := range accountQuotas {
 		user := userMap[userId]
-		username := user.Username
-		if username == "" {
-			username = fmt.Sprintf("User %d", userId)
-		}
 		accounts = append(accounts, OrganizationInvoiceAccount{
 			UserId:         userId,
-			Username:       username,
-			DisplayName:    user.DisplayName,
+			Username:       OrganizationBillingUsername(user.Username, userId),
+			DisplayName:    MaskOrganizationBillingName(user.DisplayName),
 			GrossQuota:     quota,
 			GrossAmountUSD: organizationInvoiceAmountString(quota),
 		})

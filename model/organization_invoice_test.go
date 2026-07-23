@@ -199,6 +199,8 @@ func TestGetOrganizationInvoiceBuildsAccountCrossTables(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, invoice.Accounts, 2)
 	assert.Equal(t, 11, invoice.Accounts[0].UserId)
+	assert.Equal(t, "member", invoice.Accounts[0].Username)
+	assert.Equal(t, "m************y", invoice.Accounts[0].DisplayName)
 	assert.Equal(t, int64(7000), invoice.Accounts[0].GrossQuota)
 	assert.Equal(t, int64(10000), invoice.GrossTotalQuota)
 	require.Len(t, invoice.ModelRows, 4)

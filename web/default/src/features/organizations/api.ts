@@ -197,6 +197,16 @@ export async function getOrganizationBillingTrend(
   return res.data
 }
 
+export async function getOrganizationBillingMembers(
+  params: OrganizationUsageParams
+): Promise<ApiResponse<OrganizationDimensionRow[]>> {
+  const query = buildQuery(params)
+  const res = await api.get(
+    `/api/organization/current/billing/members?${query}`
+  )
+  return res.data
+}
+
 export async function getOrganizationBillingModels(
   params: OrganizationUsageParams
 ): Promise<ApiResponse<OrganizationDimensionRow[]>> {
@@ -219,7 +229,7 @@ export async function getOrganizationBillingFilterOptions(): Promise<
   ApiResponse<OrganizationBillingFilterOptions>
 > {
   const [members, models, channels] = await Promise.all([
-    getCurrentOrganizationMembers(true),
+    getOrganizationBillingMembers({}),
     getOrganizationBillingModels({}),
     getOrganizationBillingChannels({}),
   ])
@@ -495,7 +505,7 @@ export async function getAdminOrganizationBillingFilterOptions(
   id: number
 ): Promise<ApiResponse<OrganizationBillingFilterOptions>> {
   const [members, models, channels] = await Promise.all([
-    getAdminOrganizationMembers(id, true),
+    getAdminOrganizationBillingMembers(id, {}),
     getAdminOrganizationBillingModels(id, {}),
     getAdminOrganizationBillingChannels(id, {}),
   ])

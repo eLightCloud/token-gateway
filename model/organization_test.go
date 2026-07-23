@@ -61,6 +61,30 @@ func createOrganizationBillingTestFixture(t *testing.T) int {
 	return 100
 }
 
+func TestOrganizationBillingNames(t *testing.T) {
+	testCases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "empty", input: "", want: ""},
+		{name: "single character", input: "张", want: "*"},
+		{name: "two characters", input: "张三", want: "张*"},
+		{name: "three characters", input: "张小三", want: "张*三"},
+		{name: "latin characters", input: "Alice", want: "A***e"},
+		{name: "trim spaces", input: "  Alice  ", want: "A***e"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			assert.Equal(t, testCase.want, MaskOrganizationBillingName(testCase.input))
+		})
+	}
+
+	assert.Equal(t, "alice", OrganizationBillingUsername("alice", 123))
+	assert.Equal(t, "用户 #123", OrganizationBillingUsername("", 123))
+}
+
 func TestAddOrganizationMemberRejectsSecondActiveOrganization(t *testing.T) {
 	setupOrganizationTestState(t)
 	insertOrganizationTestUser(t, 1, "owner-one")
@@ -309,7 +333,7 @@ func TestOrganizationBillingMembersAggregatesAndHydratesUsers(t *testing.T) {
 
 	assert.Equal(t, 10, items[0].UserId)
 	assert.Equal(t, "owner", items[0].Username)
-	assert.Equal(t, "owner display", items[0].DisplayName)
+	assert.Equal(t, "o***********y", items[0].DisplayName)
 	assert.Equal(t, 350, items[0].TotalQuota)
 	assert.Equal(t, 2, items[0].RequestCount)
 	assert.Equal(t, 4, items[0].PromptTokens)
@@ -413,12 +437,12 @@ func TestOrganizationBillingLogsPaginatesAcrossMembers(t *testing.T) {
 	setupOrganizationTestState(t)
 	organizationId := createOrganizationBillingTestFixture(t)
 	require.NoError(t, LOG_DB.Create(&[]Log{
-		{UserId: 10, CreatedAt: 100, Type: LogTypeConsume, Quota: 100},
-		{UserId: 11, CreatedAt: 95, Type: LogTypeConsume, Quota: 95},
-		{UserId: 10, CreatedAt: 90, Type: LogTypeConsume, Quota: 90},
-		{UserId: 11, CreatedAt: 85, Type: LogTypeConsume, Quota: 85},
-		{UserId: 10, CreatedAt: 80, Type: LogTypeConsume, Quota: 80},
-		{UserId: 11, CreatedAt: 75, Type: LogTypeConsume, Quota: 75},
+		{UserId: 10, Username: "owner", CreatedAt: 100, Type: LogTypeConsume, Quota: 100},
+		{UserId: 11, Username: "member", CreatedAt: 95, Type: LogTypeConsume, Quota: 95},
+		{UserId: 10, Username: "owner", CreatedAt: 90, Type: LogTypeConsume, Quota: 90},
+		{UserId: 11, Username: "member", CreatedAt: 85, Type: LogTypeConsume, Quota: 85},
+		{UserId: 10, Username: "owner", CreatedAt: 80, Type: LogTypeConsume, Quota: 80},
+		{UserId: 11, Username: "member", CreatedAt: 75, Type: LogTypeConsume, Quota: 75},
 	}).Error)
 
 	logs, total, err := GetOrganizationBillingLogs(organizationId, OrganizationBillingFilters{Types: []int{LogTypeConsume}}, 2, 3)
@@ -428,6 +452,13 @@ func TestOrganizationBillingLogsPaginatesAcrossMembers(t *testing.T) {
 	assert.Equal(t, 90, logs[0].Quota)
 	assert.Equal(t, 85, logs[1].Quota)
 	assert.Equal(t, 80, logs[2].Quota)
+	assert.Equal(t, "owner", logs[0].Username)
+	assert.Equal(t, "member", logs[1].Username)
+	assert.Equal(t, "owner", logs[2].Username)
+
+	var stored Log
+	require.NoError(t, LOG_DB.Where("quota = ?", 90).First(&stored).Error)
+	assert.Equal(t, "owner", stored.Username)
 }
 
 func TestStreamOrganizationBillingLogsReturnsOrderedBoundedBatches(t *testing.T) {

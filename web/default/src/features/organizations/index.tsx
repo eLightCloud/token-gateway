@@ -543,14 +543,7 @@ function UsageFilters({
 }) {
   const { t } = useTranslation()
   const memberOptions = useMemo(() => {
-    const membersByUserId = new Map<number, OrganizationMember>()
-    for (const member of options?.members ?? []) {
-      const existing = membersByUserId.get(member.user_id)
-      if (!existing || member.joined_at > existing.joined_at) {
-        membersByUserId.set(member.user_id, member)
-      }
-    }
-    return [...membersByUserId.values()].sort((a, b) =>
+    return [...(options?.members ?? [])].sort((a, b) =>
       (a.username || String(a.user_id)).localeCompare(
         b.username || String(b.user_id)
       )
@@ -638,7 +631,7 @@ function UsageFilters({
               <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
               {memberOptions.map((row) => (
                 <NativeSelectOption key={row.user_id} value={row.user_id}>
-                  {row.username || `${t('User')} ${row.user_id}`}
+                  {row.username || `${t('User')} #${row.user_id}`}
                 </NativeSelectOption>
               ))}
             </NativeSelect>
@@ -750,7 +743,10 @@ function SummaryGrid({ summary }: { summary?: OrganizationSummary }) {
   )
 }
 
-function dimensionRowName(row: OrganizationDimensionRow) {
+function dimensionRowName(
+  row: OrganizationDimensionRow,
+  t: (key: string) => string
+) {
   if (row.display_name && row.username) {
     return `${row.display_name} (${row.username})`
   }
@@ -760,7 +756,7 @@ function dimensionRowName(row: OrganizationDimensionRow) {
     row.model_name ||
     row.channel_name ||
     row.channel_id ||
-    row.user_id ||
+    (row.user_id != null ? `${t('User')} #${row.user_id}` : undefined) ||
     '-'
   )
 }
@@ -830,7 +826,7 @@ function DimensionTable(props: {
         </TableHeader>
         <TableBody>
           {(props.rows ?? []).map((row) => {
-            const rowName = dimensionRowName(row)
+            const rowName = dimensionRowName(row, t)
             return (
               <TableRow key={String(dimensionRowKey(row, String(rowName)))}>
                 <TableCell className='max-w-72 min-w-36 truncate'>
@@ -959,7 +955,10 @@ function LogsTable({ rows }: { rows?: OrganizationUsageRow[] }) {
             <TableCell>
               {formatTimestampInBeijingTime(row.created_at)}
             </TableCell>
-            <TableCell>{row.username || row.user_id || '-'}</TableCell>
+            <TableCell>
+              {row.username ||
+                (row.user_id != null ? `${t('User')} #${row.user_id}` : '-')}
+            </TableCell>
             <TableCell>{row.model_name || '-'}</TableCell>
             <TableCell className='text-right whitespace-nowrap tabular-nums'>
               {formatBillingAmountFromQuota(row.quota ?? 0)}
