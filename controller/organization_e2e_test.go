@@ -14,8 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
@@ -142,7 +140,6 @@ func setupOrganizationE2E(t *testing.T) (organizationE2EFixture, *gin.Engine) {
 	seedOrganizationE2EFixture(t, db, fixture)
 
 	router := gin.New()
-	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("organization-e2e-session"))))
 	registerOrganizationE2ERoutes(router)
 
 	t.Cleanup(func() {
