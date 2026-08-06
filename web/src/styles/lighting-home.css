@@ -219,10 +219,14 @@ For commercial licensing, please contact support@quantumnous.com
   --home-blue: #1769e0;
   --home-blue-strong: #0c54bd;
   --home-blue-soft: #eaf3ff;
+  --home-action-blue: #4b91ee;
+  --home-action-blue-hover: #4388e8;
   --home-cyan: #20b9d6;
   --home-cyan-soft: #e7faff;
   --home-teal: #0b756c;
   --home-teal-soft: #e6f7f4;
+  --home-action-teal: #2a9d93;
+  --home-action-teal-hover: #239b90;
   --home-amber: #8f5e00;
   --home-amber-soft: #fff4d8;
   --home-coral: #b84535;
@@ -290,13 +294,13 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 .home-button-primary {
-  color: #ffffff;
-  background: var(--home-blue);
-  box-shadow: 0 10px 22px rgb(23 105 224 / 0.22);
+  color: var(--home-ink);
+  background: var(--home-action-blue);
+  box-shadow: 0 8px 18px rgb(75 145 238 / 0.16);
 }
 
 .home-button-primary:hover {
-  background: var(--home-blue-strong);
+  background: var(--home-action-blue-hover);
 }
 
 .home-button-secondary {
@@ -312,13 +316,13 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 .home-button-teal {
-  color: #ffffff;
-  background: var(--home-teal);
-  box-shadow: 0 10px 22px rgb(15 143 132 / 0.2);
+  color: var(--home-ink);
+  background: var(--home-action-teal);
+  box-shadow: 0 8px 18px rgb(42 157 147 / 0.15);
 }
 
 .home-button-teal:hover {
-  background: #0a6861;
+  background: var(--home-action-teal-hover);
 }
 
 .home-button-large {

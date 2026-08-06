@@ -54,4 +54,24 @@ describe('Lighting homepage style entry', () => {
       assert.ok(homeStyles.includes(selector), `missing ${selector}`)
     }
   })
+
+  test('keeps softer action colors scoped to homepage buttons', () => {
+    for (const token of [
+      '--home-action-blue',
+      '--home-action-blue-hover',
+      '--home-action-teal',
+      '--home-action-teal-hover',
+    ]) {
+      assert.ok(homeStyles.includes(token), `missing ${token}`)
+    }
+
+    assert.match(
+      homeStyles,
+      /\.home-button-primary\s*\{[^}]*background:\s*var\(--home-action-blue\)/s
+    )
+    assert.match(
+      homeStyles,
+      /\.home-button-teal\s*\{[^}]*background:\s*var\(--home-action-teal\)/s
+    )
+  })
 })
