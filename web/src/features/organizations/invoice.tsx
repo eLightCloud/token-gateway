@@ -18,7 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
-import type { TFunction } from 'i18next'
 import { CalendarDays, Download, RefreshCw, Settings2 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -77,6 +76,7 @@ import {
   organizationInvoiceKeys,
   updateOrganizationSettlementRule,
 } from './invoice-api'
+import { organizationInvoiceCategoryName } from './invoice-category'
 import type {
   OrganizationInvoice,
   OrganizationInvoiceAccountAmount,
@@ -106,31 +106,6 @@ function formatUSD(value: string, emptyForZero = false): string {
   if (!Number.isFinite(amount)) return '-'
   if (emptyForZero && amount === 0) return '-'
   return USD_FORMATTER.format(amount)
-}
-
-function organizationInvoiceCategoryName(
-  categoryKey: string,
-  categoryName: string,
-  fallback: boolean,
-  t: TFunction
-): string {
-  if (fallback) return categoryName
-  switch (categoryKey) {
-    case 'claude':
-      return t('Claude')
-    case 'gpt':
-      return t('GPT')
-    case 'gemini':
-      return t('Gemini')
-    case 'minimax':
-      return t('MiniMax')
-    case 'deepseek':
-      return t('Deepseek')
-    case 'kimi':
-      return t('Kimi')
-    default:
-      return categoryName
-  }
 }
 
 function factorLabel(

@@ -51,16 +51,19 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Discord',
   'DoubaoVideo',
   'FastGPT',
+  'GLM (Alibaba Cloud)',
   'Gemini',
   'Gemini Image 4K',
   'GitHub',
   'Jimeng',
   'JustSong',
+  'Kimi (Alibaba Cloud)',
   'LingYiWanWu',
   'LinuxDO',
   'MjProxy',
   'MjProxyPlus',
   'MiniMax',
+  'Minimax (Alibaba Cloud)',
   'Mistral',
   'MokaAI',
   'Moonshot',
@@ -79,6 +82,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Perplexity',
   'QuantumNous',
   'Quota:',
+  'Qwen (Alibaba Cloud)',
   'Replicate',
   'SiliconFlow',
   'Stripe',
@@ -229,8 +233,9 @@ function isLikelyUntranslated({ locale, baseValue, value }) {
   if (locale === 'ru') return true
 
   // For fr/vi: still useful but noisier; keep it conservative.
-  if (locale === 'fr' || locale === 'vi')
+  if (locale === 'fr' || locale === 'vi') {
     return /\b(the|and|or|to|with|please)\b/i.test(s)
+  }
 
   return false
 }

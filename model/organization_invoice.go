@@ -1,8 +1,6 @@
 package model
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -133,22 +131,6 @@ type OrganizationSettlementVersionConflictError struct {
 
 func (e *OrganizationSettlementVersionConflictError) Error() string {
 	return fmt.Sprintf("settlement rule version conflict: expected %d, actual %d", e.Expected, e.Actual)
-}
-
-type organizationInvoiceCategoryDefinition struct {
-	key       string
-	name      string
-	prefix    string
-	sortOrder int
-}
-
-var organizationInvoiceCategoryDefinitions = []organizationInvoiceCategoryDefinition{
-	{key: "claude", name: "Claude", prefix: "claude-", sortOrder: 10},
-	{key: "gpt", name: "GPT", prefix: "gpt-", sortOrder: 20},
-	{key: "gemini", name: "Gemini", prefix: "gemini-", sortOrder: 30},
-	{key: "minimax", name: "MiniMax", prefix: "minimax-", sortOrder: 40},
-	{key: "deepseek", name: "Deepseek", prefix: "deepseek-", sortOrder: 50},
-	{key: "kimi", name: "Kimi", prefix: "kimi-", sortOrder: 60},
 }
 
 type organizationInvoiceMonthRange struct {
@@ -297,39 +279,6 @@ func FormatOrganizationSettlementFactor(value int) string {
 	return decimal.NewFromInt(int64(value)).
 		Div(decimal.NewFromInt(OrganizationSettlementFactorScale)).
 		StringFixed(4)
-}
-
-func organizationInvoiceCategoryForModel(modelName string) organizationInvoiceCategory {
-	normalized := strings.ToLower(strings.TrimSpace(modelName))
-	var matched *organizationInvoiceCategoryDefinition
-	for i := range organizationInvoiceCategoryDefinitions {
-		definition := &organizationInvoiceCategoryDefinitions[i]
-		if !strings.HasPrefix(normalized, definition.prefix) {
-			continue
-		}
-		if matched == nil || len(definition.prefix) > len(matched.prefix) ||
-			(len(definition.prefix) == len(matched.prefix) && definition.key < matched.key) {
-			matched = definition
-		}
-	}
-	if matched != nil {
-		return organizationInvoiceCategory{
-			key:       matched.key,
-			name:      matched.name,
-			sortOrder: matched.sortOrder,
-		}
-	}
-	hash := sha256.Sum256([]byte(normalized))
-	name := strings.TrimSpace(modelName)
-	if name == "" {
-		name = "Unknown model"
-	}
-	return organizationInvoiceCategory{
-		key:       organizationInvoiceFallbackCategoryPrefix + hex.EncodeToString(hash[:]),
-		name:      name,
-		fallback:  true,
-		sortOrder: math.MaxInt,
-	}
 }
 
 func organizationInvoiceMonths(period OrganizationInvoicePeriod) ([]organizationInvoiceMonthRange, error) {

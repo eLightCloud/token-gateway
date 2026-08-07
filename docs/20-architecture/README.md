@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-19
+last-reviewed: 2026-08-06
 ---
 
 # 20-architecture — 目标说明
@@ -19,6 +19,10 @@ last-reviewed: 2026-07-19
 - [架构概览](./架构概览.md)
 - [数据模型](./数据模型.md)
 - [组织与组织账单架构设计](./组织与组织账单架构设计.md)
+
+## 待实施架构
+
+- [New API HK-US 多实例部署架构](./部署架构.md)
 
 ## 不放什么
 - 产品需求与流程 -> 10-product/

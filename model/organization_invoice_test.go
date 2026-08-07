@@ -40,7 +40,7 @@ func createOrganizationInvoiceTestFixture(t *testing.T) int {
 			Username:  "owner",
 			CreatedAt: beijingInvoiceTimestamp(t, "2026-07-15 12:00:00"),
 			Type:      LogTypeConsume,
-			ModelName: "claude-opus-4",
+			ModelName: "claude-opus-4.6",
 			Quota:     2000,
 		},
 		{
@@ -138,22 +138,6 @@ func TestOrganizationInvoiceCategoryKeysAreStableAndSafe(t *testing.T) {
 	assert.Equal(t, "Custom/Model:V1", first.name)
 }
 
-func TestOrganizationInvoiceCategoryUsesLongestPrefixAndStableTieBreak(t *testing.T) {
-	originalDefinitions := organizationInvoiceCategoryDefinitions
-	t.Cleanup(func() {
-		organizationInvoiceCategoryDefinitions = originalDefinitions
-	})
-	organizationInvoiceCategoryDefinitions = append(
-		append([]organizationInvoiceCategoryDefinition{}, originalDefinitions...),
-		organizationInvoiceCategoryDefinition{key: "image-z", name: "Image Z", prefix: "gpt-image-", sortOrder: 80},
-		organizationInvoiceCategoryDefinition{key: "image-a", name: "Image A", prefix: "gpt-image-", sortOrder: 70},
-	)
-
-	category := organizationInvoiceCategoryForModel("GPT-image-2")
-	assert.Equal(t, "image-a", category.key)
-	assert.Equal(t, "Image A", category.name)
-}
-
 func TestOrganizationInvoiceMonthExpressionUsesEpochBoundaries(t *testing.T) {
 	period, err := NewOrganizationInvoicePeriod("2026-06-15", "2026-07-02", time.Now())
 	require.NoError(t, err)
@@ -247,6 +231,101 @@ func TestGetOrganizationInvoiceBuildsAccountCrossTables(t *testing.T) {
 	assert.Equal(t, "0.5000", crossMonthGPT.FactorSegments[0].Factor)
 	assert.Equal(t, "2026-07", crossMonthGPT.FactorSegments[1].PeriodMonth)
 	assert.Equal(t, "0.8000", crossMonthGPT.FactorSegments[1].Factor)
+}
+
+func TestGetOrganizationInvoiceGroupsNewCategoriesAndAppliesMonthlyRule(t *testing.T) {
+	setupOrganizationTestState(t)
+	organizationId := createOrganizationBillingTestFixture(t)
+	require.NoError(t, LOG_DB.Create(&[]Log{
+		{
+			UserId:    10,
+			Username:  "owner",
+			CreatedAt: beijingInvoiceTimestamp(t, "2026-07-10 10:00:00"),
+			Type:      LogTypeConsume,
+			ModelName: "glm-5.2",
+			Quota:     1000,
+		},
+		{
+			UserId:    11,
+			Username:  "member",
+			CreatedAt: beijingInvoiceTimestamp(t, "2026-07-11 11:00:00"),
+			Type:      LogTypeConsume,
+			ModelName: "glm-5.1",
+			Quota:     500,
+		},
+		{
+			UserId:    10,
+			Username:  "owner",
+			CreatedAt: beijingInvoiceTimestamp(t, "2026-07-12 12:00:00"),
+			Type:      LogTypeConsume,
+			ModelName: "qwen3.7-max",
+			Quota:     800,
+		},
+		{
+			UserId:    10,
+			Username:  "owner",
+			CreatedAt: beijingInvoiceTimestamp(t, "2026-07-13 13:00:00"),
+			Type:      LogTypeConsume,
+			ModelName: "text-embedding-3-large",
+			Quota:     400,
+		},
+		{
+			UserId:    11,
+			Username:  "member",
+			CreatedAt: beijingInvoiceTimestamp(t, "2026-07-14 14:00:00"),
+			Type:      LogTypeConsume,
+			ModelName: "text-embedding-v4",
+			Quota:     200,
+		},
+	}).Error)
+	period, err := NewOrganizationInvoicePeriod("2026-07-01", "2026-07-31", time.Now())
+	require.NoError(t, err)
+
+	invoice, err := GetOrganizationInvoice(organizationId, period)
+	require.NoError(t, err)
+	require.Len(t, invoice.CategoryRows, 3)
+
+	categoryByKey := make(map[string]OrganizationInvoiceCategoryRow, len(invoice.CategoryRows))
+	for _, row := range invoice.CategoryRows {
+		categoryByKey[row.CategoryKey] = row
+		assert.Equal(t, "1.0000", row.Factor)
+	}
+	assert.Equal(t, int64(1500), categoryByKey["glm"].GrossQuota)
+	assert.Equal(t, []string{"glm-5.1", "glm-5.2"}, categoryByKey["glm"].Models)
+	assert.Equal(t, "GLM（阿里云）", categoryByKey["glm"].CategoryName)
+	assert.Equal(t, int64(800), categoryByKey["qwen"].GrossQuota)
+	assert.Equal(t, "Qwen（阿里云）", categoryByKey["qwen"].CategoryName)
+	assert.Equal(t, int64(600), categoryByKey["vector"].GrossQuota)
+	assert.Equal(t, []string{"text-embedding-3-large", "text-embedding-v4"}, categoryByKey["vector"].Models)
+	assert.Equal(t, "向量", categoryByKey["vector"].CategoryName)
+
+	options, err := GetOrganizationSettlementRuleOptions(organizationId, 202607)
+	require.NoError(t, err)
+	require.Len(t, options, 3)
+	for _, option := range options {
+		assert.Equal(t, "1.0000", option.Factor)
+		assert.True(t, option.Inherited)
+	}
+
+	updated, err := UpdateOrganizationSettlementRule(organizationId, "glm", 202607, 10400, 0)
+	require.NoError(t, err)
+	assert.True(t, updated.Changed)
+
+	settledInvoice, err := GetOrganizationInvoice(organizationId, period)
+	require.NoError(t, err)
+	for _, row := range settledInvoice.CategoryRows {
+		if row.CategoryKey != "glm" {
+			continue
+		}
+		assert.Equal(t, "1.0400", row.Factor)
+		expectedSettled := decimal.NewFromInt(1500).
+			Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+			Mul(decimal.NewFromFloat(1.04)).
+			StringFixed(10)
+		assert.Equal(t, expectedSettled, row.SettledAmountUSD)
+		return
+	}
+	require.Fail(t, "GLM category missing after settlement rule update")
 }
 
 func TestGetOrganizationInvoiceRejectsNegativeConsumeQuota(t *testing.T) {

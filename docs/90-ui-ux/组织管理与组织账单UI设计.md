@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-19
+last-reviewed: 2026-08-08
 ---
 
 # 组织管理与组织账单 UI 设计
@@ -26,7 +26,7 @@ last-reviewed: 2026-07-19
 - `@/components/ui` 中现有 Button、Input、NativeSelect、Table、Badge、Dialog、Empty 等组件。
 - i18next；所有用户可见文本使用 `useTranslation()` 和 `t()`。
 
-组织 feature 由 `api.ts`、`types.ts`、`index.tsx` 以及独立的 `invoice.tsx`、`invoice-api.ts`、`invoice-types.ts`、`beijing-time.ts` 组成，路由文件保持薄层。
+组织 feature 由 `api.ts`、`types.ts`、`index.tsx` 以及独立的 `invoice.tsx`、`invoice-api.ts`、`invoice-types.ts`、`invoice-category.ts`、`beijing-time.ts` 组成，路由文件保持薄层。`invoice-category.ts` 是 Invoice 表格与系数配置 Sheet 共享的标准类别展示入口。
 
 ## 信息架构
 
@@ -152,7 +152,7 @@ AI model usage summary
 
 - 默认打开当前北京时间自然月；支持本月、上月和自定义开始/结束日期。
 - 两张交叉表横向滚动，模型/类别列 sticky；零金额单元格显示 `-`。
-- 内置类别名称走 i18n，fallback 直接显示模型名。
+- 内置类别名称走 i18n，fallback 直接显示服务端返回的原始模型名。简体中文固定显示 Claude、GPT、Gemini、Deepseek、Minimax（阿里云）、Kimi（阿里云）、GLM（阿里云）、Qwen（阿里云）和向量；其他语言保留 Alibaba Cloud 供应渠道标识。
 - 多月存在多档规则时，系数列展示月份与系数列表。
 - Export 使用 Invoice 专用 CSV，不包含日志内容、请求 ID 或上游请求 ID。
 - Configure factors 打开 Sheet，只展示本组织使用过的类别。输入范围 `0.0000` 至 `10.0000`；零系数、恢复默认和历史月份都有明确确认/提示。

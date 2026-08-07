@@ -568,9 +568,9 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 	))
 	models := decodeOrganizationE2EData[[]model.OrganizationBillingDimension](t, modelsResponse)
 	require.Len(t, models, 2)
-	assert.Equal(t, "gpt-lite", models[0].ModelName)
+	assert.Equal(t, "gpt-5.4", models[0].ModelName)
 	assert.Equal(t, 300, models[0].TotalQuota)
-	assert.Equal(t, "gpt-pro", models[1].ModelName)
+	assert.Equal(t, "gpt-5.5", models[1].ModelName)
 	assert.Equal(t, 120, models[1].TotalQuota)
 
 	channelsResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
@@ -861,6 +861,43 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	fixture, router := setupOrganizationE2E(t)
 	organizationId := fixture.Organization.Id
 	invoiceQuery := "start_date=2026-07-01&end_date=2026-07-31"
+	require.NoError(t, model.LOG_DB.Create(&[]model.Log{
+		{
+			UserId: 1001, Username: "org-admin", CreatedAt: 1783332001,
+			Type: model.LogTypeConsume, ModelName: "glm-5.2", Quota: 100,
+			RequestId: "req-invoice-glm-52",
+		},
+		{
+			UserId: 1002, Username: "org-member", CreatedAt: 1783332002,
+			Type: model.LogTypeConsume, ModelName: "glm-5.1", Quota: 50,
+			RequestId: "req-invoice-glm-51",
+		},
+		{
+			UserId: 1002, Username: "org-member", CreatedAt: 1783332003,
+			Type: model.LogTypeConsume, ModelName: "qwen3.7-max", Quota: 80,
+			RequestId: "req-invoice-qwen",
+		},
+		{
+			UserId: 1001, Username: "org-admin", CreatedAt: 1783332004,
+			Type: model.LogTypeConsume, ModelName: "text-embedding-3-large", Quota: 40,
+			RequestId: "req-invoice-vector-large",
+		},
+		{
+			UserId: 1002, Username: "org-member", CreatedAt: 1783332005,
+			Type: model.LogTypeConsume, ModelName: "text-embedding-v4", Quota: 20,
+			RequestId: "req-invoice-vector-v4",
+		},
+		{
+			UserId: 1001, Username: "org-admin", CreatedAt: 1783332006,
+			Type: model.LogTypeConsume, ModelName: "gpt-4o", Quota: 30,
+			RequestId: "req-invoice-gpt-4o",
+		},
+		{
+			UserId: 1002, Username: "org-member", CreatedAt: 1783332007,
+			Type: model.LogTypeConsume, ModelName: "glm-5-turbo", Quota: 25,
+			RequestId: "req-invoice-glm-5-turbo",
+		},
+	}).Error)
 
 	memberResponse := performOrganizationE2ERequest(
 		t,
@@ -885,15 +922,24 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 		nil,
 	))
 	currentInvoice := decodeOrganizationE2EData[model.OrganizationInvoice](t, currentInvoiceResponse)
-	assert.Equal(t, int64(420), currentInvoice.GrossTotalQuota)
+	assert.Equal(t, int64(765), currentInvoice.GrossTotalQuota)
 	assert.Len(t, currentInvoice.Accounts, 2)
 	for _, account := range currentInvoice.Accounts {
 		assert.Contains(t, account.Username, "org-")
 		assert.NotContains(t, account.DisplayName, "org-")
 	}
-	require.Len(t, currentInvoice.CategoryRows, 1)
+	require.Len(t, currentInvoice.CategoryRows, 4)
 	assert.Equal(t, "gpt", currentInvoice.CategoryRows[0].CategoryKey)
-	assert.Equal(t, "1.0000", currentInvoice.CategoryRows[0].Factor)
+	assert.Equal(t, int64(450), currentInvoice.CategoryRows[0].GrossQuota)
+	assert.Contains(t, currentInvoice.CategoryRows[0].Models, "gpt-4o")
+	assert.Equal(t, "glm", currentInvoice.CategoryRows[1].CategoryKey)
+	assert.Equal(t, int64(175), currentInvoice.CategoryRows[1].GrossQuota)
+	assert.Equal(t, []string{"glm-5-turbo", "glm-5.1", "glm-5.2"}, currentInvoice.CategoryRows[1].Models)
+	assert.Equal(t, "qwen", currentInvoice.CategoryRows[2].CategoryKey)
+	assert.Equal(t, "vector", currentInvoice.CategoryRows[3].CategoryKey)
+	for _, row := range currentInvoice.CategoryRows {
+		assert.Equal(t, "1.0000", row.Factor)
+	}
 
 	adminInvoiceResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t,
@@ -917,9 +963,11 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 		nil,
 	))
 	rules := decodeOrganizationE2EData[[]model.OrganizationSettlementRuleOption](t, rulesResponse)
-	require.Len(t, rules, 1)
-	assert.Equal(t, "1.0000", rules[0].Factor)
-	assert.True(t, rules[0].Inherited)
+	require.Len(t, rules, 4)
+	for _, rule := range rules {
+		assert.Equal(t, "1.0000", rule.Factor)
+		assert.True(t, rule.Inherited)
+	}
 
 	updateResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t,
@@ -929,7 +977,7 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 		http.MethodPut,
 		"/api/organization/current/invoice/settlement-rules",
 		map[string]any{
-			"category_key":     "gpt",
+			"category_key":     "glm",
 			"factor":           "0.5000",
 			"effective_month":  "2026-07",
 			"expected_version": 0,
@@ -949,9 +997,8 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 		nil,
 	))
 	settledInvoice := decodeOrganizationE2EData[model.OrganizationInvoice](t, settledResponse)
-	expectedSettled := decimal.NewFromInt(420).
+	expectedSettled := decimal.NewFromFloat(677.5).
 		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
-		Mul(decimal.NewFromFloat(0.5)).
 		StringFixed(10)
 	assert.Equal(t, expectedSettled, settledInvoice.SettledTotalAmountUSD)
 
@@ -963,7 +1010,7 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 		http.MethodPut,
 		"/api/organization/current/invoice/settlement-rules",
 		map[string]any{
-			"category_key":     "gpt",
+			"category_key":     "glm",
 			"factor":           "0.8000",
 			"effective_month":  "2026-07",
 			"expected_version": 0,
@@ -986,6 +1033,10 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	require.Equal(t, http.StatusOK, exportResponse.Code)
 	assert.Contains(t, exportResponse.Header().Get("Content-Disposition"), "organization-7001-invoice-2026-07-01-2026-07-31.csv")
 	assert.Contains(t, exportResponse.Body.String(), "# 模型归类结算汇总")
+	assert.Contains(t, exportResponse.Body.String(), "GLM（阿里云）")
+	assert.Contains(t, exportResponse.Body.String(), "Qwen（阿里云）")
+	assert.Contains(t, exportResponse.Body.String(), "向量")
+	assert.Contains(t, exportResponse.Body.String(), "gpt-4o")
 	assert.Contains(t, exportResponse.Body.String(), "0.5000")
 	assert.Contains(t, exportResponse.Body.String(), "org-admin")
 	assert.Contains(t, exportResponse.Body.String(), "org-member")
