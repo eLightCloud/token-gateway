@@ -200,10 +200,26 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 		Usage:        &dto.Usage{},
 	}
 	var err *types.NewAPIError
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	terminalUsageSeen := false
+	helper.TextStreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if common.UnmarshalJsonStr(data, &envelope) != nil || envelope.Type == "" {
+			sr.Ignore()
+		} else {
+			sr.Accept()
+		}
+		if HasAuthoritativeStreamUsage([]byte(data)) {
+			terminalUsageSeen = true
+		}
 		err = HandleStreamResponseData(c, info, claudeInfo, data)
 		if err != nil {
-			sr.Stop(err)
+			sr.ProtocolFailure(err)
+			return
+		}
+		if envelope.Type == "message_stop" {
+			sr.TerminalSuccess(terminalUsageSeen)
 		}
 	})
 	if err != nil {

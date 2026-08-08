@@ -88,7 +88,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return true
 	}
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.TextStreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
 			return
@@ -109,7 +109,11 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Error(err)
 			return
 		}
-
+		if !isRecognizedChatStreamData(data) {
+			sr.Ignore()
+		} else {
+			sr.Accept()
+		}
 		results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, &chunk)
 		if err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
@@ -135,9 +139,13 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	}
 
 	usage := state.Usage()
-	if usage == nil || usage.TotalTokens == 0 {
+	authoritativeUsage := usage != nil && usage.TotalTokens != 0
+	if !authoritativeUsage {
 		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		state.SetUsage(usage)
+	}
+	if authoritativeUsage && info.StreamStatus != nil {
+		info.StreamStatus.MarkUsageComplete()
 	}
 
 	finalResults, err := relayconvert.FinalizeStreamResponse(c, info, state)

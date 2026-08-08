@@ -43,17 +43,27 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	helper.SetEventStreamHeaders(c)
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.TextStreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var xAIResp *dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &xAIResp); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
 			sr.Error(err)
 			return
 		}
+		if xAIResp == nil {
+			sr.Ignore()
+			return
+		}
+		if xAIResp.Id == "" && len(xAIResp.Choices) == 0 && xAIResp.Usage == nil {
+			sr.Ignore()
+		} else {
+			sr.Accept()
+		}
 
 		// 把 xAI 的usage转换为 OpenAI 的usage
-		if xAIResp.Usage != nil {
+		if dto.HasOpenAIUsageTokens(xAIResp.Usage) {
 			containStreamUsage = true
+			info.StreamStatus.MarkUsageComplete()
 			usage.PromptTokens = xAIResp.Usage.PromptTokens
 			usage.TotalTokens = xAIResp.Usage.TotalTokens
 			usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
@@ -73,7 +83,6 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	}
 
 	helper.Done(c)
-	service.CloseResponseBodyGracefully(resp)
 	return usage, nil
 }
 

@@ -149,6 +149,7 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 		}
 		streamInfo["errors"] = messages
 	}
+	appendStreamUpstreamResult(ss, streamInfo)
 	other["stream_status"] = streamInfo
 }
 

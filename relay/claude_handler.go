@@ -148,6 +148,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if newApiErr != nil {
 			return newApiErr
 		}
+		if streamErr := helper.ValidateTextStreamCompletion(info); streamErr != nil {
+			return streamErr
+		}
 
 		service.PostTextConsumeQuota(c, info, usage, nil)
 		return nil
@@ -218,6 +221,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
+	}
+	if streamErr := helper.ValidateTextStreamCompletion(info); streamErr != nil {
+		return streamErr
 	}
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)

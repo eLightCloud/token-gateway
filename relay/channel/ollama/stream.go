@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
 )
@@ -36,8 +37,8 @@ type ollamaChatStreamChunk struct {
 	DoneReason         string `json:"done_reason"`
 	TotalDuration      int64  `json:"total_duration"`
 	LoadDuration       int64  `json:"load_duration"`
-	PromptEvalCount    int    `json:"prompt_eval_count"`
-	EvalCount          int    `json:"eval_count"`
+	PromptEvalCount    *int   `json:"prompt_eval_count"`
+	EvalCount          *int   `json:"eval_count"`
 	PromptEvalDuration int64  `json:"prompt_eval_duration"`
 	EvalDuration       int64  `json:"eval_duration"`
 }
@@ -95,10 +96,6 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if resp == nil || resp.Body == nil {
 		return nil, types.NewOpenAIError(fmt.Errorf("empty response"), types.ErrorCodeBadResponse, http.StatusBadRequest)
 	}
-	defer service.CloseResponseBodyGracefully(resp)
-
-	helper.SetEventStreamHeaders(c)
-	scanner := helper.NewStreamScanner(resp.Body)
 	usage := &dto.Usage{}
 	var model = info.UpstreamModelName
 	var responseId = common.GetUUID()
@@ -109,16 +106,19 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		_ = helper.StringData(c, string(data))
 	}
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
+	var streamErr *types.NewAPIError
+	helper.TextLineStreamScannerHandler(c, resp, info, func(line string, sr *helper.StreamResult) {
 		var chunk ollamaChatStreamChunk
 		if err := common.Unmarshal([]byte(line), &chunk); err != nil {
 			logger.LogError(c, "ollama stream json decode error: "+err.Error()+" line="+line)
-			return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			sr.Stop(streamErr)
+			return
+		}
+		if chunk.Model == "" && chunk.CreatedAt == "" && chunk.Message == nil && chunk.Response == "" && !chunk.Done && chunk.PromptEvalCount == nil && chunk.EvalCount == nil {
+			sr.Ignore()
+		} else {
+			sr.Accept()
 		}
 		if chunk.Model != "" {
 			model = chunk.Model
@@ -166,12 +166,12 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			if data, err := common.Marshal(delta); err == nil {
 				_ = helper.StringData(c, string(data))
 			}
-			continue
+			return
 		}
 		// done frame
 		// finalize once and break loop
-		usage.PromptTokens = chunk.PromptEvalCount
-		usage.CompletionTokens = chunk.EvalCount
+		usage.PromptTokens = lo.FromPtrOr(chunk.PromptEvalCount, 0)
+		usage.CompletionTokens = lo.FromPtrOr(chunk.EvalCount, 0)
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 		finishReason := chunk.DoneReason
 		if finishReason == "" {
@@ -194,10 +194,10 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 		// send [DONE]
 		helper.Done(c)
-		break
-	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
-		logger.LogError(c, "ollama stream scan error: "+err.Error())
+		sr.TerminalSuccess(chunk.PromptEvalCount != nil && chunk.EvalCount != nil)
+	})
+	if streamErr != nil {
+		return nil, streamErr
 	}
 	return usage, nil
 }
@@ -298,7 +298,9 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		model = info.UpstreamModelName
 	}
 	created := toUnix(lastChunk.CreatedAt)
-	usage := &dto.Usage{PromptTokens: lastChunk.PromptEvalCount, CompletionTokens: lastChunk.EvalCount, TotalTokens: lastChunk.PromptEvalCount + lastChunk.EvalCount}
+	promptTokens := lo.FromPtrOr(lastChunk.PromptEvalCount, 0)
+	completionTokens := lo.FromPtrOr(lastChunk.EvalCount, 0)
+	usage := &dto.Usage{PromptTokens: promptTokens, CompletionTokens: completionTokens, TotalTokens: promptTokens + completionTokens}
 	content := aggContent.String()
 	finishReason := lastChunk.DoneReason
 	if finishReason == "" {

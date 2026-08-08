@@ -9,6 +9,8 @@ import (
 
 type StreamEndReason string
 
+type StreamUpstreamResult string
+
 const (
 	StreamEndReasonNone        StreamEndReason = ""
 	StreamEndReasonDone        StreamEndReason = "done"
@@ -19,6 +21,18 @@ const (
 	StreamEndReasonEOF         StreamEndReason = "eof"
 	StreamEndReasonPanic       StreamEndReason = "panic"
 	StreamEndReasonPingFail    StreamEndReason = "ping_fail"
+)
+
+const (
+	StreamUpstreamResultNone            StreamUpstreamResult = ""
+	StreamUpstreamResultTerminalSuccess StreamUpstreamResult = "terminal_success"
+	StreamUpstreamResultProtocolFailure StreamUpstreamResult = "protocol_failure"
+	StreamUpstreamResultUsageMissing    StreamUpstreamResult = "usage_missing"
+	StreamUpstreamResultIncompleteEOF   StreamUpstreamResult = "incomplete_eof"
+	StreamUpstreamResultScannerError    StreamUpstreamResult = "scanner_error"
+	StreamUpstreamResultHandlerError    StreamUpstreamResult = "handler_error"
+	StreamUpstreamResultIdleTimeout     StreamUpstreamResult = "idle_timeout"
+	StreamUpstreamResultDrainTimeout    StreamUpstreamResult = "drain_timeout"
 )
 
 const maxStreamErrorEntries = 20
@@ -36,6 +50,11 @@ type StreamStatus struct {
 	mu         sync.Mutex
 	Errors     []StreamErrorEntry
 	ErrorCount int
+
+	upstreamMu     sync.RWMutex
+	upstreamResult StreamUpstreamResult
+	upstreamError  error
+	usageComplete  bool
 }
 
 func NewStreamStatus() *StreamStatus {
@@ -50,6 +69,60 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 		s.EndReason = reason
 		s.EndError = err
 	})
+}
+
+func (s *StreamStatus) SetUpstreamResult(result StreamUpstreamResult, err error) {
+	if s == nil || result == StreamUpstreamResultNone {
+		return
+	}
+	s.upstreamMu.Lock()
+	defer s.upstreamMu.Unlock()
+	if s.upstreamResult != StreamUpstreamResultNone &&
+		!(s.upstreamResult == StreamUpstreamResultTerminalSuccess && result == StreamUpstreamResultUsageMissing) {
+		return
+	}
+	s.upstreamResult = result
+	s.upstreamError = err
+}
+
+func (s *StreamStatus) GetUpstreamResult() (StreamUpstreamResult, error) {
+	if s == nil {
+		return StreamUpstreamResultNone, nil
+	}
+	s.upstreamMu.RLock()
+	defer s.upstreamMu.RUnlock()
+	return s.upstreamResult, s.upstreamError
+}
+
+func (s *StreamStatus) MarkUsageComplete() {
+	if s == nil {
+		return
+	}
+	s.upstreamMu.Lock()
+	s.usageComplete = true
+	s.upstreamMu.Unlock()
+}
+
+func (s *StreamStatus) IsUsageComplete() bool {
+	if s == nil {
+		return false
+	}
+	s.upstreamMu.RLock()
+	defer s.upstreamMu.RUnlock()
+	return s.usageComplete
+}
+
+func (s *StreamStatus) FinalizeUpstreamUsage() StreamUpstreamResult {
+	if s == nil {
+		return StreamUpstreamResultNone
+	}
+	s.upstreamMu.Lock()
+	defer s.upstreamMu.Unlock()
+	if s.upstreamResult == StreamUpstreamResultTerminalSuccess && !s.usageComplete {
+		s.upstreamResult = StreamUpstreamResultUsageMissing
+		s.upstreamError = fmt.Errorf("terminal stream response did not contain complete upstream usage")
+	}
+	return s.upstreamResult
 }
 
 func (s *StreamStatus) RecordError(msg string) {
@@ -102,6 +175,13 @@ func (s *StreamStatus) Summary() string {
 	fmt.Fprintf(b, "reason=%s", s.EndReason)
 	if s.EndError != nil {
 		fmt.Fprintf(b, " end_error=%q", s.EndError.Error())
+	}
+	upstreamResult, upstreamErr := s.GetUpstreamResult()
+	if upstreamResult != StreamUpstreamResultNone {
+		fmt.Fprintf(b, " upstream_result=%s", upstreamResult)
+	}
+	if upstreamErr != nil {
+		fmt.Fprintf(b, " upstream_error=%q", upstreamErr.Error())
 	}
 	s.mu.Lock()
 	if s.ErrorCount > 0 {

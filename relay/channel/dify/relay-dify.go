@@ -228,19 +228,25 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	usage := &dto.Usage{}
 	var nodeToken int
 	helper.SetEventStreamHeaders(c)
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.TextStreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var difyResponse DifyChunkChatCompletionResponse
-		if err := json.Unmarshal([]byte(data), &difyResponse); err != nil {
+		if err := common.UnmarshalJsonStr(data, &difyResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
 			sr.Error(err)
 			return
 		}
+		recognized := difyResponse.Event == "message" || difyResponse.Event == "agent_message" || difyResponse.Event == "message_end" || difyResponse.Event == "error" || strings.HasPrefix(difyResponse.Event, "workflow_") || strings.HasPrefix(difyResponse.Event, "node_")
+		if !recognized {
+			sr.Ignore()
+		} else {
+			sr.Accept()
+		}
 		if difyResponse.Event == "message_end" {
 			usage = &difyResponse.MetaData.Usage
-			sr.Done()
+			sr.TerminalSuccess(dto.HasOpenAIUsageTokens(usage))
 			return
 		} else if difyResponse.Event == "error" {
-			sr.Stop(fmt.Errorf("dify error event"))
+			sr.ProtocolFailure(fmt.Errorf("dify error event"))
 			return
 		}
 		openaiResponse := *streamResponseDify2OpenAI(difyResponse)

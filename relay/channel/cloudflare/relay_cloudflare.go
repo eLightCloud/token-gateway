@@ -1,13 +1,12 @@
 package cloudflare
 
 import (
-	"bufio"
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -30,31 +29,22 @@ func convertCf2CompletionsRequest(textRequest dto.GeneralOpenAIRequest) *CfReque
 }
 
 func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
-	scanner := helper.NewStreamScanner(resp.Body)
-	scanner.Split(bufio.ScanLines)
-
-	helper.SetEventStreamHeaders(c)
 	id := helper.GetResponseID(c)
 	var responseText string
 	isFirst := true
 
-	for scanner.Scan() {
-		data := scanner.Text()
-		if len(data) < len("data: ") {
-			continue
-		}
-		data = strings.TrimPrefix(data, "data: ")
-		data = strings.TrimSuffix(data, "\r")
-
-		if data == "[DONE]" {
-			break
-		}
-
+	helper.TextStreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var response dto.ChatCompletionsStreamResponse
-		err := json.Unmarshal([]byte(data), &response)
+		err := common.UnmarshalJsonStr(data, &response)
 		if err != nil {
 			logger.LogError(c, "error_unmarshalling_stream_response: "+err.Error())
-			continue
+			sr.Error(err)
+			return
+		}
+		if len(response.Choices) == 0 {
+			sr.Ignore()
+		} else {
+			sr.Accept()
 		}
 		for _, choice := range response.Choices {
 			choice.Delta.Role = "assistant"
@@ -70,11 +60,7 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 		if err != nil {
 			logger.LogError(c, "error_rendering_stream_response: "+err.Error())
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		logger.LogError(c, "error_scanning_stream_response: "+err.Error())
-	}
+	})
 	usage := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
 	if info.ShouldIncludeUsage {
 		response := helper.GenerateFinalUsageResponse(id, info.StartTime.Unix(), info.UpstreamModelName, *usage)
@@ -84,8 +70,6 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 		}
 	}
 	helper.Done(c)
-
-	service.CloseResponseBodyGracefully(resp)
 
 	return nil, usage
 }

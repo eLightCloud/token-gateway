@@ -53,7 +53,7 @@ type XunfeiChatResponse struct {
 			//	CompletionTokens string `json:"completion_tokens"`
 			//	TotalTokens      string `json:"total_tokens"`
 			//} `json:"text"`
-			Text dto.Usage `json:"text"`
+			Text *dto.Usage `json:"text"`
 		} `json:"usage"`
 	} `json:"payload"`
 }

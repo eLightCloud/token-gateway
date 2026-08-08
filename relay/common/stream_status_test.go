@@ -180,3 +180,29 @@ func TestStreamStatus_Summary_NilSafe(t *testing.T) {
 	var s *StreamStatus
 	assert.Equal(t, "StreamStatus<nil>", s.Summary())
 }
+
+func TestStreamStatus_UpstreamResultAndUsageAreConcurrencySafe(t *testing.T) {
+	status := NewStreamStatus()
+	results := []StreamUpstreamResult{
+		StreamUpstreamResultTerminalSuccess,
+		StreamUpstreamResultScannerError,
+		StreamUpstreamResultDrainTimeout,
+	}
+	var wg sync.WaitGroup
+	for _, result := range results {
+		wg.Add(1)
+		go func(result StreamUpstreamResult) {
+			defer wg.Done()
+			status.SetUpstreamResult(result, nil)
+			status.MarkUsageComplete()
+			_, _ = status.GetUpstreamResult()
+			_ = status.IsUsageComplete()
+		}(result)
+	}
+	wg.Wait()
+
+	result, err := status.GetUpstreamResult()
+	assert.Contains(t, results, result)
+	assert.NoError(t, err)
+	assert.True(t, status.IsUsageComplete())
+}

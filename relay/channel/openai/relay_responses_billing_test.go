@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -264,4 +266,76 @@ func TestOaiResponsesStreamHandlerDoesNotCountPartialImageEvent(t *testing.T) {
 	)
 
 	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
+}
+
+func TestOaiResponsesStreamHandlerDoesNotAddImageChargeAfterClientGone(t *testing.T) {
+	requestContext, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+	c.Set(common.RequestIdKey, "responses-client-gone-image")
+	item := `{"type":"image_generation_call","id":"img_1","status":"completed","result":"base64-a"}`
+	body := "data: " + `{"type":"response.output_item.done","output_index":0,"item":` + item + `}` + "\n\n" +
+		"data: " + `{"type":"response.completed","response":{"status":"completed","output":[` + item + `],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}` + "\n\n"
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.1",
+		DisablePing:     true,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.1"},
+	}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
+
+	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 5, usage.TotalTokens)
+	require.Nil(t, helper.ValidateTextStreamCompletion(info))
+	require.NotNil(t, info.ResponsesUsageInfo)
+	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
+	assert.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesStreamHandlerRejectsIncompleteUsageAfterClientGone(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		wantEstimated bool
+	}{
+		{
+			name: "empty",
+			body: "data: " + `{"type":"response.completed","response":{"status":"completed","usage":{}}}` + "\n\n",
+		},
+		{
+			name: "details only",
+			body: "data: " + `{"type":"response.output_text.delta","delta":"estimated output"}` + "\n\n" +
+				"data: " + `{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens_details":{"cached_tokens":7}}}}` + "\n\n",
+			wantEstimated: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requestContext, cancelRequest := context.WithCancel(context.Background())
+			cancelRequest()
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+			info := &relaycommon.RelayInfo{
+				OriginModelName: "test-model",
+				DisablePing:     true,
+				ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "test-model"},
+			}
+			resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(test.body)), Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
+
+			usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+			require.Nil(t, apiErr)
+			if test.wantEstimated {
+				require.NotNil(t, usage)
+				assert.Positive(t, usage.TotalTokens)
+			}
+			assert.False(t, info.StreamStatus.IsUsageComplete())
+			require.Error(t, helper.ValidateTextStreamCompletion(info))
+		})
+	}
 }

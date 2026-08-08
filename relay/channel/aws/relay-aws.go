@@ -25,7 +25,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	bedrockruntimeTypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/aws/smithy-go/auth/bearer"
 )
 
@@ -254,62 +253,6 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 	if handlerErr != nil {
 		return handlerErr, nil
 	}
-	return nil, claudeInfo.Usage
-}
-
-func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types.NewAPIError, *dto.Usage) {
-	requestContext := c.Request.Context()
-	ctx, cancel := newAwsInvokeContext(requestContext)
-	defer cancel()
-
-	awsResp, err := a.AwsClient.InvokeModelWithResponseStream(ctx, a.AwsReq.(*bedrockruntime.InvokeModelWithResponseStreamInput))
-	if err != nil {
-		return newAwsInvokeError(requestContext, err, "InvokeModelWithResponseStream"), nil
-	}
-	stream := awsResp.GetStream()
-	defer stream.Close()
-
-	claudeInfo := &claude.ClaudeResponseInfo{
-		ResponseId:   helper.GetResponseID(c),
-		Created:      common.GetTimestamp(),
-		Model:        info.UpstreamModelName,
-		ResponseText: strings.Builder{},
-		Usage:        &dto.Usage{},
-	}
-
-	events := stream.Events()
-streamLoop:
-	for {
-		select {
-		case <-ctx.Done():
-			break streamLoop
-		case event, ok := <-events:
-			if !ok {
-				break streamLoop
-			}
-			if ctx.Err() != nil {
-				break streamLoop
-			}
-
-			switch v := event.(type) {
-			case *bedrockruntimeTypes.ResponseStreamMemberChunk:
-				info.SetFirstResponseTime()
-				respErr := claude.HandleStreamResponseData(c, info, claudeInfo, string(v.Value.Bytes))
-				if respErr != nil {
-					return respErr, nil
-				}
-			case *bedrockruntimeTypes.UnknownUnionMember:
-				fmt.Println("unknown tag:", v.Tag)
-				return types.NewError(errors.New("unknown response type"), types.ErrorCodeInvalidRequest), nil
-			default:
-				fmt.Println("union is nil or unknown type")
-				return types.NewError(errors.New("nil or unknown response type"), types.ErrorCodeInvalidRequest), nil
-			}
-		}
-	}
-
-	_ = stream.Close()
-	claude.HandleStreamFinalResponse(c, info, claudeInfo)
 	return nil, claudeInfo.Usage
 }
 

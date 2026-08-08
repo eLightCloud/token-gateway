@@ -78,14 +78,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.NewError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse)
 	}
 
-	defer service.CloseResponseBodyGracefully(resp)
-
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.TextStreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
 		// 检查当前数据是否包含 completed 状态和 usage 信息
 		var streamResponse dto.ResponsesStreamResponse
@@ -93,6 +91,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		if streamResponse.Type == "" {
+			sr.Ignore()
+		} else {
+			sr.Accept()
 		}
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
@@ -114,7 +117,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					}
 				}
 				if !imageCommitted {
-					if relaycommon.IsNonBillableResponsesStatus(streamResponse.Response.Status) {
+					if sr.ClientGone() || relaycommon.IsNonBillableResponsesStatus(streamResponse.Response.Status) {
 						imageCounter.Reset()
 						imageCounter.Commit(info)
 						imageCommitted = true
@@ -131,11 +134,15 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				imageCounter.Commit(info)
 				imageCommitted = true
 			}
+			sr.TerminalSuccess(false)
 		case "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
 			if !imageCommitted {
 				imageCounter.Reset()
 				imageCounter.Commit(info)
 				imageCommitted = true
+			}
+			if sr.ClientGone() {
+				sr.ProtocolFailure(fmt.Errorf("responses stream ended with %s", streamResponse.Type))
 			}
 		case "response.output_text.delta":
 			// 处理输出文本
@@ -150,7 +157,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				case dto.BuildInCallFunctionCall:
 					info.CountBillableToolCall(dto.BuildInCallFunctionCall, streamResponse.Item.Name)
 				case dto.ResponsesOutputTypeImageGenerationCall:
-					if !imageCommitted {
+					if !imageCommitted && !sr.ClientGone() {
 						imageCounter.Observe(streamResponse.Item, streamResponse.OutputIndex)
 					}
 				}
@@ -158,6 +165,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	})
 
+	authoritativeUsage := usage.PromptTokens != 0 || usage.CompletionTokens != 0
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量
 		tempStr := responseTextBuilder.String()
@@ -165,14 +173,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			// 非正常结束，使用输出文本的 token 数量
 			completionTokens := service.CountTextToken(tempStr, info.UpstreamModelName)
 			usage.CompletionTokens = completionTokens
+			authoritativeUsage = false
 		}
 	}
 
 	if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
 		usage.PromptTokens = info.GetEstimatePromptTokens()
+		authoritativeUsage = false
 	}
 
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if authoritativeUsage && info.StreamStatus != nil {
+		info.StreamStatus.MarkUsageComplete()
+	}
 
 	return usage, nil
 }

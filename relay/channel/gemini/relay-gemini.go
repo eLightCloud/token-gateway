@@ -150,11 +150,16 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	var hasBillableUsageMetadata bool
 	responseText := strings.Builder{}
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.TextStreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var geminiResponse dto.GeminiChatResponse
 		if err := common.UnmarshalJsonStr(data, &geminiResponse); err != nil {
 			sr.Stop(fmt.Errorf("unmarshal: %w", err))
 			return
+		}
+		if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback == nil && geminiResponse.GetUsageMetadata() == nil {
+			sr.Ignore()
+		} else {
+			sr.Accept()
 		}
 
 		if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
@@ -184,6 +189,17 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 		if !callback(data, &geminiResponse) {
 			sr.Stop(fmt.Errorf("gemini callback stopped"))
+			return
+		}
+		terminal := false
+		for _, candidate := range geminiResponse.Candidates {
+			if candidate.FinishReason != nil && *candidate.FinishReason != "" {
+				terminal = true
+				break
+			}
+		}
+		if terminal {
+			sr.TerminalSuccess(hasBillableUsageMetadata)
 		}
 	})
 

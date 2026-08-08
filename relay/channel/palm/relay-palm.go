@@ -2,6 +2,7 @@ package palm
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -50,54 +51,41 @@ func streamResponsePaLM2OpenAI(palmResponse *PaLMChatResponse) *dto.ChatCompleti
 	return &response
 }
 
-func palmStreamHandler(c *gin.Context, resp *http.Response) (*types.NewAPIError, string) {
+func palmStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, string) {
 	responseText := ""
 	responseId := helper.GetResponseID(c)
 	createdTime := common.GetTimestamp()
-	dataChan := make(chan string)
-	stopChan := make(chan bool)
-	go func() {
-		responseBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			common.SysLog("error reading stream response: " + err.Error())
-			stopChan <- true
-			return
+	responseBody, err := helper.ReadTextStreamBody(c, resp, info)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeBadResponseBody), responseText
+	}
+	var palmResponse PaLMChatResponse
+	if err := common.Unmarshal(responseBody, &palmResponse); err != nil {
+		if info.StreamStatus != nil {
+			info.StreamStatus.SetUpstreamResult(relaycommon.StreamUpstreamResultHandlerError, err)
 		}
-		service.CloseResponseBodyGracefully(resp)
-		var palmResponse PaLMChatResponse
-		err = json.Unmarshal(responseBody, &palmResponse)
-		if err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
-			stopChan <- true
-			return
+		return types.NewError(err, types.ErrorCodeBadResponseBody), responseText
+	}
+	if palmResponse.Error.Code != 0 || len(palmResponse.Candidates) == 0 {
+		protocolErr := fmt.Errorf("PaLM stream failed: %s", palmResponse.Error.Message)
+		if info.StreamStatus != nil {
+			info.StreamStatus.SetUpstreamResult(relaycommon.StreamUpstreamResultProtocolFailure, protocolErr)
 		}
-		fullTextResponse := streamResponsePaLM2OpenAI(&palmResponse)
-		fullTextResponse.Id = responseId
-		fullTextResponse.Created = createdTime
-		if len(palmResponse.Candidates) > 0 {
-			responseText = palmResponse.Candidates[0].Content
-		}
-		jsonResponse, err := json.Marshal(fullTextResponse)
-		if err != nil {
-			common.SysLog("error marshalling stream response: " + err.Error())
-			stopChan <- true
-			return
-		}
-		dataChan <- string(jsonResponse)
-		stopChan <- true
-	}()
-	helper.SetEventStreamHeaders(c)
-	c.Stream(func(w io.Writer) bool {
-		select {
-		case data := <-dataChan:
-			c.Render(-1, common.CustomEvent{Data: "data: " + data})
-			return true
-		case <-stopChan:
-			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
-			return false
-		}
-	})
-	service.CloseResponseBodyGracefully(resp)
+		return types.NewError(protocolErr, types.ErrorCodeBadResponse), responseText
+	}
+	fullTextResponse := streamResponsePaLM2OpenAI(&palmResponse)
+	fullTextResponse.Id = responseId
+	fullTextResponse.Created = createdTime
+	if len(palmResponse.Candidates) > 0 {
+		responseText = palmResponse.Candidates[0].Content
+	}
+	if info.StreamStatus != nil {
+		info.StreamStatus.SetUpstreamResult(relaycommon.StreamUpstreamResultTerminalSuccess, nil)
+	}
+	if err := helper.ObjectData(c, fullTextResponse); err != nil {
+		common.SysLog("error writing stream response: " + err.Error())
+	}
+	helper.Done(c)
 	return nil, responseText
 }
 

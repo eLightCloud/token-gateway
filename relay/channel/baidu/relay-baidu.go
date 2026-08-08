@@ -116,17 +116,26 @@ func embeddingResponseBaidu2OpenAI(response *BaiduEmbeddingResponse) *dto.OpenAI
 
 func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
 	usage := &dto.Usage{}
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.TextStreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var baiduResponse BaiduChatStreamResponse
 		if err := common.Unmarshal([]byte(data), &baiduResponse); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
 			sr.Error(err)
 			return
 		}
-		if baiduResponse.Usage.TotalTokens != 0 {
+		hasUpstreamUsage := dto.HasOpenAIUsageTokens(&baiduResponse.Usage)
+		if baiduResponse.Id == "" && baiduResponse.Result == "" && !baiduResponse.IsEnd && !hasUpstreamUsage && baiduResponse.ErrorMsg == "" {
+			sr.Ignore()
+		} else {
+			sr.Accept()
+		}
+		if hasUpstreamUsage {
 			usage.TotalTokens = baiduResponse.Usage.TotalTokens
 			usage.PromptTokens = baiduResponse.Usage.PromptTokens
 			usage.CompletionTokens = baiduResponse.Usage.TotalTokens - baiduResponse.Usage.PromptTokens
+		}
+		if baiduResponse.IsEnd {
+			sr.TerminalSuccess(hasUpstreamUsage)
 		}
 		response := streamResponseBaidu2OpenAI(&baiduResponse)
 		if err := helper.ObjectData(c, response); err != nil {
@@ -134,7 +143,6 @@ func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 			sr.Error(err)
 		}
 	})
-	service.CloseResponseBodyGracefully(resp)
 	return nil, usage
 }
 

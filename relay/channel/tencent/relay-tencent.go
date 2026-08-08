@@ -1,7 +1,6 @@
 package tencent
 
 import (
-	"bufio"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -92,23 +91,14 @@ func streamResponseTencent2OpenAI(TencentResponse *TencentChatResponse) *dto.Cha
 
 func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	var responseText string
-	scanner := helper.NewStreamScanner(resp.Body)
-	scanner.Split(bufio.ScanLines)
-
-	helper.SetEventStreamHeaders(c)
-
-	for scanner.Scan() {
-		data := scanner.Text()
-		if len(data) < 5 || !strings.HasPrefix(data, "data:") {
-			continue
-		}
-		data = strings.TrimPrefix(data, "data:")
-
+	var upstreamUsage *dto.Usage
+	helper.TextStreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var tencentResponse TencentChatResponse
 		err := common.Unmarshal([]byte(data), &tencentResponse)
 		if err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
-			continue
+			sr.Error(err)
+			return
 		}
 
 		response := streamResponseTencent2OpenAI(&tencentResponse)
@@ -120,16 +110,30 @@ func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 		if err != nil {
 			common.SysLog(err.Error())
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		common.SysLog("error reading stream: " + err.Error())
-	}
+		candidateUsage := &dto.Usage{
+			PromptTokens:     tencentResponse.Usage.PromptTokens,
+			CompletionTokens: tencentResponse.Usage.CompletionTokens,
+			TotalTokens:      tencentResponse.Usage.TotalTokens,
+		}
+		hasUpstreamUsage := dto.HasOpenAIUsageTokens(candidateUsage)
+		if tencentResponse.Id == "" && len(tencentResponse.Choices) == 0 && !hasUpstreamUsage && tencentResponse.Error.Code == 0 {
+			sr.Ignore()
+		} else {
+			sr.Accept()
+		}
+		if hasUpstreamUsage {
+			upstreamUsage = candidateUsage
+		}
+		if len(tencentResponse.Choices) > 0 && tencentResponse.Choices[0].FinishReason != "" {
+			sr.TerminalSuccess(dto.HasOpenAIUsageTokens(upstreamUsage))
+		}
+	})
 
 	helper.Done(c)
 
-	service.CloseResponseBodyGracefully(resp)
-
+	if info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone && dto.HasOpenAIUsageTokens(upstreamUsage) {
+		return upstreamUsage, nil
+	}
 	return service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens()), nil
 }
 

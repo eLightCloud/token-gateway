@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -66,6 +69,7 @@ func TestOaiResponsesToChatStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 	require.Equal(t, 2, usage.PromptTokens)
 	require.Equal(t, 3, usage.CompletionTokens)
 	require.Equal(t, 5, usage.TotalTokens)
+	assert.True(t, info.StreamStatus.IsUsageComplete())
 
 	got := recorder.Body.String()
 	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
@@ -161,6 +165,7 @@ func TestOaiResponsesToChatBufferedStreamHandlerReturnsJSONFromSSE(t *testing.T)
 	require.Nil(t, err)
 	require.NotNil(t, usage)
 	require.Equal(t, 3, usage.TotalTokens)
+	assert.True(t, info.StreamStatus.IsUsageComplete())
 
 	got := recorder.Body.String()
 	require.NotContains(t, got, `data:`)
@@ -169,6 +174,39 @@ func TestOaiResponsesToChatBufferedStreamHandlerReturnsJSONFromSSE(t *testing.T)
 	require.Contains(t, got, `"name":"lookup"`)
 	require.Contains(t, got, `"arguments":"{\"q\":\"x\"}"`)
 	require.Contains(t, got, `"finish_reason":"tool_calls"`)
+}
+
+func TestOaiResponsesToChatStreamHandlersRejectDetailOnlyUsageAfterClientGone(t *testing.T) {
+	handlers := []struct {
+		name     string
+		isStream bool
+		handle   func(*gin.Context, *relaycommon.RelayInfo, *http.Response) (*dto.Usage, *types.NewAPIError)
+	}{
+		{name: "stream", isStream: true, handle: OaiResponsesToChatStreamHandler},
+		{name: "buffered", handle: OaiResponsesToChatBufferedStreamHandler},
+	}
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"estimated output"}`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens_details":{"cached_tokens":7}}}}`,
+		``,
+	}, "\n")
+
+	for _, test := range handlers {
+		t.Run(test.name, func(t *testing.T) {
+			requestContext, cancelRequest := context.WithCancel(context.Background())
+			cancelRequest()
+			c, _, resp, info := newResponsesChatTestContext(t, body, test.isStream)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(requestContext)
+
+			usage, apiErr := test.handle(c, info, resp)
+
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage)
+			assert.Positive(t, usage.TotalTokens)
+			assert.False(t, info.StreamStatus.IsUsageComplete())
+			require.Error(t, helper.ValidateTextStreamCompletion(info))
+		})
+	}
 }
 
 func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
@@ -200,6 +238,7 @@ func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 	require.Equal(t, 2, usage.PromptTokens)
 	require.Equal(t, 3, usage.CompletionTokens)
 	require.Equal(t, 5, usage.TotalTokens)
+	assert.True(t, info.StreamStatus.IsUsageComplete())
 
 	got := recorder.Body.String()
 	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
@@ -221,6 +260,27 @@ func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 		`event: response.function_call_arguments.done`,
 		`event: response.completed`,
 	)
+}
+
+func TestOaiChatToResponsesStreamHandlerRejectsPartialUsageAfterClientGone(t *testing.T) {
+	requestContext, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","model":"gpt-test","choices":[],"usage":{"input_tokens":17,"output_tokens":9}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	c, _, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+
+	usage, apiErr := OaiChatToResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.False(t, info.StreamStatus.IsUsageComplete())
+	require.Error(t, helper.ValidateTextStreamCompletion(info))
 }
 
 func requireOrderedSubstrings(t *testing.T, s string, parts ...string) {
