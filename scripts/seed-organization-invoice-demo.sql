@@ -29,7 +29,7 @@ INSERT INTO users (
 ) VALUES
   (
     910001,
-    '组织账单管理员',
+    'invoice_demo_admin',
     'invoice-demo-disabled-login',
     '账单验收管理员',
     1,
@@ -47,7 +47,7 @@ INSERT INTO users (
   ),
   (
     910002,
-    '组织账单成员',
+    'invoice_demo_member',
     'invoice-demo-disabled-login',
     '账单验收成员',
     1,

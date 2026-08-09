@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-08-08
+last-reviewed: 2026-08-09
 ---
 
 # 20-architecture — 目标说明
@@ -24,6 +24,7 @@ last-reviewed: 2026-08-08
 
 - [New API HK-US 多实例部署架构](./部署架构.md)
 - [Token 对账中心架构设计](./Token对账中心架构设计.md)
+- [文本流断开续读架构设计](./流式断开续读架构设计.md)
 
 ## 不放什么
 - 产品需求与流程 -> 10-product/

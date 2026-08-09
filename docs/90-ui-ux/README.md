@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-19
+last-reviewed: 2026-08-09
 ---
 
 # 90-ui-ux — 目标说明
@@ -14,9 +14,10 @@ last-reviewed: 2026-07-19
 
 ## 当前界面
 
-基础组织管理、Billing 和 Logs 已上线；Invoice、结算系数和历史归属调整界面已实现，发布状态见 [组织与账单上线进度](../50-planning/组织与账单上线进度.md)。
+基础组织管理、Billing 和 Logs 已上线；Invoice、结算系数、历史归属调整与 Root 只读 Token 账单界面已实现，发布状态见 [路线图](../50-planning/路线图.md)。
 
 - [组织管理与组织账单 UI 设计](./组织管理与组织账单UI设计.md)
+- [Token 账单 UI 设计](./Token账单UI设计.md)
 - [默认前端品牌与视觉设计](./默认前端品牌与视觉设计.md)
 - [页面清单](./页面清单.md)
 - [交互模式](./交互模式.md)

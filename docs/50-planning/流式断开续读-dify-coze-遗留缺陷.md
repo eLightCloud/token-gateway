@@ -8,11 +8,11 @@ last-reviewed: 2026-08-08
 
 ## 背景
 
-关联实施方案：[80-dev/2026-08-08-客户侧超时Token对账最小方案](../80-dev/2026-08-08-客户侧超时Token对账最小方案.md)。
+当前架构合同：[文本流断开续读架构设计](../20-architecture/流式断开续读架构设计.md)。
 
 该方案的核心不变量：客户侧断开后，只有取得**完整权威上游 usage** 才能经结算门 `ValidateTextStreamCompletion` 结算；本地估算（`ResponseText2Usage`）不得冒充"已与上游对齐"通过该门。
 
-OpenAI 包内已按统一原则修复并补回归（见上述 80-dev 方案）：
+OpenAI 包内已按当前架构合同修复并补回归：
 
 > `MarkUsageComplete()` / `TerminalSuccess(true)` 当且仅当"即将结算的 usage 来自权威上游、而非 `ResponseText2Usage` 本地估算"。
 
@@ -50,5 +50,5 @@ dify/coze 非当前重点渠道，业务上可接受其按现行为运行；优�
 
 ## 关联
 
-- 实施方案与验收标准：[80-dev/2026-08-08-客户侧超时Token对账最小方案](../80-dev/2026-08-08-客户侧超时Token对账最小方案.md)
+- 当前架构与验收标准：[文本流断开续读架构设计](../20-architecture/流式断开续读架构设计.md)、[验收标准](../10-product/验收标准.md)
 - 已修复的同类实例：`relay/channel/openai/` 下 `relay-openai.go`、`responses_via_chat.go`、`chat_via_responses.go`、`relay_responses.go`。

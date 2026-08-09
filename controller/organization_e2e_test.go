@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -1032,14 +1033,39 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	)
 	require.Equal(t, http.StatusOK, exportResponse.Code)
 	assert.Contains(t, exportResponse.Header().Get("Content-Disposition"), "organization-7001-invoice-2026-07-01-2026-07-31.csv")
+	assert.Contains(t, exportResponse.Body.String(), "组织名称,"+fixture.Organization.Name)
 	assert.Contains(t, exportResponse.Body.String(), "# 模型归类结算汇总")
 	assert.Contains(t, exportResponse.Body.String(), "GLM（阿里云）")
 	assert.Contains(t, exportResponse.Body.String(), "Qwen（阿里云）")
 	assert.Contains(t, exportResponse.Body.String(), "向量")
 	assert.Contains(t, exportResponse.Body.String(), "gpt-4o")
 	assert.Contains(t, exportResponse.Body.String(), "0.5000")
-	assert.Contains(t, exportResponse.Body.String(), "org-admin")
-	assert.Contains(t, exportResponse.Body.String(), "org-member")
+	assert.Contains(t, exportResponse.Body.String(), "真实姓名")
+	assert.Contains(t, exportResponse.Body.String(), "org-admin display")
+	assert.Contains(t, exportResponse.Body.String(), "org-member display")
+	assert.NotContains(t, exportResponse.Body.String(), "org-admin display（org-admin）")
+	assert.NotContains(t, exportResponse.Body.String(), "org-member display（org-member）")
+	exportReader := csv.NewReader(strings.NewReader(strings.TrimPrefix(exportResponse.Body.String(), "\xEF\xBB\xBF")))
+	exportReader.FieldsPerRecord = -1
+	exportRecords, err := exportReader.ReadAll()
+	require.NoError(t, err)
+	var categoryHeader []string
+	for _, record := range exportRecords {
+		if len(record) > 0 && record[0] == "模型类别" {
+			categoryHeader = record
+			break
+		}
+	}
+	require.NotNil(t, categoryHeader)
+	assert.Contains(t, categoryHeader, "org-admin")
+	assert.Contains(t, categoryHeader, "org-member")
+	assert.NotContains(t, categoryHeader, "org-admin display")
+	assert.NotContains(t, categoryHeader, "org-member display")
+	assert.NotContains(t, exportResponse.Body.String(), "组织 ID")
+	assert.NotContains(t, exportResponse.Body.String(), "时区")
+	assert.NotContains(t, exportResponse.Body.String(), "时间戳")
+	assert.NotContains(t, exportResponse.Body.String(), "规则明细")
+	assert.NotContains(t, exportResponse.Body.String(), "quota")
 	exportedSettledAmount, err := invoiceCSVAmount(settledInvoice.SettledTotalAmountUSD)
 	require.NoError(t, err)
 	assert.Contains(t, exportResponse.Body.String(), exportedSettledAmount)

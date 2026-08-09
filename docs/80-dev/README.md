@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-08-08
+last-reviewed: 2026-08-09
 ---
 
 # 80-dev — 目标说明

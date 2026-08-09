@@ -13,7 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
-	"github.com/shopspring/decimal"
 )
 
 type organizationSettlementRuleUpdateRequest struct {
@@ -256,146 +255,6 @@ func AdminUpdateOrganizationSettlementRule(c *gin.Context) {
 	updateOrganizationSettlementRule(c, organizationId)
 }
 
-func invoiceCSVAmount(value string) (string, error) {
-	amount, err := decimal.NewFromString(value)
-	if err != nil {
-		return "", fmt.Errorf("invalid organization invoice amount %q: %w", value, err)
-	}
-	return amount.StringFixed(6), nil
-}
-
-type organizationInvoiceCSVAmountFormatter struct {
-	err error
-}
-
-func (f *organizationInvoiceCSVAmountFormatter) amount(value string) string {
-	if f.err != nil {
-		return ""
-	}
-	formatted, err := invoiceCSVAmount(value)
-	if err != nil {
-		f.err = err
-		return ""
-	}
-	return formatted
-}
-
-func invoiceCSVFactor(row model.OrganizationInvoiceCategoryRow) string {
-	if !row.MultipleFactors {
-		return row.Factor
-	}
-	parts := make([]string, 0, len(row.FactorSegments))
-	for _, segment := range row.FactorSegments {
-		parts = append(parts, segment.PeriodMonth+":"+segment.Factor)
-	}
-	return strings.Join(parts, "; ")
-}
-
-func invoiceCSVRuleDetails(row model.OrganizationInvoiceCategoryRow) string {
-	parts := make([]string, 0, len(row.FactorSegments))
-	for _, segment := range row.FactorSegments {
-		sourceMonth := segment.RuleEffectiveMonth
-		if sourceMonth == "" {
-			sourceMonth = "default"
-		}
-		parts = append(parts, fmt.Sprintf(
-			"%s:%s@%s(v%d)",
-			segment.PeriodMonth,
-			segment.Factor,
-			sourceMonth,
-			segment.RuleVersion,
-		))
-	}
-	return strings.Join(parts, "; ")
-}
-
-func writeOrganizationInvoiceCSV(writer *csv.Writer, organizationId int, invoice *model.OrganizationInvoice) error {
-	amountFormatter := organizationInvoiceCSVAmountFormatter{}
-	_ = writer.Write([]string{"组织 ID", strconv.Itoa(organizationId)})
-	_ = writer.Write([]string{"账期", invoice.Period.StartDate + " ~ " + invoice.Period.EndDate})
-	_ = writer.Write([]string{"时区", invoice.Period.Timezone})
-	_ = writer.Write([]string{"开始时间戳", strconv.FormatInt(invoice.Period.StartTimestamp, 10)})
-	_ = writer.Write([]string{"结束时间戳", strconv.FormatInt(invoice.Period.EndTimestamp, 10)})
-	_ = writer.Write([]string{"币种", invoice.Currency})
-	_ = writer.Write([]string{})
-
-	categoryHeader := []string{"模型类别"}
-	for _, account := range invoice.Accounts {
-		categoryHeader = append(
-			categoryHeader,
-			model.OrganizationBillingUsername(account.Username, account.UserId),
-		)
-	}
-	categoryHeader = append(categoryHeader, "折前合计", "结算系数", "规则明细", "结算后金额", "折前额度(quota)")
-	_ = writer.Write([]string{"# 模型归类结算汇总"})
-	_ = writer.Write(categoryHeader)
-	for _, row := range invoice.CategoryRows {
-		record := []string{row.CategoryName}
-		for _, amount := range row.AccountAmounts {
-			record = append(record, amountFormatter.amount(amount.GrossAmountUSD))
-		}
-		record = append(
-			record,
-			amountFormatter.amount(row.GrossAmountUSD),
-			invoiceCSVFactor(row),
-			invoiceCSVRuleDetails(row),
-			amountFormatter.amount(row.SettledAmountUSD),
-			strconv.FormatInt(row.GrossQuota, 10),
-		)
-		_ = writer.Write(record)
-	}
-	categoryTotal := []string{"合计"}
-	for _, account := range invoice.Accounts {
-		categoryTotal = append(categoryTotal, amountFormatter.amount(account.GrossAmountUSD))
-	}
-	categoryTotal = append(
-		categoryTotal,
-		amountFormatter.amount(invoice.GrossTotalAmountUSD),
-		"—",
-		"—",
-		amountFormatter.amount(invoice.SettledTotalAmountUSD),
-		strconv.FormatInt(invoice.GrossTotalQuota, 10),
-	)
-	_ = writer.Write(categoryTotal)
-	_ = writer.Write([]string{})
-
-	modelHeader := []string{"模型"}
-	for _, account := range invoice.Accounts {
-		modelHeader = append(
-			modelHeader,
-			model.OrganizationBillingUsername(account.Username, account.UserId),
-		)
-	}
-	modelHeader = append(modelHeader, "合计", "占比", "折前额度(quota)")
-	_ = writer.Write([]string{"# AI 模型消费汇总"})
-	_ = writer.Write(modelHeader)
-	for _, row := range invoice.ModelRows {
-		record := []string{row.ModelName}
-		for _, amount := range row.AccountAmounts {
-			record = append(record, amountFormatter.amount(amount.GrossAmountUSD))
-		}
-		record = append(
-			record,
-			amountFormatter.amount(row.GrossAmountUSD),
-			row.SharePercent+"%",
-			strconv.FormatInt(row.GrossQuota, 10),
-		)
-		_ = writer.Write(record)
-	}
-	modelTotal := []string{"合计"}
-	for _, account := range invoice.Accounts {
-		modelTotal = append(modelTotal, amountFormatter.amount(account.GrossAmountUSD))
-	}
-	modelTotal = append(
-		modelTotal,
-		amountFormatter.amount(invoice.GrossTotalAmountUSD),
-		"100.0%",
-		strconv.FormatInt(invoice.GrossTotalQuota, 10),
-	)
-	_ = writer.Write(modelTotal)
-	return amountFormatter.err
-}
-
 func exportOrganizationInvoice(c *gin.Context, organizationId int) {
 	period, ok := organizationInvoicePeriodFromQuery(c)
 	if !ok {
@@ -406,10 +265,15 @@ func exportOrganizationInvoice(c *gin.Context, organizationId int) {
 		common.ApiError(c, err)
 		return
 	}
+	exportContext, err := model.GetOrganizationInvoiceExportContext(organizationId, invoice.Accounts)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	var buffer bytes.Buffer
 	buffer.WriteString("\xEF\xBB\xBF")
 	writer := csv.NewWriter(&buffer)
-	if err := writeOrganizationInvoiceCSV(writer, organizationId, invoice); err != nil {
+	if err := writeOrganizationInvoiceCSV(writer, exportContext, invoice); err != nil {
 		common.ApiError(c, err)
 		return
 	}
