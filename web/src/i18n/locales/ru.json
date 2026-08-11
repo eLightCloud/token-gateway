@@ -5302,6 +5302,7 @@
     "Value is required": "Значение обязательно",
     "Value metric": "Метрика значения",
     "Value must be at least 0": "Значение должно быть не менее 0",
+    "Value must be greater than 0": "Значение должно быть больше 0",
     "Value Regex": "Регулярное выражение значения",
     "variable": "переменная",
     "variable) *": "переменная) *",

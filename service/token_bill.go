@@ -22,7 +22,7 @@ func GetTokenBillGroups(filters model.TokenBillFilters, dimension string, page i
 	return model.GetTokenBillGroups(filters, dimension, page, pageSize)
 }
 
-func WriteTokenBillCSV(writer *csv.Writer, filters model.TokenBillFilters) error {
+func WriteTokenBillCSV(writer *csv.Writer, filters model.TokenBillFilters, amountFormatter BillingExportAmountFormatter) error {
 	if err := writer.Write([]string{
 		"时间",
 		"账单类型",
@@ -40,6 +40,8 @@ func WriteTokenBillCSV(writer *csv.Writer, filters model.TokenBillFilters) error
 		"输入 Token",
 		"输出 Token",
 		"计费额度（退款为负）",
+		"币种",
+		"原始计费额度（quota，退款为负）",
 	}); err != nil {
 		return err
 	}
@@ -66,6 +68,8 @@ func WriteTokenBillCSV(writer *csv.Writer, filters model.TokenBillFilters) error
 				entry.ChannelAPIAddress,
 				strconv.Itoa(entry.PromptTokens),
 				strconv.Itoa(entry.CompletionTokens),
+				amountFormatter.Amount(entry.Quota),
+				amountFormatter.Currency,
 				strconv.Itoa(entry.Quota),
 			}); err != nil {
 				return err

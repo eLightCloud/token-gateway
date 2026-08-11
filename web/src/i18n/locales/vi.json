@@ -5302,6 +5302,7 @@
     "Value is required": "Giá trị là bắt buộc",
     "Value metric": "Chỉ số giá trị",
     "Value must be at least 0": "Giá trị phải ít nhất là 0",
+    "Value must be greater than 0": "Giá trị phải lớn hơn 0",
     "Value Regex": "Regex giá trị",
     "variable": "biến",
     "variable) *": "biến) *",

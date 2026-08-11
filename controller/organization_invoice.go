@@ -265,7 +265,7 @@ func exportOrganizationInvoice(c *gin.Context, organizationId int) {
 		common.ApiError(c, err)
 		return
 	}
-	exportContext, err := model.GetOrganizationInvoiceExportContext(organizationId, invoice.Accounts)
+	exportContext, err := model.GetOrganizationInvoiceExportContext(organizationId, invoice.Accounts, invoice.Period)
 	if err != nil {
 		common.ApiError(c, err)
 		return

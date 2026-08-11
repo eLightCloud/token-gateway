@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -67,4 +68,20 @@ func TestTokenBillFiltersAcceptStoredUpstreamRequestIDLength(t *testing.T) {
 	filters, ok := tokenBillFiltersFromQuery(c)
 	require.True(t, ok)
 	assert.Equal(t, requestId, filters.RequestId)
+}
+
+func TestExportTokenBillCSVRejectsInvalidBillingConfigurationBeforeCSVHeaders(t *testing.T) {
+	originalQuotaPerUnit := common.QuotaPerUnit
+	t.Cleanup(func() { common.QuotaPerUnit = originalQuotaPerUnit })
+	common.QuotaPerUnit = 0
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest("GET", "/?start_timestamp=100&end_timestamp=200", nil)
+
+	ExportTokenBillCSV(c)
+
+	assert.Contains(t, recorder.Header().Get("Content-Type"), "application/json")
+	assert.Empty(t, recorder.Header().Get("Content-Disposition"))
+	assert.JSONEq(t, `{"success":false,"message":"QuotaPerUnit must be a finite number greater than 0"}`, recorder.Body.String())
 }

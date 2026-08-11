@@ -9,46 +9,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestOrganizationBillingExportAmountFormatter(t *testing.T) {
-	originalGeneralSetting := *operation_setting.GetGeneralSetting()
-	originalUSDExchangeRate := operation_setting.USDExchangeRate
-	t.Cleanup(func() {
-		*operation_setting.GetGeneralSetting() = originalGeneralSetting
-		operation_setting.USDExchangeRate = originalUSDExchangeRate
-	})
-
-	testCases := []struct {
-		name         string
-		displayType  string
-		exchangeRate float64
-		symbol       string
-		wantAmount   string
-		wantCurrency string
-	}{
-		{name: "usd", displayType: operation_setting.QuotaDisplayTypeUSD, exchangeRate: 1, wantAmount: "1.000000", wantCurrency: "USD"},
-		{name: "cny", displayType: operation_setting.QuotaDisplayTypeCNY, exchangeRate: 7.3, wantAmount: "7.300000", wantCurrency: "CNY"},
-		{name: "tokens still expose money", displayType: operation_setting.QuotaDisplayTypeTokens, exchangeRate: 1, wantAmount: "1.000000", wantCurrency: "USD"},
-		{name: "custom", displayType: operation_setting.QuotaDisplayTypeCustom, exchangeRate: 0.9, symbol: "€", wantAmount: "0.900000", wantCurrency: "CUSTOM(€)"},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			operation_setting.GetGeneralSetting().QuotaDisplayType = testCase.displayType
-			operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate = testCase.exchangeRate
-			operation_setting.GetGeneralSetting().CustomCurrencySymbol = testCase.symbol
-			operation_setting.USDExchangeRate = testCase.exchangeRate
-
-			formatter := newOrganizationBillingExportAmountFormatter()
-			assert.Equal(t, testCase.wantCurrency, formatter.currency)
-			assert.Equal(t, testCase.wantAmount, formatter.amount(int(common.QuotaPerUnit)))
-		})
-	}
-}
 
 func TestWriteOrganizationBillingCsvIncludesConsumptionAmountContract(t *testing.T) {
 	originalGeneralSetting := *operation_setting.GetGeneralSetting()
@@ -77,7 +42,9 @@ func TestWriteOrganizationBillingCsvIncludesConsumptionAmountContract(t *testing
 
 	var buffer bytes.Buffer
 	writer := csv.NewWriter(&buffer)
-	writeOrganizationBillingCsv(writer, data)
+	amountFormatter, err := service.NewBillingExportAmountFormatter(6)
+	require.NoError(t, err)
+	writeOrganizationBillingCsv(writer, data, amountFormatter)
 	writer.Flush()
 	require.NoError(t, writer.Error())
 
@@ -180,10 +147,14 @@ func TestWriteOrganizationBillingDisplayLogsCsvMatchesTableView(t *testing.T) {
 
 	var buffer bytes.Buffer
 	writer := csv.NewWriter(&buffer)
-	writeOrganizationBillingDisplayLogsCsv(
+	amountFormatter, err := service.NewBillingExportAmountFormatter(6)
+	require.NoError(t, err)
+	writeOrganizationBillingDisplayLogsCsvHeader(writer)
+	writeOrganizationBillingDisplayLogsCsvRows(
 		writer,
 		logs,
 		time.FixedZone("UTC+8", 8*60*60),
+		amountFormatter,
 	)
 	writer.Flush()
 	require.NoError(t, writer.Error())

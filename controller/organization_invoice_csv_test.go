@@ -55,6 +55,14 @@ func TestWriteOrganizationInvoiceCSVUsesReconciliationContract(t *testing.T) {
 		AccountDisplayNames: map[int]string{
 			11: "张宇",
 		},
+		AccountSuccessfulTopUpAmountsUSD: map[int]string{
+			11: "12.5",
+			12: "3",
+		},
+		AccountCurrentBalanceAmountsUSD: map[int]string{
+			11: "6.25",
+			12: "1.5",
+		},
 	}
 
 	var buffer bytes.Buffer
@@ -67,14 +75,16 @@ func TestWriteOrganizationInvoiceCSVUsesReconciliationContract(t *testing.T) {
 	reader.FieldsPerRecord = -1
 	records, err := reader.ReadAll()
 	require.NoError(t, err)
-	require.Len(t, records, 13)
+	require.Len(t, records, 15)
 	assert.Equal(t, []string{"组织名称", "中关村学院"}, records[0])
 	assert.Equal(t, []string{"账期", "2026-07-01 ~ 2026-07-31"}, records[1])
 	assert.Equal(t, []string{"币种", "USD"}, records[2])
 	assert.Equal(t, []string{"真实姓名", "张宇", "", "", "", ""}, records[4])
 	assert.Equal(t, []string{"模型类别", "alice", "bob", "折前合计", "结算系数", "结算后金额"}, records[5])
-	assert.Equal(t, []string{"真实姓名", "张宇", "", "", ""}, records[9])
-	assert.Equal(t, []string{"模型", "alice", "bob", "合计", "占比"}, records[10])
+	assert.Equal(t, []string{"用户当期成功充值订单金额", "12.500000", "3.000000", "", "", ""}, records[8])
+	assert.Equal(t, []string{"用户导出时剩余金额", "6.250000", "1.500000", "", "", ""}, records[9])
+	assert.Equal(t, []string{"真实姓名", "张宇", "", "", ""}, records[11])
+	assert.Equal(t, []string{"模型", "alice", "bob", "合计", "占比"}, records[12])
 
 	exported := buffer.String()
 	assert.NotContains(t, exported, "组织 ID")

@@ -205,6 +205,11 @@ func ExportTokenBillCSV(c *gin.Context) {
 	if !ok {
 		return
 	}
+	amountFormatter, err := service.NewBillingExportAmountFormatter(10)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	filename := fmt.Sprintf(
 		"token-bill-%s-%s-%s.csv",
 		filters.Perspective,
@@ -216,7 +221,7 @@ func ExportTokenBillCSV(c *gin.Context) {
 	c.Status(http.StatusOK)
 	_, _ = c.Writer.Write([]byte{0xEF, 0xBB, 0xBF})
 	writer := csv.NewWriter(c.Writer)
-	if err := service.WriteTokenBillCSV(writer, filters); err != nil {
+	if err := service.WriteTokenBillCSV(writer, filters, amountFormatter); err != nil {
 		// Headers may already be committed, so only record the stream error.
 		_ = c.Error(err)
 	}

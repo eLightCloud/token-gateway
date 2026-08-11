@@ -1,6 +1,8 @@
 package model
 
 import (
+	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -190,6 +192,10 @@ func InitOptionMap() {
 func loadOptionsFromDatabase() {
 	options, _ := AllOption()
 	for _, option := range options {
+		if err := validateOptionValue(option.Key, option.Value); err != nil {
+			common.SysLog("ignored invalid option " + option.Key + ": " + err.Error())
+			continue
+		}
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
@@ -206,6 +212,14 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	switch key {
+	case "QuotaPerUnit", "USDExchangeRate", "general_setting.custom_currency_exchange_rate":
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil || parsed <= 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			return fmt.Errorf("%s must be a finite number greater than 0", key)
+		}
+		return nil
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}

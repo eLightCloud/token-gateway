@@ -58,7 +58,9 @@ import { safeNumberFieldProps } from '../utils/numeric-field'
 const createPricingSchema = (t: (key: string) => string) =>
   z
     .object({
-      QuotaPerUnit: z.coerce.number().min(0, t('Value must be at least 0')),
+      QuotaPerUnit: z.coerce
+        .number()
+        .positive(t('Value must be greater than 0')),
       USDExchangeRate: z.coerce
         .number()
         .min(0.0001, t('Exchange rate must be greater than 0')),
@@ -238,9 +240,7 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
                     <FormLabel>
                       {displayType === 'CNY'
                         ? t('CNY per USD')
-                        : displayType === 'USD'
-                          ? t('USD Exchange Rate')
-                          : t('USD Exchange Rate')}
+                        : t('USD Exchange Rate')}
                     </FormLabel>
                     <FormControl>
                       <Input

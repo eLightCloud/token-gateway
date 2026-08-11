@@ -5302,6 +5302,7 @@
     "Value is required": "La valeur est obligatoire",
     "Value metric": "Métrique de valeur",
     "Value must be at least 0": "La valeur doit être au moins 0",
+    "Value must be greater than 0": "La valeur doit être supérieure à 0",
     "Value Regex": "Regex de valeur",
     "variable": "variable",
     "variable) *": "variable) *",

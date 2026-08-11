@@ -5302,6 +5302,7 @@
     "Value is required": "値は必須です",
     "Value metric": "値の指標",
     "Value must be at least 0": "値は 0 以上である必要があります",
+    "Value must be greater than 0": "値は 0 より大きくする必要があります",
     "Value Regex": "Value 正規表現",
     "variable": "変数",
     "variable) *": "変数) *",

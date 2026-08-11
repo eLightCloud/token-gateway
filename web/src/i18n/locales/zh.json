@@ -5302,6 +5302,7 @@
     "Value is required": "值为必填项",
     "Value metric": "数值口径",
     "Value must be at least 0": "值必须至少为 0",
+    "Value must be greater than 0": "值必须大于 0",
     "Value Regex": "Value 正则",
     "variable": "变量",
     "variable) *": "变量) *",

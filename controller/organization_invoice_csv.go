@@ -93,6 +93,22 @@ func writeOrganizationInvoiceCSV(
 		amountFormatter.amount(invoice.SettledTotalAmountUSD),
 	)
 	_ = writer.Write(categoryTotal)
+	topUpAmounts := []string{"用户当期成功充值订单金额"}
+	currentBalances := []string{"用户导出时剩余金额"}
+	for _, account := range invoice.Accounts {
+		topUpAmounts = append(
+			topUpAmounts,
+			amountFormatter.amount(exportContext.AccountSuccessfulTopUpAmountsUSD[account.UserId]),
+		)
+		currentBalances = append(
+			currentBalances,
+			amountFormatter.amount(exportContext.AccountCurrentBalanceAmountsUSD[account.UserId]),
+		)
+	}
+	topUpAmounts = append(topUpAmounts, "", "", "")
+	currentBalances = append(currentBalances, "", "", "")
+	_ = writer.Write(topUpAmounts)
+	_ = writer.Write(currentBalances)
 	_ = writer.Write([]string{})
 
 	modelDisplayNameHeader := []string{"真实姓名"}

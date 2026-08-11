@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
@@ -130,6 +131,8 @@ func setupOrganizationE2E(t *testing.T) (organizationE2EFixture, *gin.Engine) {
 		&model.Organization{},
 		&model.OrganizationMember{},
 		&model.OrganizationBillingSettlementRule{},
+		&model.TopUp{},
+		&model.SubscriptionOrder{},
 		&model.Token{},
 		&model.Channel{},
 		&model.Ability{},
@@ -1021,6 +1024,26 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	conflictBody := decodeOrganizationE2EResponse(t, conflictResponse)
 	assert.False(t, conflictBody.Success)
 	assert.Contains(t, conflictBody.Message, "version conflict")
+	rechargeTime := time.Date(2026, 7, 15, 12, 0, 0, 0, time.FixedZone(model.OrganizationInvoiceTimezone, 8*60*60)).Unix()
+	require.NoError(t, model.DB.Create(&[]model.TopUp{
+		{
+			UserId:          1001,
+			Amount:          2,
+			Money:           1.25,
+			TradeNo:         "organization-e2e-stripe-topup",
+			PaymentProvider: model.PaymentProviderStripe,
+			CompleteTime:    rechargeTime,
+			Status:          common.TopUpStatusSuccess,
+		},
+		{
+			UserId:          1002,
+			Amount:          2,
+			Money:           1.8,
+			TradeNo:         "organization-e2e-epay-unclassifiable",
+			PaymentProvider: model.PaymentProviderEpay,
+			Status:          common.TopUpStatusSuccess,
+		},
+	}).Error)
 
 	exportResponse := performOrganizationE2ERequest(
 		t,
@@ -1050,17 +1073,38 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	exportRecords, err := exportReader.ReadAll()
 	require.NoError(t, err)
 	var categoryHeader []string
+	var topUpAmounts []string
+	var currentBalances []string
 	for _, record := range exportRecords {
-		if len(record) > 0 && record[0] == "模型类别" {
+		if len(record) == 0 {
+			continue
+		}
+		switch record[0] {
+		case "模型类别":
 			categoryHeader = record
-			break
+		case "用户当期成功充值订单金额":
+			topUpAmounts = record
+		case "用户导出时剩余金额":
+			currentBalances = record
 		}
 	}
 	require.NotNil(t, categoryHeader)
+	require.NotNil(t, topUpAmounts)
+	require.NotNil(t, currentBalances)
 	assert.Contains(t, categoryHeader, "org-admin")
 	assert.Contains(t, categoryHeader, "org-member")
 	assert.NotContains(t, categoryHeader, "org-admin display")
 	assert.NotContains(t, categoryHeader, "org-member display")
+	for column, username := range categoryHeader {
+		switch username {
+		case "org-admin":
+			assert.Equal(t, "1.250000", topUpAmounts[column])
+			assert.Equal(t, "0.040000", currentBalances[column])
+		case "org-member":
+			assert.Equal(t, "0.000000", topUpAmounts[column])
+			assert.Equal(t, "0.020000", currentBalances[column])
+		}
+	}
 	assert.NotContains(t, exportResponse.Body.String(), "组织 ID")
 	assert.NotContains(t, exportResponse.Body.String(), "时区")
 	assert.NotContains(t, exportResponse.Body.String(), "时间戳")
