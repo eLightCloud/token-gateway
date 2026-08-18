@@ -85,7 +85,8 @@ export const organizationKeys = {
     ['admin', 'organizations', id, 'billing', 'trend', params] as const,
   adminLogs: (id: number, params: OrganizationUsageParams) =>
     ['admin', 'organizations', id, 'billing', 'logs', params] as const,
-  filterOptions: ['organization', 'billing', 'filter-options'] as const,
+  filterOptions: (includeChannels: boolean) =>
+    ['organization', 'billing', 'filter-options', includeChannels] as const,
   adminFilterOptions: (id: number) =>
     ['admin', 'organizations', id, 'billing', 'filter-options'] as const,
 }
@@ -225,13 +226,20 @@ export async function getOrganizationBillingChannels(
   return res.data
 }
 
-export async function getOrganizationBillingFilterOptions(): Promise<
-  ApiResponse<OrganizationBillingFilterOptions>
-> {
+export async function getOrganizationBillingFilterOptions(
+  includeChannels: boolean
+): Promise<ApiResponse<OrganizationBillingFilterOptions>> {
+  const channelsRequest: Promise<ApiResponse<OrganizationDimensionRow[]>> =
+    includeChannels
+      ? getOrganizationBillingChannels({})
+      : Promise.resolve({
+          success: true,
+          data: [] as OrganizationDimensionRow[],
+        })
   const [members, models, channels] = await Promise.all([
     getOrganizationBillingMembers({}),
     getOrganizationBillingModels({}),
-    getOrganizationBillingChannels({}),
+    channelsRequest,
   ])
   const failed = [members, models, channels].find(
     (response) => !response.success

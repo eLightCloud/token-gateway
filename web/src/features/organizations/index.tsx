@@ -136,6 +136,7 @@ import {
   formatTimestampInBeijingTime,
   unixTimestampToBeijingDateInput,
 } from './beijing-time'
+import { canViewOrganizationBillingChannels } from './billing-visibility'
 import { OrganizationInvoicePanel } from './invoice'
 import {
   ORGANIZATION_STATUS_DISABLED,
@@ -1537,10 +1538,11 @@ export function OrganizationUsagePage() {
   const self = contextQuery.data?.data
   const role = self?.member.role
   const enabled = Boolean(self && canViewBilling(role))
+  const canViewChannels = canViewOrganizationBillingChannels(role)
 
   const filterOptionsQuery = useQuery({
-    queryKey: organizationKeys.filterOptions,
-    queryFn: getOrganizationBillingFilterOptions,
+    queryKey: organizationKeys.filterOptions(canViewChannels),
+    queryFn: () => getOrganizationBillingFilterOptions(canViewChannels),
     enabled,
   })
 
@@ -1562,7 +1564,7 @@ export function OrganizationUsagePage() {
   const channelsQuery = useQuery({
     queryKey: organizationKeys.channels(filters.params),
     queryFn: () => getOrganizationBillingChannels(filters.params),
-    enabled,
+    enabled: enabled && canViewChannels,
   })
 
   if (contextQuery.isLoading) return <LoadingBlock label={t('Loading...')} />
@@ -1574,7 +1576,7 @@ export function OrganizationUsagePage() {
     void summaryQuery.refetch()
     void trendQuery.refetch()
     void modelsQuery.refetch()
-    void channelsQuery.refetch()
+    if (canViewChannels) void channelsQuery.refetch()
   }
 
   return (
@@ -1594,7 +1596,7 @@ export function OrganizationUsagePage() {
             filters={filters}
             options={filterOptionsQuery.data?.data}
             showMemberFilter={role === 'admin'}
-            showChannelFilter
+            showChannelFilter={canViewChannels}
             onRefresh={refresh}
             exportHint={t('Export includes raw log content and request IDs')}
             onExport={() => {
@@ -1616,13 +1618,15 @@ export function OrganizationUsagePage() {
                 showPricing
               />
             </Panel>
-            <Panel title={t('Channel usage')}>
-              <DimensionTable
-                rows={channelsQuery.data?.data}
-                nameLabel={t('Channel')}
-                totalQuota={summaryQuery.data?.data?.total_quota}
-              />
-            </Panel>
+            {canViewChannels ? (
+              <Panel title={t('Channel usage')}>
+                <DimensionTable
+                  rows={channelsQuery.data?.data}
+                  nameLabel={t('Channel')}
+                  totalQuota={summaryQuery.data?.data?.total_quota}
+                />
+              </Panel>
+            ) : null}
           </div>
         </div>
       </SectionPageLayout.Content>
@@ -1807,8 +1811,8 @@ export function OrganizationLogsPage() {
   const enabled = Boolean(self && canViewBilling(role))
 
   const filterOptionsQuery = useQuery({
-    queryKey: organizationKeys.filterOptions,
-    queryFn: getOrganizationBillingFilterOptions,
+    queryKey: organizationKeys.filterOptions(false),
+    queryFn: () => getOrganizationBillingFilterOptions(false),
     enabled,
   })
 

@@ -1161,40 +1161,50 @@ func ManageUser(c *gin.Context) {
 		}
 		user.Role = common.RoleCommonUser
 	case "add_quota":
+		var adjustmentResult *model.AdminUserQuotaAdjustmentResult
 		switch req.Mode {
 		case "add":
 			if req.Value <= 0 {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
 				return
 			}
-			if err := model.IncreaseUserQuota(user.Id, req.Value, true); err != nil {
+			adjustmentResult, err = model.ApplyAdminUserQuotaAdjustment(user.Id, c.GetInt("id"), req.Mode, req.Value)
+			if err != nil {
 				common.ApiError(c, err)
 				return
 			}
 			recordManageAuditFor(c, user.Id, "user.quota_add", map[string]interface{}{
-				"quota": logger.LogQuota(req.Value),
+				"quota":         logger.LogQuota(req.Value),
+				"quota_value":   req.Value,
+				"adjustment_id": adjustmentResult.AdjustmentId,
 			})
 		case "subtract":
 			if req.Value <= 0 {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
 				return
 			}
-			if err := model.DecreaseUserQuota(user.Id, req.Value, true); err != nil {
+			adjustmentResult, err = model.ApplyAdminUserQuotaAdjustment(user.Id, c.GetInt("id"), req.Mode, req.Value)
+			if err != nil {
 				common.ApiError(c, err)
 				return
 			}
 			recordManageAuditFor(c, user.Id, "user.quota_subtract", map[string]interface{}{
-				"quota": logger.LogQuota(req.Value),
+				"quota":         logger.LogQuota(req.Value),
+				"quota_value":   req.Value,
+				"adjustment_id": adjustmentResult.AdjustmentId,
 			})
 		case "override":
-			oldQuota := user.Quota
-			if err := model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("quota", req.Value).Error; err != nil {
+			adjustmentResult, err = model.ApplyAdminUserQuotaAdjustment(user.Id, c.GetInt("id"), req.Mode, req.Value)
+			if err != nil {
 				common.ApiError(c, err)
 				return
 			}
 			recordManageAuditFor(c, user.Id, "user.quota_override", map[string]interface{}{
-				"from": logger.LogQuota(oldQuota),
-				"to":   logger.LogQuota(req.Value),
+				"from":          logger.LogQuota(adjustmentResult.PreviousQuota),
+				"to":            logger.LogQuota(adjustmentResult.CurrentQuota),
+				"from_value":    adjustmentResult.PreviousQuota,
+				"to_value":      adjustmentResult.CurrentQuota,
+				"adjustment_id": adjustmentResult.AdjustmentId,
 			})
 		default:
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)

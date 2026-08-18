@@ -9,8 +9,8 @@ import (
 )
 
 type organizationInvoiceExportFinancials struct {
-	successfulTopUpAmountsUSD map[int]string
-	currentBalanceAmountsUSD  map[int]string
+	successfulTopUpAndAdjustmentAmountsUSD map[int]string
+	currentBalanceAmountsUSD               map[int]string
 }
 
 func organizationInvoiceTopUpAmountUSD(topUp TopUp) (decimal.Decimal, bool) {
@@ -44,8 +44,8 @@ func getOrganizationInvoiceExportFinancials(
 	balanceAmounts := make(map[int]string, len(accounts))
 	if len(accounts) == 0 {
 		return &organizationInvoiceExportFinancials{
-			successfulTopUpAmountsUSD: topUpAmounts,
-			currentBalanceAmountsUSD:  balanceAmounts,
+			successfulTopUpAndAdjustmentAmountsUSD: topUpAmounts,
+			currentBalanceAmountsUSD:               balanceAmounts,
 		}, nil
 	}
 
@@ -60,7 +60,6 @@ func getOrganizationInvoiceExportFinancials(
 		}
 		userIdSet[account.UserId] = struct{}{}
 		userIds = append(userIds, account.UserId)
-		topUpAmounts[account.UserId] = decimal.Zero.StringFixed(10)
 	}
 
 	var users []struct {
@@ -118,12 +117,32 @@ func getOrganizationInvoiceExportFinancials(
 		}
 		amounts[topUp.UserId] = amounts[topUp.UserId].Add(amount)
 	}
-	for userId, amount := range amounts {
+
+	var adjustments []UserQuotaAdjustment
+	if err := DB.Model(&UserQuotaAdjustment{}).
+		Select("user_id", "delta_quota").
+		Where("user_id IN ?", userIds).
+		Where("created_at >= ? AND created_at < ?", period.StartTimestamp, endExclusive).
+		Find(&adjustments).Error; err != nil {
+		return nil, err
+	}
+	adjustmentQuotas := make(map[int]int64, len(userIds))
+	for _, adjustment := range adjustments {
+		current := adjustmentQuotas[adjustment.UserId]
+		delta := int64(adjustment.DeltaQuota)
+		if (delta > 0 && current > math.MaxInt64-delta) ||
+			(delta < 0 && current < math.MinInt64-delta) {
+			return nil, fmt.Errorf("organization invoice user quota adjustment overflow for user %d", adjustment.UserId)
+		}
+		adjustmentQuotas[adjustment.UserId] = current + delta
+	}
+	for _, userId := range userIds {
+		amount := amounts[userId].Add(organizationInvoiceAmountFromQuota(adjustmentQuotas[userId]))
 		topUpAmounts[userId] = amount.StringFixed(10)
 	}
 
 	return &organizationInvoiceExportFinancials{
-		successfulTopUpAmountsUSD: topUpAmounts,
-		currentBalanceAmountsUSD:  balanceAmounts,
+		successfulTopUpAndAdjustmentAmountsUSD: topUpAmounts,
+		currentBalanceAmountsUSD:               balanceAmounts,
 	}, nil
 }

@@ -32,7 +32,7 @@ func setupManageUserTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	model.DB, model.LOG_DB = db, db
 	require.NoError(t, db.AutoMigrate(
-		&model.User{}, &model.UserSession{}, &model.Log{}, &model.CasbinRule{}, &model.AuthzRole{},
+		&model.User{}, &model.UserQuotaAdjustment{}, &model.UserSession{}, &model.Log{}, &model.CasbinRule{}, &model.AuthzRole{},
 	))
 
 	t.Cleanup(func() {
@@ -158,4 +158,34 @@ func TestManageUserDeleteReturnsImmediatelyAndUnknownActionFails(t *testing.T) {
 	require.NoError(t, db.First(&unchanged, unchanged.Id).Error)
 	assert.EqualValues(t, 1, unchanged.AuthVersion)
 	assert.Equal(t, common.UserStatusEnabled, unchanged.Status)
+}
+
+func TestManageUserQuotaAdjustmentPersistsInvoiceFact(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	target := model.User{
+		Username: "quota-target",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Quota:    1_000_000,
+	}
+	require.NoError(t, db.Create(&target).Error)
+
+	recorder := performManageUserRequest(t, fmt.Sprintf(
+		`{"id":%d,"action":"add_quota","mode":"add","value":500000}`,
+		target.Id,
+	))
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+
+	var updated model.User
+	require.NoError(t, db.Select("quota").First(&updated, target.Id).Error)
+	assert.Equal(t, 1_500_000, updated.Quota)
+
+	var adjustment model.UserQuotaAdjustment
+	require.NoError(t, db.Where("user_id = ?", target.Id).First(&adjustment).Error)
+	assert.Equal(t, 9999, adjustment.OperatorUserId)
+	assert.Equal(t, 500_000, adjustment.DeltaQuota)
+	assert.Equal(t, 1_000_000, adjustment.BalanceBefore)
+	assert.Equal(t, 1_500_000, adjustment.BalanceAfter)
 }

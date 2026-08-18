@@ -131,6 +131,7 @@ func setupOrganizationE2E(t *testing.T) (organizationE2EFixture, *gin.Engine) {
 		&model.Organization{},
 		&model.OrganizationMember{},
 		&model.OrganizationBillingSettlementRule{},
+		&model.UserQuotaAdjustment{},
 		&model.TopUp{},
 		&model.SubscriptionOrder{},
 		&model.Token{},
@@ -291,6 +292,7 @@ func registerOrganizationE2ERoutes(router *gin.Engine) {
 		adminOrganizationRoute.POST("/:id/members/:user_id/billing-start/preview", AdminPreviewOrganizationMemberBillingStart)
 		adminOrganizationRoute.POST("/:id/members/:user_id/billing-start", AdminUpdateOrganizationMemberBillingStart)
 		adminOrganizationRoute.GET("/:id/billing/summary", AdminGetOrganizationBillingSummary)
+		adminOrganizationRoute.GET("/:id/billing/channels", AdminGetOrganizationBillingChannels)
 		adminOrganizationRoute.GET("/:id/invoice", AdminGetOrganizationInvoice)
 		adminOrganizationRoute.GET("/:id/invoice/export", AdminExportOrganizationInvoice)
 		adminOrganizationRoute.GET("/:id/invoice/settlement-rules", AdminGetOrganizationSettlementRules)
@@ -547,6 +549,13 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 	assert.Equal(t, 2, memberSummary.RequestCount)
 	assert.Equal(t, 1, memberSummary.MemberCount)
 
+	memberChannelFilteredSummaryResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/summary?"+billingWindow+"&channel=7", nil,
+	))
+	memberChannelFilteredSummary := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, memberChannelFilteredSummaryResponse)
+	assert.Equal(t, 300, memberChannelFilteredSummary.TotalQuota, "member channel filters must be ignored")
+	assert.Equal(t, 2, memberChannelFilteredSummary.RequestCount)
+
 	reconciliationResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/summary?"+billingWindow+"&view=reconciliation", nil,
 	))
@@ -587,6 +596,31 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 	assert.Equal(t, 300, channels[0].TotalQuota)
 	assert.Equal(t, 7, channels[1].ChannelId)
 	assert.Equal(t, "primary-openai", channels[1].ChannelName)
+
+	systemAdminChannelsResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1000, http.MethodGet,
+		fmt.Sprintf("/api/admin/organizations/%d/billing/channels?%s", fixture.Organization.Id, billingWindow), nil,
+	))
+	systemAdminChannels := decodeOrganizationE2EData[[]model.OrganizationBillingDimension](t, systemAdminChannelsResponse)
+	require.Len(t, systemAdminChannels, 2)
+	assert.Equal(t, "fallback-openai", systemAdminChannels[0].ChannelName)
+	assert.Equal(t, "primary-openai", systemAdminChannels[1].ChannelName)
+
+	memberChannelsResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/channels?"+billingWindow, nil,
+	))
+	memberChannels := decodeOrganizationE2EData[[]model.OrganizationBillingDimension](t, memberChannelsResponse)
+	assert.Empty(t, memberChannels, "members must not receive channel usage")
+
+	memberLogsResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/logs?"+billingWindow+"&p=1&page_size=20", nil,
+	))
+	memberLogs := decodeOrganizationE2EData[organizationE2EPage[map[string]any]](t, memberLogsResponse)
+	require.Len(t, memberLogs.Items, 2)
+	for _, item := range memberLogs.Items {
+		assert.NotContains(t, item, "channel")
+		assert.NotContains(t, item, "channel_name")
+	}
 
 	trendResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/trend?"+billingWindow, nil,
@@ -859,6 +893,23 @@ func TestOrganizationE2EBillingStartExportsBackfill(t *testing.T) {
 	assert.Contains(t, fullBody, "org-member")
 	assert.NotContains(t, fullBody, "org-admin display")
 	assert.NotContains(t, fullBody, "org-member display")
+
+	memberLogsExport := performOrganizationE2ERequest(t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/logs/export?"+backfillWindow, nil)
+	require.Equal(t, http.StatusOK, memberLogsExport.Code)
+	memberLogsBody := memberLogsExport.Body.String()
+	assert.NotContains(t, memberLogsBody, "channel_id")
+	assert.NotContains(t, memberLogsBody, "channel_name")
+	assert.NotContains(t, memberLogsBody, "fallback-openai")
+	assert.NotContains(t, memberLogsBody, "primary-openai")
+
+	memberFullExport := performOrganizationE2ERequest(t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/export?"+backfillWindow, nil)
+	require.Equal(t, http.StatusOK, memberFullExport.Code)
+	memberFullBody := memberFullExport.Body.String()
+	assert.Contains(t, memberFullBody, "# 账单汇总")
+	assert.Contains(t, memberFullBody, "# 消费明细")
+	assert.NotContains(t, memberFullBody, "# 渠道用量")
+	assert.NotContains(t, memberFullBody, "fallback-openai")
+	assert.NotContains(t, memberFullBody, "primary-openai")
 }
 
 func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {

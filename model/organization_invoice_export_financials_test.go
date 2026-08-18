@@ -95,14 +95,20 @@ func TestGetOrganizationInvoiceExportFinancialsFiltersAndAlignsAccounts(t *testi
 		CompleteTime:    inPeriod,
 		Status:          common.TopUpStatusSuccess,
 	}).Error)
+	require.NoError(t, DB.Create(&[]UserQuotaAdjustment{
+		{UserId: 10, OperatorUserId: 1, DeltaQuota: 500_000, BalanceBefore: 1_250_000, BalanceAfter: 1_750_000, Mode: UserQuotaAdjustmentModeAdd, CreatedAt: inPeriod},
+		{UserId: 10, OperatorUserId: 1, DeltaQuota: -250_000, BalanceBefore: 1_750_000, BalanceAfter: 1_500_000, Mode: UserQuotaAdjustmentModeSubtract, CreatedAt: atPeriodEnd},
+		{UserId: 11, OperatorUserId: 1, DeltaQuota: -2_500_000, BalanceBefore: 250_000, BalanceAfter: -2_250_000, Mode: UserQuotaAdjustmentModeSubtract, CreatedAt: inPeriod},
+		{UserId: 10, OperatorUserId: 1, DeltaQuota: 9_000_000, BalanceBefore: 1_500_000, BalanceAfter: 10_500_000, Mode: UserQuotaAdjustmentModeAdd, CreatedAt: afterPeriod},
+	}).Error)
 
 	financials, err := getOrganizationInvoiceExportFinancials([]OrganizationInvoiceAccount{
 		{UserId: 11, Username: "member"},
 		{UserId: 10, Username: "owner"},
 	}, period)
 	require.NoError(t, err)
-	assert.Equal(t, "4.7500000000", financials.successfulTopUpAmountsUSD[10])
-	assert.Equal(t, "4.0000000000", financials.successfulTopUpAmountsUSD[11])
+	assert.Equal(t, "5.2500000000", financials.successfulTopUpAndAdjustmentAmountsUSD[10])
+	assert.Equal(t, "-1.0000000000", financials.successfulTopUpAndAdjustmentAmountsUSD[11])
 	assert.Equal(t, "2.5000000000", financials.currentBalanceAmountsUSD[10])
 	assert.Equal(t, "0.5000000000", financials.currentBalanceAmountsUSD[11])
 }

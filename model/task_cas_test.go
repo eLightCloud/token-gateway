@@ -40,6 +40,7 @@ func TestMain(m *testing.M) {
 		&Organization{},
 		&OrganizationMember{},
 		&OrganizationBillingSettlementRule{},
+		&UserQuotaAdjustment{},
 		&UserSession{},
 		&AuthFlow{},
 		&ExternalIdentityClaim{},
@@ -72,6 +73,7 @@ func truncateTables(t *testing.T) {
 	t.Cleanup(func() {
 		DB.Exec("DELETE FROM tasks")
 		DB.Exec("DELETE FROM organization_billing_settlement_rules")
+		DB.Exec("DELETE FROM user_quota_adjustments")
 		DB.Exec("DELETE FROM organization_members")
 		DB.Exec("DELETE FROM organizations")
 		DB.Exec("DELETE FROM auth_flows")

@@ -101,7 +101,9 @@ func scopedCurrentOrganizationBillingFilters(c *gin.Context) (int, model.Organiz
 	}
 	if !canViewAll {
 		filters.UserId = c.GetInt("id")
+		filters.ChannelId = 0
 	}
+	setOrganizationBillingChannelVisibility(c, canViewAll)
 	return current.Organization.Id, filters, true
 }
 
@@ -277,6 +279,10 @@ func GetCurrentOrganizationBillingChannels(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !canViewCurrentOrganizationBillingChannels(c) {
+		common.ApiSuccess(c, []model.OrganizationBillingDimension{})
+		return
+	}
 	items, err := model.GetOrganizationBillingChannels(organizationId, filters)
 	if err != nil {
 		common.ApiError(c, err)
@@ -309,6 +315,12 @@ func GetCurrentOrganizationBillingLogs(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if !canViewCurrentOrganizationBillingChannels(c) {
+		pageInfo.SetTotal(int(total))
+		pageInfo.SetItems(organizationBillingLogsWithoutChannels(logs))
+		common.ApiSuccess(c, pageInfo)
+		return
+	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
@@ -317,6 +329,10 @@ func GetCurrentOrganizationBillingLogs(c *gin.Context) {
 func ExportCurrentOrganizationBillingLogs(c *gin.Context) {
 	organizationId, filters, ok := scopedCurrentOrganizationBillingFilters(c)
 	if !ok {
+		return
+	}
+	if !canViewCurrentOrganizationBillingChannels(c) {
+		exportOrganizationBillingLogsWithoutChannels(c, organizationId, filters)
 		return
 	}
 	exportOrganizationBillingLogs(c, organizationId, filters)
@@ -333,6 +349,10 @@ func ExportCurrentOrganizationBillingDisplayLogs(c *gin.Context) {
 func ExportCurrentOrganizationBilling(c *gin.Context) {
 	organizationId, filters, ok := scopedCurrentOrganizationBillingFilters(c)
 	if !ok {
+		return
+	}
+	if !canViewCurrentOrganizationBillingChannels(c) {
+		exportOrganizationBillingWithoutChannels(c, organizationId, filters)
 		return
 	}
 	exportOrganizationBilling(c, organizationId, filters)

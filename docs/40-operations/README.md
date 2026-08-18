@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-08-09
+last-reviewed: 2026-08-14
 ---
 
 # 40-operations — 目标说明
@@ -15,6 +15,8 @@ last-reviewed: 2026-08-09
 当前组织账单候选版本的发布、历史归属回填、Invoice 验证和回滚流程见 [运维手册](./运维手册.md)。
 
 客户断开后继续读取上游文本流的发布观测、故障处置和回滚同样见 [运维手册](./运维手册.md)，指标语义见 [监控告警](./监控告警.md)。
+
+客户从创建 API Key 到使用 OpenAI 兼容 SDK 完成调用的步骤见 [客户 API 接入指南](./客户API接入指南.md)。
 
 ## 不放什么
 - 本地开发命令 -> 30-engineering/命令清单.md

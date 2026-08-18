@@ -98,7 +98,7 @@ func writeOrganizationInvoiceCSV(
 	for _, account := range invoice.Accounts {
 		topUpAmounts = append(
 			topUpAmounts,
-			amountFormatter.amount(exportContext.AccountSuccessfulTopUpAmountsUSD[account.UserId]),
+			amountFormatter.amount(exportContext.AccountTopUpAndAdjustmentAmountsUSD[account.UserId]),
 		)
 		currentBalances = append(
 			currentBalances,

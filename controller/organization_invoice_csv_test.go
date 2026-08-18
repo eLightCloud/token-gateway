@@ -55,7 +55,7 @@ func TestWriteOrganizationInvoiceCSVUsesReconciliationContract(t *testing.T) {
 		AccountDisplayNames: map[int]string{
 			11: "张宇",
 		},
-		AccountSuccessfulTopUpAmountsUSD: map[int]string{
+		AccountTopUpAndAdjustmentAmountsUSD: map[int]string{
 			11: "12.5",
 			12: "3",
 		},
