@@ -59,7 +59,7 @@ type OrganizationBillingFilters struct {
 }
 
 type OrganizationBillingSummary struct {
-	TotalQuota        int `json:"total_quota"`
+	TotalQuota        int64 `json:"total_quota"`
 	RequestCount      int `json:"request_count"`
 	PromptTokens      int `json:"prompt_tokens"`
 	CompletionTokens  int `json:"completion_tokens"`
@@ -74,7 +74,7 @@ type OrganizationBillingDimension struct {
 	ModelName        string           `json:"model_name,omitempty"`
 	ChannelId        int              `json:"channel_id,omitempty"`
 	ChannelName      string           `json:"channel_name,omitempty"`
-	TotalQuota       int              `json:"total_quota"`
+	TotalQuota       int64            `json:"total_quota"`
 	RequestCount     int              `json:"request_count"`
 	PromptTokens     int              `json:"prompt_tokens"`
 	CompletionTokens int              `json:"completion_tokens"`
@@ -92,7 +92,7 @@ type PricingSnapshot struct {
 
 type OrganizationBillingTrendPoint struct {
 	Period           string `json:"period"`
-	TotalQuota       int    `json:"total_quota"`
+	TotalQuota       int64  `json:"total_quota"`
 	RequestCount     int    `json:"request_count"`
 	PromptTokens     int    `json:"prompt_tokens"`
 	CompletionTokens int    `json:"completion_tokens"`
@@ -523,7 +523,7 @@ func applyOrganizationLogFilters(tx *gorm.DB, member OrganizationMember, filters
 }
 
 type organizationLogAggregate struct {
-	TotalQuota       int
+	TotalQuota       int64
 	RequestCount     int
 	PromptTokens     int
 	CompletionTokens int
@@ -802,7 +802,7 @@ func GetOrganizationBillingTrend(organizationId int, filters OrganizationBilling
 
 type organizationTrendAggregate struct {
 	PeriodBucket     int64 `gorm:"column:period_bucket"`
-	TotalQuota       int
+	TotalQuota       int64
 	RequestCount     int
 	PromptTokens     int
 	CompletionTokens int
@@ -1088,14 +1088,14 @@ type OrganizationBillingStartPreview struct {
 	LatestLogAt           int64 `json:"latest_log_at"`
 	EarliestRetainedAt    int64 `json:"earliest_retained_at"`
 	AddedRequestCount     int   `json:"added_request_count"`
-	AddedQuota            int   `json:"added_quota"`
+	AddedQuota            int64 `json:"added_quota"`
 	AddedPromptTokens     int   `json:"added_prompt_tokens"`
 	AddedCompletionTokens int   `json:"added_completion_tokens"`
 	Conflict              bool  `json:"conflict"`
 }
 
 type organizationBillingStartPreviewRow struct {
-	TotalQuota       int
+	TotalQuota       int64
 	RequestCount     int
 	PromptTokens     int
 	CompletionTokens int
@@ -1267,7 +1267,7 @@ type OrganizationBillingStartUpdateResult struct {
 	Member                OrganizationMember
 	Changed               bool
 	AddedRequestCount     int
-	AddedQuota            int
+	AddedQuota            int64
 	AddedPromptTokens     int
 	AddedCompletionTokens int
 	EarliestLogAt         int64

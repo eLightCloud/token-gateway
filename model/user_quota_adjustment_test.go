@@ -41,7 +41,7 @@ func TestApplyAdminUserQuotaAdjustmentPersistsExactWalletDeltas(t *testing.T) {
 	var adjustments []UserQuotaAdjustment
 	require.NoError(t, DB.Where("user_id = ?", 20).Order("id").Find(&adjustments).Error)
 	require.Len(t, adjustments, 3)
-	assert.Equal(t, []int{500_000, -250_000, 750_000}, []int{
+	assert.Equal(t, []int64{500_000, -250_000, 750_000}, []int64{
 		adjustments[0].DeltaQuota,
 		adjustments[1].DeltaQuota,
 		adjustments[2].DeltaQuota,

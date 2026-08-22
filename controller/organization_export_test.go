@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"encoding/csv"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -23,20 +24,20 @@ func TestWriteOrganizationBillingCsvIncludesConsumptionAmountContract(t *testing
 	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
 
 	data := organizationBillingExportData{
-		Summary: &model.OrganizationBillingSummary{TotalQuota: int(common.QuotaPerUnit)},
+		Summary: &model.OrganizationBillingSummary{TotalQuota: int64(common.QuotaPerUnit)},
 		Members: []model.OrganizationBillingDimension{{
 			UserId:      11,
 			Username:    "alice",
 			DisplayName: "Alice Zhang",
-			TotalQuota:  int(common.QuotaPerUnit) / 2,
+			TotalQuota:  int64(common.QuotaPerUnit) / 2,
 		}},
 		Models: []model.OrganizationBillingDimension{{
 			ModelName:  "gpt-test",
-			TotalQuota: int(common.QuotaPerUnit),
+			TotalQuota: int64(common.QuotaPerUnit),
 			Pricing:    &model.PricingSnapshot{QuotaType: 1, ModelPrice: 0.01},
 		}},
-		Channels: []model.OrganizationBillingDimension{{ChannelName: "primary", TotalQuota: int(common.QuotaPerUnit)}},
-		Trend:    []model.OrganizationBillingTrendPoint{{Period: "2026-07-15", TotalQuota: int(common.QuotaPerUnit)}},
+		Channels: []model.OrganizationBillingDimension{{ChannelName: "primary", TotalQuota: int64(common.QuotaPerUnit)}},
+		Trend:    []model.OrganizationBillingTrendPoint{{Period: "2026-07-15", TotalQuota: int64(common.QuotaPerUnit)}},
 		Logs:     []*model.Log{{Username: "alice", ModelName: "gpt-test", ChannelName: "primary", Quota: int(common.QuotaPerUnit)}},
 	}
 
@@ -60,6 +61,46 @@ func TestWriteOrganizationBillingCsvIncludesConsumptionAmountContract(t *testing
 	assert.Contains(t, exported, "alice,A*********g")
 	assert.NotContains(t, exported, "Alice Zhang")
 	assert.False(t, strings.Contains(exported, "金额,$"), "amount must remain numeric for spreadsheet aggregation")
+}
+
+func TestOrganizationBillingCsvPreservesAggregateQuotaAboveInt32(t *testing.T) {
+	originalGeneralSetting := *operation_setting.GetGeneralSetting()
+	originalQuotaPerUnit := common.QuotaPerUnit
+	t.Cleanup(func() {
+		*operation_setting.GetGeneralSetting() = originalGeneralSetting
+		common.QuotaPerUnit = originalQuotaPerUnit
+	})
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+	common.QuotaPerUnit = 500_000
+
+	quotaAboveInt32 := int64(math.MaxInt32) + 1
+	data := organizationBillingExportData{
+		Summary: &model.OrganizationBillingSummary{TotalQuota: quotaAboveInt32},
+	}
+	amountFormatter, err := service.NewBillingExportAmountFormatter(6)
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name  string
+		write func(*csv.Writer, organizationBillingExportData, service.BillingExportAmountFormatter)
+	}{
+		{name: "full export", write: writeOrganizationBillingCsv},
+		{name: "export without channels", write: writeOrganizationBillingCsvWithoutChannels},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			writer := csv.NewWriter(&buffer)
+			testCase.write(writer, data, amountFormatter)
+			writer.Flush()
+			require.NoError(t, writer.Error())
+
+			exported := buffer.String()
+			assert.Contains(t, exported, "消费金额,4294.967296")
+			assert.Contains(t, exported, "消费额度(quota),2147483648")
+		})
+	}
 }
 
 func TestWriteOrganizationBillingLogsCsvKeepsLegacyContract(t *testing.T) {

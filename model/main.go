@@ -251,6 +251,9 @@ func InitLogDB() (err error) {
 }
 
 func migrateDB() error {
+	if err := migrateQuotaBalanceColumns(); err != nil {
+		return err
+	}
 	// Migrate price_amount column from float/double to decimal for existing tables
 	migrateSubscriptionPlanPriceAmount()
 	// Migrate model_limits column from varchar to text for existing tables
@@ -300,6 +303,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := verifyQuotaBalanceSchema(); err != nil {
+		return err
+	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -319,6 +325,9 @@ func migrateDB() error {
 }
 
 func migrateDBFast() error {
+	if err := migrateQuotaBalanceColumns(); err != nil {
+		return err
+	}
 
 	var wg sync.WaitGroup
 
@@ -384,6 +393,9 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := verifyQuotaBalanceSchema(); err != nil {
+		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err

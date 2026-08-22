@@ -118,7 +118,7 @@ func setupRedeemFixture(t *testing.T, quota int) (userId int, key string) {
 		Name:        "redeem-test",
 		Key:         key,
 		Status:      common.RedemptionCodeStatusEnabled,
-		Quota:       quota,
+		Quota:       int64(quota),
 		CreatedTime: common.GetTimestamp(),
 	}
 	require.NoError(t, DB.Create(redemption).Error)

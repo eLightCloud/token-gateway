@@ -63,8 +63,8 @@ func getOrganizationInvoiceExportFinancials(
 	}
 
 	var users []struct {
-		Id    int `gorm:"column:id"`
-		Quota int `gorm:"column:quota"`
+		Id    int   `gorm:"column:id"`
+		Quota int64 `gorm:"column:quota"`
 	}
 	if err := DB.Model(&User{}).
 		Select("id", "quota").
@@ -76,7 +76,7 @@ func getOrganizationInvoiceExportFinancials(
 		return nil, fmt.Errorf("organization invoice export account is missing from users")
 	}
 	for _, user := range users {
-		balanceAmounts[user.Id] = organizationInvoiceAmountFromQuota(int64(user.Quota)).StringFixed(10)
+		balanceAmounts[user.Id] = organizationInvoiceAmountFromQuota(user.Quota).StringFixed(10)
 	}
 
 	if period.EndTimestamp == math.MaxInt64 {

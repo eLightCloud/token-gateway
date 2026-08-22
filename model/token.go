@@ -20,12 +20,12 @@ type Token struct {
 	CreatedTime        int64          `json:"created_time" gorm:"bigint"`
 	AccessedTime       int64          `json:"accessed_time" gorm:"bigint"`
 	ExpiredTime        int64          `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
-	RemainQuota        int            `json:"remain_quota" gorm:"default:0"`
+	RemainQuota        int64          `json:"remain_quota" gorm:"type:bigint;default:0"`
 	UnlimitedQuota     bool           `json:"unlimited_quota"`
 	ModelLimitsEnabled bool           `json:"model_limits_enabled"`
 	ModelLimits        string         `json:"model_limits" gorm:"type:text"`
 	AllowIps           *string        `json:"allow_ips" gorm:"default:''"`
-	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
+	UsedQuota          int64          `json:"used_quota" gorm:"type:bigint;default:0"` // used quota
 	Group              string         `json:"group" gorm:"default:''"`
 	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
 	AutoGroups         string         `json:"-" gorm:"type:text"`
@@ -415,13 +415,13 @@ func IncreaseTokenQuota(tokenId int, key string, quota int) (err error) {
 		})
 	}
 	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeTokenQuota, tokenId, quota)
+		addNewRecord(BatchUpdateTypeTokenQuota, tokenId, int64(quota))
 		return nil
 	}
-	return increaseTokenQuota(tokenId, quota)
+	return increaseTokenQuota(tokenId, int64(quota))
 }
 
-func increaseTokenQuota(id int, quota int) (err error) {
+func increaseTokenQuota(id int, quota int64) (err error) {
 	err = DB.Model(&Token{}).Where("id = ?", id).Updates(
 		map[string]interface{}{
 			"remain_quota":  gorm.Expr("remain_quota + ?", quota),
@@ -445,13 +445,13 @@ func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 		})
 	}
 	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeTokenQuota, id, -quota)
+		addNewRecord(BatchUpdateTypeTokenQuota, id, -int64(quota))
 		return nil
 	}
-	return decreaseTokenQuota(id, quota)
+	return decreaseTokenQuota(id, int64(quota))
 }
 
-func decreaseTokenQuota(id int, quota int) (err error) {
+func decreaseTokenQuota(id int, quota int64) (err error) {
 	err = DB.Model(&Token{}).Where("id = ?", id).Updates(
 		map[string]interface{}{
 			"remain_quota":  gorm.Expr("remain_quota - ?", quota),

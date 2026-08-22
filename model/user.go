@@ -92,14 +92,14 @@ type User struct {
 	TelegramId       string                     `json:"telegram_id" gorm:"column:telegram_id;index"`
 	VerificationCode string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
 	AccessToken      *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
-	Quota            int                        `json:"quota" gorm:"type:int;default:0"`
-	UsedQuota        int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
-	RequestCount     int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
+	Quota            int64                      `json:"quota" gorm:"type:bigint;default:0"`
+	UsedQuota        int64                      `json:"used_quota" gorm:"type:bigint;default:0;column:used_quota"` // used quota
+	RequestCount     int                        `json:"request_count" gorm:"type:int;default:0;"`                  // request number
 	Group            string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
 	AffCode          string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount         int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota         int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota  int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
+	AffQuota         int64                      `json:"aff_quota" gorm:"type:bigint;default:0;column:aff_quota"`           // 邀请剩余额度
+	AffHistoryQuota  int64                      `json:"aff_history_quota" gorm:"type:bigint;default:0;column:aff_history"` // 邀请历史额度
 	InviterId        int                        `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
 	DeletedAt        gorm.DeletedAt             `gorm:"index"`
 	LinuxDOId        string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
@@ -520,7 +520,7 @@ func inviteUser(inviterId int) error {
 	return nil
 }
 
-func (user *User) TransferAffQuotaToQuota(quota int) error {
+func (user *User) TransferAffQuotaToQuota(quota int64) error {
 	// 检查quota是否小于最小额度
 	if float64(quota) < common.QuotaPerUnit {
 		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(int(common.QuotaPerUnit)))
@@ -542,6 +542,9 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	// 再次检查用户的AffQuota是否足够
 	if user.AffQuota < quota {
 		return errors.New("邀请额度不足！")
+	}
+	if quota <= 0 || user.Quota > common.MaxWalletQuota-quota {
+		return ErrWalletQuotaOutOfRange
 	}
 
 	// 更新用户额度
@@ -614,7 +617,7 @@ func (user *User) Insert(inviterId int) error {
 			if err := user.prepareForInsert(tx); err != nil {
 				return err
 			}
-			user.Quota = common.QuotaForNewUser
+			user.Quota = int64(common.QuotaForNewUser)
 			user.AffCode = common.GetRandomString(4)
 
 			// 初始化用户设置，包括默认的边栏配置
@@ -655,7 +658,7 @@ func (user *User) finishInsert(inviterId int) {
 	}
 	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
 		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
+			_ = IncreaseUserQuota(user.Id, int64(common.QuotaForInvitee), true)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
 		}
 		if common.QuotaForInviter > 0 {
@@ -678,7 +681,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-		user.Quota = common.QuotaForNewUser
+		user.Quota = int64(common.QuotaForNewUser)
 		user.AffCode = common.GetRandomString(4)
 
 		// 初始化用户设置
@@ -712,7 +715,7 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 	}
 	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
 		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
+			_ = IncreaseUserQuota(user.Id, int64(common.QuotaForInvitee), true)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
 		}
 		if common.QuotaForInviter > 0 {
@@ -1155,7 +1158,7 @@ func ValidateAccessToken(token string) (*User, error) {
 }
 
 // GetUserQuota gets quota from Redis first, falls back to DB if needed
-func GetUserQuota(id int, fromDB bool) (quota int, err error) {
+func GetUserQuota(id int, fromDB bool) (quota int64, err error) {
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
 		if shouldUpdateRedis(fromDB, err) {
@@ -1182,7 +1185,7 @@ func GetUserQuota(id int, fromDB bool) (quota int, err error) {
 	return quota, nil
 }
 
-func GetUserUsedQuota(id int) (quota int, err error) {
+func GetUserUsedQuota(id int) (quota int64, err error) {
 	err = DB.Model(&User{}).Where("id = ?", id).Select("used_quota").Find(&quota).Error
 	return quota, err
 }
@@ -1258,57 +1261,63 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 	return userBase.GetSetting(), nil
 }
 
-func IncreaseUserQuota(id int, quota int, db bool) (err error) {
+func IncreaseUserQuota(id int, quota int64, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheIncrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to increase user quota: " + err.Error())
-		}
-	})
 	if !db && common.BatchUpdateEnabled {
+		gopool.Go(func() {
+			if err := cacheIncrUserQuota(id, quota); err != nil {
+				common.SysLog("failed to increase user quota: " + err.Error())
+			}
+		})
 		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
 		return nil
 	}
-	return increaseUserQuota(id, quota)
-}
-
-func increaseUserQuota(id int, quota int) (err error) {
-	err = DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota)).Error
-	if err != nil {
+	if err := increaseUserQuota(id, quota); err != nil {
 		return err
 	}
-	return err
+	gopool.Go(func() {
+		if err := cacheIncrUserQuota(id, quota); err != nil {
+			common.SysLog("failed to increase user quota cache: " + err.Error())
+		}
+	})
+	return nil
 }
 
-func DecreaseUserQuota(id int, quota int, db bool) (err error) {
+func increaseUserQuota(id int, quota int64) (err error) {
+	return adjustUserWalletInTx(DB, id, quota)
+}
+
+func DecreaseUserQuota(id int, quota int64, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheDecrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to decrease user quota: " + err.Error())
-		}
-	})
 	if !db && common.BatchUpdateEnabled {
+		gopool.Go(func() {
+			if err := cacheDecrUserQuota(id, quota); err != nil {
+				common.SysLog("failed to decrease user quota: " + err.Error())
+			}
+		})
 		addNewRecord(BatchUpdateTypeUserQuota, id, -quota)
 		return nil
 	}
-	return decreaseUserQuota(id, quota)
-}
-
-func decreaseUserQuota(id int, quota int) (err error) {
-	err = DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota - ?", quota)).Error
-	if err != nil {
+	if err := decreaseUserQuota(id, quota); err != nil {
 		return err
 	}
-	return err
+	gopool.Go(func() {
+		if err := cacheDecrUserQuota(id, quota); err != nil {
+			common.SysLog("failed to decrease user quota cache: " + err.Error())
+		}
+	})
+	return nil
 }
 
-func DeltaUpdateUserQuota(id int, delta int) (err error) {
+func decreaseUserQuota(id int, quota int64) (err error) {
+	return adjustUserWalletInTx(DB, id, -quota)
+}
+
+func DeltaUpdateUserQuota(id int, delta int64) (err error) {
 	if delta == 0 {
 		return nil
 	}
@@ -1337,7 +1346,7 @@ func UpdateUserLastLoginAt(id int) {
 
 func UpdateUserUsedQuotaAndRequestCount(id int, quota int) {
 	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUsedQuota, id, quota)
+		addNewRecord(BatchUpdateTypeUsedQuota, id, int64(quota))
 		addNewRecord(BatchUpdateTypeRequestCount, id, 1)
 		return
 	}
@@ -1362,7 +1371,7 @@ func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	//}
 }
 
-func updateUserQuotaUsedQuotaAndRequestCount(id int, quota int, usedQuota int, requestCount int) {
+func updateUserQuotaUsedQuotaAndRequestCount(id int, quota int64, usedQuota int64, requestCount int64) {
 	if quota == 0 && usedQuota == 0 && requestCount == 0 {
 		return
 	}

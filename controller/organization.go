@@ -683,7 +683,7 @@ func writeOrganizationBillingCsv(
 	if data.Summary != nil {
 		_ = writer.Write([]string{"消费金额", amountFormatter.Amount(data.Summary.TotalQuota)})
 		_ = writer.Write([]string{"币种", amountFormatter.Currency})
-		_ = writer.Write([]string{"消费额度(quota)", strconv.Itoa(data.Summary.TotalQuota)})
+		_ = writer.Write([]string{"消费额度(quota)", strconv.FormatInt(data.Summary.TotalQuota, 10)})
 		_ = writer.Write([]string{"请求数", strconv.Itoa(data.Summary.RequestCount)})
 		_ = writer.Write([]string{"输入Token", strconv.Itoa(data.Summary.PromptTokens)})
 		_ = writer.Write([]string{"输出Token", strconv.Itoa(data.Summary.CompletionTokens)})
@@ -700,7 +700,7 @@ func writeOrganizationBillingCsv(
 			model.MaskOrganizationBillingName(item.DisplayName),
 			amountFormatter.Amount(item.TotalQuota),
 			amountFormatter.Currency,
-			strconv.Itoa(item.TotalQuota),
+			strconv.FormatInt(item.TotalQuota, 10),
 			strconv.Itoa(item.RequestCount),
 			strconv.Itoa(item.PromptTokens),
 			strconv.Itoa(item.CompletionTokens),
@@ -723,7 +723,7 @@ func writeOrganizationBillingCsv(
 			amountFormatter.Amount(item.TotalQuota),
 			amountFormatter.Currency,
 			organizationModelPricingLabel(item.Pricing),
-			strconv.Itoa(item.TotalQuota),
+			strconv.FormatInt(item.TotalQuota, 10),
 			strconv.Itoa(item.RequestCount),
 			strconv.Itoa(item.PromptTokens),
 			strconv.Itoa(item.CompletionTokens),
@@ -742,7 +742,7 @@ func writeOrganizationBillingCsv(
 			item.ChannelName,
 			amountFormatter.Amount(item.TotalQuota),
 			amountFormatter.Currency,
-			strconv.Itoa(item.TotalQuota),
+			strconv.FormatInt(item.TotalQuota, 10),
 			strconv.Itoa(item.RequestCount),
 			strconv.Itoa(item.PromptTokens),
 			strconv.Itoa(item.CompletionTokens),
@@ -757,7 +757,7 @@ func writeOrganizationBillingCsv(
 			point.Period,
 			amountFormatter.Amount(point.TotalQuota),
 			amountFormatter.Currency,
-			strconv.Itoa(point.TotalQuota),
+			strconv.FormatInt(point.TotalQuota, 10),
 			strconv.Itoa(point.RequestCount),
 			strconv.Itoa(point.PromptTokens),
 			strconv.Itoa(point.CompletionTokens),
@@ -783,7 +783,7 @@ func writeOrganizationBillingDetailRows(
 			item.TokenName,
 			item.ModelName,
 			item.ChannelName,
-			amountFormatter.Amount(item.Quota),
+			amountFormatter.Amount(int64(item.Quota)),
 			amountFormatter.Currency,
 			strconv.Itoa(item.Quota),
 			strconv.Itoa(item.PromptTokens),
@@ -899,7 +899,7 @@ func writeOrganizationBillingDisplayLogsCsvRows(
 			createdAt,
 			username,
 			modelName,
-			amountFormatter.Amount(item.Quota),
+			amountFormatter.Amount(int64(item.Quota)),
 			amountFormatter.Currency,
 			strconv.Itoa(item.PromptTokens),
 			strconv.Itoa(item.CompletionTokens),

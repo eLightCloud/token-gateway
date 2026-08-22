@@ -51,8 +51,8 @@ func NewBillingExportAmountFormatter(scale int32) (BillingExportAmountFormatter,
 	}, nil
 }
 
-func (f BillingExportAmountFormatter) Amount(quota int) string {
-	return decimal.NewFromInt(int64(quota)).
+func (f BillingExportAmountFormatter) Amount(quota int64) string {
+	return decimal.NewFromInt(quota).
 		Div(f.quotaPerUnit).
 		Mul(f.rate).
 		StringFixed(f.scale)

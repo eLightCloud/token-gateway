@@ -68,7 +68,7 @@ func WriteTokenBillCSV(writer *csv.Writer, filters model.TokenBillFilters, amoun
 				entry.ChannelAPIAddress,
 				strconv.Itoa(entry.PromptTokens),
 				strconv.Itoa(entry.CompletionTokens),
-				amountFormatter.Amount(entry.Quota),
+				amountFormatter.Amount(int64(entry.Quota)),
 				amountFormatter.Currency,
 				strconv.Itoa(entry.Quota),
 			}); err != nil {

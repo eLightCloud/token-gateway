@@ -54,6 +54,23 @@ func TestTokenBillExportAmountFormatterMatchesBillingDisplayCurrency(t *testing.
 	}
 }
 
+func TestBillingExportAmountFormatterPreservesQuotaAboveInt32(t *testing.T) {
+	originalGeneralSetting := *operation_setting.GetGeneralSetting()
+	originalQuotaPerUnit := common.QuotaPerUnit
+	t.Cleanup(func() {
+		*operation_setting.GetGeneralSetting() = originalGeneralSetting
+		common.QuotaPerUnit = originalQuotaPerUnit
+	})
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+	common.QuotaPerUnit = 500_000
+
+	formatter, err := NewBillingExportAmountFormatter(6)
+	require.NoError(t, err)
+
+	quotaAboveInt32 := int64(math.MaxInt32) + 1
+	assert.Equal(t, "4294.967296", formatter.Amount(quotaAboveInt32))
+}
+
 func TestBillingExportAmountFormatterRejectsInvalidConfiguration(t *testing.T) {
 	originalGeneralSetting := *operation_setting.GetGeneralSetting()
 	originalUSDExchangeRate := operation_setting.USDExchangeRate

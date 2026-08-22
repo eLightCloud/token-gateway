@@ -44,8 +44,8 @@ type organizationE2EUser struct {
 	Username          string `json:"username"`
 	Role              int    `json:"role"`
 	Status            int    `json:"status"`
-	Quota             int    `json:"quota"`
-	UsedQuota         int    `json:"used_quota"`
+	Quota             int64  `json:"quota"`
+	UsedQuota         int64  `json:"used_quota"`
 	RequestCount      int    `json:"request_count"`
 	BillingPreference string `json:"billing_preference"`
 	AccessToken       string `json:"access_token"`
@@ -62,8 +62,8 @@ type organizationE2EToken struct {
 	UserId      int    `json:"user_id"`
 	Name        string `json:"name"`
 	Key         string `json:"key"`
-	RemainQuota int    `json:"remain_quota"`
-	UsedQuota   int    `json:"used_quota"`
+	RemainQuota int64  `json:"remain_quota"`
+	UsedQuota   int64  `json:"used_quota"`
 }
 
 type organizationE2EChannel struct {
@@ -534,7 +534,7 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/summary?"+billingWindow, nil,
 	))
 	adminSummary := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, adminSummaryResponse)
-	assert.Equal(t, 420, adminSummary.TotalQuota)
+	assert.Equal(t, int64(420), adminSummary.TotalQuota)
 	assert.Equal(t, 3, adminSummary.RequestCount)
 	assert.Equal(t, 360, adminSummary.PromptTokens)
 	assert.Equal(t, 60, adminSummary.CompletionTokens)
@@ -545,7 +545,7 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 		t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/summary?"+billingWindow+"&user_id=1001", nil,
 	))
 	memberSummary := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, memberSummaryResponse)
-	assert.Equal(t, 300, memberSummary.TotalQuota)
+	assert.Equal(t, int64(300), memberSummary.TotalQuota)
 	assert.Equal(t, 2, memberSummary.RequestCount)
 	assert.Equal(t, 1, memberSummary.MemberCount)
 
@@ -553,14 +553,14 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 		t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/summary?"+billingWindow+"&channel=7", nil,
 	))
 	memberChannelFilteredSummary := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, memberChannelFilteredSummaryResponse)
-	assert.Equal(t, 300, memberChannelFilteredSummary.TotalQuota, "member channel filters must be ignored")
+	assert.Equal(t, int64(300), memberChannelFilteredSummary.TotalQuota, "member channel filters must be ignored")
 	assert.Equal(t, 2, memberChannelFilteredSummary.RequestCount)
 
 	reconciliationResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/summary?"+billingWindow+"&view=reconciliation", nil,
 	))
 	reconciliation := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, reconciliationResponse)
-	assert.Equal(t, 440, reconciliation.TotalQuota)
+	assert.Equal(t, int64(440), reconciliation.TotalQuota)
 	assert.Equal(t, 5, reconciliation.RequestCount)
 
 	logsResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
@@ -582,9 +582,9 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 	models := decodeOrganizationE2EData[[]model.OrganizationBillingDimension](t, modelsResponse)
 	require.Len(t, models, 2)
 	assert.Equal(t, "gpt-5.4", models[0].ModelName)
-	assert.Equal(t, 300, models[0].TotalQuota)
+	assert.Equal(t, int64(300), models[0].TotalQuota)
 	assert.Equal(t, "gpt-5.5", models[1].ModelName)
-	assert.Equal(t, 120, models[1].TotalQuota)
+	assert.Equal(t, int64(120), models[1].TotalQuota)
 
 	channelsResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/channels?"+billingWindow, nil,
@@ -593,7 +593,7 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 	require.Len(t, channels, 2)
 	assert.Equal(t, 8, channels[0].ChannelId)
 	assert.Equal(t, "fallback-openai", channels[0].ChannelName)
-	assert.Equal(t, 300, channels[0].TotalQuota)
+	assert.Equal(t, int64(300), channels[0].TotalQuota)
 	assert.Equal(t, 7, channels[1].ChannelId)
 	assert.Equal(t, "primary-openai", channels[1].ChannelName)
 
@@ -628,19 +628,19 @@ func TestOrganizationE2EBillingScopesAndAggregatesSettledLogs(t *testing.T) {
 	trend := decodeOrganizationE2EData[[]model.OrganizationBillingTrendPoint](t, trendResponse)
 	require.Len(t, trend, 3)
 	assert.Equal(t, "2026-07-02", trend[0].Period)
-	assert.Equal(t, 120, trend[0].TotalQuota)
+	assert.Equal(t, int64(120), trend[0].TotalQuota)
 	assert.Equal(t, "2026-07-05", trend[1].Period)
-	assert.Equal(t, 230, trend[1].TotalQuota)
+	assert.Equal(t, int64(230), trend[1].TotalQuota)
 	assert.Equal(t, "2026-07-06", trend[2].Period)
-	assert.Equal(t, 70, trend[2].TotalQuota)
+	assert.Equal(t, int64(70), trend[2].TotalQuota)
 
 	var persistedLogs int64
 	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Count(&persistedLogs).Error)
 	assert.Equal(t, int64(len(fixture.Logs)), persistedLogs)
 	var member model.User
 	require.NoError(t, model.DB.First(&member, 1002).Error)
-	assert.Equal(t, 10000, member.Quota)
-	assert.Equal(t, 300, member.UsedQuota)
+	assert.Equal(t, int64(10000), member.Quota)
+	assert.Equal(t, int64(300), member.UsedQuota)
 }
 
 // previewOrganizationBillingStart 调预览接口并要求成功，返回预览结果。
@@ -690,7 +690,7 @@ func TestOrganizationE2EBillingStartBackfill(t *testing.T) {
 	baseline := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/summary?"+backfillWindow, nil,
 	)))
-	assert.Equal(t, 420, baseline.TotalQuota)
+	assert.Equal(t, int64(420), baseline.TotalQuota)
 	assert.Equal(t, 3, baseline.RequestCount)
 
 	// 以组织 Admin 身份回填两个成员的账单归属起点至其加入前。
@@ -701,14 +701,14 @@ func TestOrganizationE2EBillingStartBackfill(t *testing.T) {
 	backfilled := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/summary?"+backfillWindow, nil,
 	)))
-	assert.Equal(t, 17420, backfilled.TotalQuota)
+	assert.Equal(t, int64(17420), backfilled.TotalQuota)
 	assert.Equal(t, 5, backfilled.RequestCount)
 
 	// Member 视角仍被强制限定为本人范围：user 1002 只能看到自己的回填后用量（8000 + 230 + 70 = 8300）。
 	memberView := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/summary?"+backfillWindow, nil,
 	)))
-	assert.Equal(t, 8300, memberView.TotalQuota)
+	assert.Equal(t, int64(8300), memberView.TotalQuota)
 
 	// 回填为每次更新写入一条操作审计日志（type=manage），但消费类原始日志条数不变。
 	var manageAudits int64
@@ -726,8 +726,8 @@ func TestOrganizationE2EBillingStartBackfill(t *testing.T) {
 	// 个人计费不受回填影响。
 	var member model.User
 	require.NoError(t, model.DB.First(&member, 1002).Error)
-	assert.Equal(t, 10000, member.Quota)
-	assert.Equal(t, 300, member.UsedQuota)
+	assert.Equal(t, int64(10000), member.Quota)
+	assert.Equal(t, int64(300), member.UsedQuota)
 }
 
 // TestOrganizationE2EBillingStartMultiDimensionConsistency 锁定回填后各账单维度的对账不变量：
@@ -739,7 +739,7 @@ func TestOrganizationE2EBillingStartMultiDimensionConsistency(t *testing.T) {
 	applyOrganizationBillingStart(t, router, fixture, 1001, 1001, 1782820000)
 	applyOrganizationBillingStart(t, router, fixture, 1001, 1002, 1783160000)
 
-	sumDimensions := func(rows []model.OrganizationBillingDimension) (quota, requests int) {
+	sumDimensions := func(rows []model.OrganizationBillingDimension) (quota int64, requests int) {
 		for _, r := range rows {
 			quota += r.TotalQuota
 			requests += r.RequestCount
@@ -750,7 +750,7 @@ func TestOrganizationE2EBillingStartMultiDimensionConsistency(t *testing.T) {
 	summary := decodeOrganizationE2EData[model.OrganizationBillingSummary](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/summary?"+backfillWindow, nil,
 	)))
-	require.Equal(t, 17420, summary.TotalQuota)
+	require.Equal(t, int64(17420), summary.TotalQuota)
 	require.Equal(t, 5, summary.RequestCount)
 
 	models := decodeOrganizationE2EData[[]model.OrganizationBillingDimension](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
@@ -770,7 +770,8 @@ func TestOrganizationE2EBillingStartMultiDimensionConsistency(t *testing.T) {
 	trend := decodeOrganizationE2EData[[]model.OrganizationBillingTrendPoint](t, requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/trend?"+backfillWindow, nil,
 	)))
-	var tQuota, tReq int
+	var tQuota int64
+	var tReq int
 	for _, p := range trend {
 		tQuota += p.TotalQuota
 		tReq += p.RequestCount

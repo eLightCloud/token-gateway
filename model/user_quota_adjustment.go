@@ -3,7 +3,6 @@ package model
 import (
 	"errors"
 	"fmt"
-	"math"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/bytedance/gopkg/util/gopool"
@@ -22,18 +21,39 @@ type UserQuotaAdjustment struct {
 	Id             int    `json:"id"`
 	UserId         int    `json:"user_id" gorm:"index:idx_user_quota_adjustment_period,priority:1"`
 	OperatorUserId int    `json:"operator_user_id" gorm:"index"`
-	DeltaQuota     int    `json:"delta_quota"`
-	BalanceBefore  int    `json:"balance_before"`
-	BalanceAfter   int    `json:"balance_after"`
+	DeltaQuota     int64  `json:"delta_quota" gorm:"type:bigint"`
+	BalanceBefore  int64  `json:"balance_before" gorm:"type:bigint"`
+	BalanceAfter   int64  `json:"balance_after" gorm:"type:bigint"`
 	Mode           string `json:"mode" gorm:"type:varchar(16)"`
 	CreatedAt      int64  `json:"created_at" gorm:"index:idx_user_quota_adjustment_period,priority:2"`
 }
 
 type AdminUserQuotaAdjustmentResult struct {
 	AdjustmentId  int
-	PreviousQuota int
-	CurrentQuota  int
-	DeltaQuota    int
+	PreviousQuota int64
+	CurrentQuota  int64
+	DeltaQuota    int64
+}
+
+type UserQuotaAdjustmentRangeError struct {
+	Mode     string
+	Previous int64
+	Value    int64
+}
+
+func (e *UserQuotaAdjustmentRangeError) Error() string {
+	return "user quota adjustment result is out of range"
+}
+
+func (e *UserQuotaAdjustmentRangeError) MaxAllowedDelta() int64 {
+	switch e.Mode {
+	case UserQuotaAdjustmentModeAdd:
+		return common.MaxWalletQuota - e.Previous
+	case UserQuotaAdjustmentModeSubtract:
+		return e.Previous - common.MinWalletQuota
+	default:
+		return common.MaxWalletQuota
+	}
 }
 
 // ApplyAdminUserQuotaAdjustment updates the wallet and persists the matching
@@ -42,7 +62,7 @@ func ApplyAdminUserQuotaAdjustment(
 	userId int,
 	operatorUserId int,
 	mode string,
-	value int,
+	value int64,
 ) (*AdminUserQuotaAdjustmentResult, error) {
 	if userId <= 0 || operatorUserId <= 0 {
 		return nil, errors.New("invalid user quota adjustment identity")
@@ -58,34 +78,37 @@ func ApplyAdminUserQuotaAdjustment(
 			return err
 		}
 
-		previous := int64(user.Quota)
+		previous := user.Quota
+		if err := common.ValidateWalletQuota(previous); err != nil {
+			return &UserQuotaAdjustmentRangeError{Mode: mode, Previous: previous, Value: value}
+		}
 		current := previous
 		switch mode {
 		case UserQuotaAdjustmentModeAdd:
-			if int64(value) > math.MaxInt32-previous {
-				return fmt.Errorf("user quota adjustment result is out of range")
+			if value > common.MaxWalletQuota-previous {
+				return &UserQuotaAdjustmentRangeError{Mode: mode, Previous: previous, Value: value}
 			}
-			current = previous + int64(value)
+			current = previous + value
 		case UserQuotaAdjustmentModeSubtract:
-			if previous < math.MinInt32+int64(value) {
-				return fmt.Errorf("user quota adjustment result is out of range")
+			if previous < common.MinWalletQuota+value {
+				return &UserQuotaAdjustmentRangeError{Mode: mode, Previous: previous, Value: value}
 			}
-			current = previous - int64(value)
+			current = previous - value
 		case UserQuotaAdjustmentModeOverride:
-			current = int64(value)
+			current = value
 		default:
 			return errors.New("invalid user quota adjustment mode")
 		}
-		if current < math.MinInt32 || current > math.MaxInt32 {
-			return fmt.Errorf("user quota adjustment result is out of range: %d", current)
+		if err := common.ValidateWalletQuota(current); err != nil {
+			return &UserQuotaAdjustmentRangeError{Mode: mode, Previous: previous, Value: value}
 		}
 
 		adjustment := UserQuotaAdjustment{
 			UserId:         userId,
 			OperatorUserId: operatorUserId,
-			DeltaQuota:     int(current - previous),
-			BalanceBefore:  int(previous),
-			BalanceAfter:   int(current),
+			DeltaQuota:     current - previous,
+			BalanceBefore:  previous,
+			BalanceAfter:   current,
 			Mode:           mode,
 			CreatedAt:      common.GetTimestamp(),
 		}

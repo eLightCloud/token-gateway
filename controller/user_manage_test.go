@@ -180,12 +180,12 @@ func TestManageUserQuotaAdjustmentPersistsInvoiceFact(t *testing.T) {
 
 	var updated model.User
 	require.NoError(t, db.Select("quota").First(&updated, target.Id).Error)
-	assert.Equal(t, 1_500_000, updated.Quota)
+	assert.Equal(t, int64(1_500_000), updated.Quota)
 
 	var adjustment model.UserQuotaAdjustment
 	require.NoError(t, db.Where("user_id = ?", target.Id).First(&adjustment).Error)
 	assert.Equal(t, 9999, adjustment.OperatorUserId)
-	assert.Equal(t, 500_000, adjustment.DeltaQuota)
-	assert.Equal(t, 1_000_000, adjustment.BalanceBefore)
-	assert.Equal(t, 1_500_000, adjustment.BalanceAfter)
+	assert.Equal(t, int64(500_000), adjustment.DeltaQuota)
+	assert.Equal(t, int64(1_000_000), adjustment.BalanceBefore)
+	assert.Equal(t, int64(1_500_000), adjustment.BalanceAfter)
 }

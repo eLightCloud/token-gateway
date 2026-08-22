@@ -728,7 +728,7 @@ func AdminBindSubscription(userId int, planId int, sourceNote string) (string, e
 	return "", nil
 }
 
-func calcSubscriptionBalanceQuota(priceAmount float64) (int, error) {
+func calcSubscriptionBalanceQuota(priceAmount float64) (int64, error) {
 	if priceAmount <= 0 {
 		return 0, nil
 	}
@@ -737,9 +737,8 @@ func calcSubscriptionBalanceQuota(priceAmount float64) (int, error) {
 	}
 	quota := decimal.NewFromFloat(priceAmount).
 		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
-		Ceil().
-		IntPart()
-	return int(quota), nil
+		Ceil()
+	return common.QuotaBalanceFromDecimalStrict(quota, 0, common.MaxWalletQuota)
 }
 
 // PurchaseSubscriptionWithBalance creates a subscription by deducting the user's wallet quota.
@@ -750,7 +749,7 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 
 	var logPlanTitle string
 	var logMoney float64
-	var chargedQuota int
+	var chargedQuota int64
 	var upgradeGroup string
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		plan, err := getSubscriptionPlanByIdTx(tx, planId)
@@ -780,8 +779,7 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 			return errors.New("余额不足")
 		}
 		if requiredQuota > 0 {
-			if err := tx.Model(&User{}).Where("id = ?", userId).
-				Update("quota", gorm.Expr("quota - ?", requiredQuota)).Error; err != nil {
+			if err := adjustUserWalletInTx(tx, userId, -requiredQuota); err != nil {
 				return err
 			}
 		}
@@ -822,7 +820,7 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 	}
 
 	if chargedQuota > 0 {
-		if err := cacheDecrUserQuota(userId, int64(chargedQuota)); err != nil {
+		if err := cacheDecrUserQuota(userId, chargedQuota); err != nil {
 			common.SysLog("failed to decrease user quota cache after subscription balance purchase: " + err.Error())
 		}
 	}

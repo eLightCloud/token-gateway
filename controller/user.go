@@ -426,7 +426,7 @@ func GenerateAccessToken(c *gin.Context) {
 }
 
 type TransferAffQuotaRequest struct {
-	Quota int `json:"quota" binding:"required"`
+	Quota int64 `json:"quota" binding:"required"`
 }
 
 func TransferAffQuota(c *gin.Context) {
@@ -1077,8 +1077,26 @@ func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, 
 type ManageRequest struct {
 	Id     int    `json:"id"`
 	Action string `json:"action"`
-	Value  int    `json:"value"`
+	Value  int64  `json:"value"`
 	Mode   string `json:"mode"`
+}
+
+func respondUserQuotaAdjustmentError(c *gin.Context, err error) {
+	var rangeErr *model.UserQuotaAdjustmentRangeError
+	if errors.As(err, &rangeErr) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+			"code":    "quota_adjustment_out_of_range",
+			"data": gin.H{
+				"max_wallet_quota":  common.MaxWalletQuota,
+				"min_wallet_quota":  common.MinWalletQuota,
+				"max_allowed_delta": rangeErr.MaxAllowedDelta(),
+			},
+		})
+		return
+	}
+	common.ApiError(c, err)
 }
 
 // ManageUser Only admin user can do this
@@ -1170,7 +1188,7 @@ func ManageUser(c *gin.Context) {
 			}
 			adjustmentResult, err = model.ApplyAdminUserQuotaAdjustment(user.Id, c.GetInt("id"), req.Mode, req.Value)
 			if err != nil {
-				common.ApiError(c, err)
+				respondUserQuotaAdjustmentError(c, err)
 				return
 			}
 			recordManageAuditFor(c, user.Id, "user.quota_add", map[string]interface{}{
@@ -1185,7 +1203,7 @@ func ManageUser(c *gin.Context) {
 			}
 			adjustmentResult, err = model.ApplyAdminUserQuotaAdjustment(user.Id, c.GetInt("id"), req.Mode, req.Value)
 			if err != nil {
-				common.ApiError(c, err)
+				respondUserQuotaAdjustmentError(c, err)
 				return
 			}
 			recordManageAuditFor(c, user.Id, "user.quota_subtract", map[string]interface{}{
@@ -1196,7 +1214,7 @@ func ManageUser(c *gin.Context) {
 		case "override":
 			adjustmentResult, err = model.ApplyAdminUserQuotaAdjustment(user.Id, c.GetInt("id"), req.Mode, req.Value)
 			if err != nil {
-				common.ApiError(c, err)
+				respondUserQuotaAdjustmentError(c, err)
 				return
 			}
 			recordManageAuditFor(c, user.Id, "user.quota_override", map[string]interface{}{

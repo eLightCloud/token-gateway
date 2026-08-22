@@ -15,7 +15,7 @@ func insertUserForPaymentGuardTest(t *testing.T, id int, quota int) {
 		Id:       id,
 		Username: "payment_guard_user",
 		Status:   common.UserStatusEnabled,
-		Quota:    quota,
+		Quota:    int64(quota),
 	}
 	require.NoError(t, DB.Create(user).Error)
 }
@@ -80,7 +80,7 @@ func countUserSubscriptionsForPaymentGuardTest(t *testing.T, userID int) int64 {
 	return count
 }
 
-func getUserQuotaForPaymentGuardTest(t *testing.T, userID int) int {
+func getUserQuotaForPaymentGuardTest(t *testing.T, userID int) int64 {
 	t.Helper()
 	var user User
 	require.NoError(t, DB.Select("quota").Where("id = ?", userID).First(&user).Error)
