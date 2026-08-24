@@ -6,15 +6,193 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+func TestModelPriceHelpersFailClosedWhenDiscountDatabaseIsUnavailable(t *testing.T) {
+	previousDB := model.DB
+	db, err := gorm.Open(sqlite.Open("file:discount-load-failure?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB = previousDB
+	})
+
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		UserId:          42,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		OriginModelName: "discount-db-error",
+	}
+
+	_, err = ModelPriceHelper(ctx, info, 0, &types.TokenCountMeta{})
+	require.ErrorIs(t, err, service.ErrOrganizationDiscountLoadFailed)
+	_, err = ModelPriceHelperPerCall(ctx, info)
+	require.ErrorIs(t, err, service.ErrOrganizationDiscountLoadFailed)
+}
+
+func TestModelPriceHelperPerCallFailsClosedWhenSnapshotParseFails(t *testing.T) {
+	previousDB := model.DB
+	db, err := gorm.Open(sqlite.Open("file:discount-parse-failure?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB = previousDB
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	require.NoError(t, db.AutoMigrate(
+		&model.Organization{},
+		&model.OrganizationMember{},
+		&model.OrganizationDiscountSnapshot{},
+	))
+	org := model.Organization{Id: 77, Name: "discount-org", Status: model.OrganizationStatusEnabled}
+	require.NoError(t, db.Create(&org).Error)
+	currentKey := "42"
+	require.NoError(t, db.Create(&model.OrganizationMember{
+		OrganizationId: org.Id,
+		UserId:         42,
+		Role:           model.OrganizationRoleMember,
+		CurrentKey:     &currentKey,
+	}).Error)
+	snapshot := model.OrganizationDiscountSnapshot{
+		Id:               5,
+		OrganizationId:   org.Id,
+		ChannelDiscounts: "{corrupted",
+	}
+	require.NoError(t, db.Create(&snapshot).Error)
+	require.NoError(t, db.Model(&org).Update("current_discount_snapshot_id", snapshot.Id).Error)
+
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		UserId:          42,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		OriginModelName: "discount-parse-error",
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 99},
+	}
+
+	_, err = ModelPriceHelperPerCall(ctx, info)
+	require.ErrorIs(t, err, service.ErrOrganizationDiscountLoadFailed)
+}
+
+func TestModelPriceHelperPerCallDualQuotaAndRequestSnapshotAcrossRetries(t *testing.T) {
+	previousDB := model.DB
+	db, err := gorm.Open(sqlite.Open("file:discount-retry-snapshot?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB = previousDB
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	require.NoError(t, db.AutoMigrate(
+		&model.Organization{},
+		&model.OrganizationMember{},
+		&model.OrganizationDiscountSnapshot{},
+		&model.Channel{},
+	))
+	org := model.Organization{Id: 88, Name: "retry-org", Status: model.OrganizationStatusEnabled}
+	require.NoError(t, db.Create(&org).Error)
+	currentKey := "43"
+	require.NoError(t, db.Create(&model.OrganizationMember{
+		OrganizationId: org.Id,
+		UserId:         43,
+		Role:           model.OrganizationRoleMember,
+		CurrentKey:     &currentKey,
+	}).Error)
+	firstData, err := model.MarshalOrganizationChannelDiscounts(map[int]int{99: 500_000})
+	require.NoError(t, err)
+	firstSnapshot := model.OrganizationDiscountSnapshot{
+		Id:               1,
+		OrganizationId:   org.Id,
+		ChannelDiscounts: firstData,
+	}
+	require.NoError(t, db.Create(&firstSnapshot).Error)
+	require.NoError(t, db.Model(&org).Update("current_discount_snapshot_id", firstSnapshot.Id).Error)
+
+	modelName := ""
+	for configuredModel := range ratio_setting.GetDefaultModelPriceMap() {
+		modelName = configuredModel
+		break
+	}
+	require.NotEmpty(t, modelName)
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		UserId:          43,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		OriginModelName: modelName,
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 99},
+	}
+
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	require.NotNil(t, priceData.DiscountSnapshot)
+	require.Equal(t, firstSnapshot.Id, priceData.DiscountSnapshot.SnapshotID)
+	require.True(t, priceData.DiscountSnapshotLoaded)
+	require.InDelta(t, 0.5, priceData.DiscountSnapshot.EffectiveRatio(), 1e-12)
+	// 双额度契约：QuotaToPreConsume 未打折，Quota 应用实际渠道折扣
+	require.Greater(t, priceData.QuotaToPreConsume, 0)
+	expectedQuota, err := common.QuotaFromFloatStrict(float64(priceData.QuotaToPreConsume) * 0.5)
+	require.NoError(t, err)
+	require.Equal(t, expectedQuota, priceData.Quota)
+	info.PriceData = priceData
+
+	// 管理员保存新折扣（渠道 99 改为 0.1）后，重试同渠道仍复用原请求内存映射的 0.5
+	secondData, err := model.MarshalOrganizationChannelDiscounts(map[int]int{99: 100_000, 100: 800_000})
+	require.NoError(t, err)
+	secondSnapshot := model.OrganizationDiscountSnapshot{
+		Id:               2,
+		OrganizationId:   org.Id,
+		ChannelDiscounts: secondData,
+	}
+	require.NoError(t, db.Create(&secondSnapshot).Error)
+	require.NoError(t, db.Model(&org).Update("current_discount_snapshot_id", secondSnapshot.Id).Error)
+
+	retryInfo := &relaycommon.RelayInfo{
+		UserId:          43,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		OriginModelName: modelName,
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 99},
+		PriceData:       info.PriceData,
+	}
+	retryData, err := ModelPriceHelperPerCall(ctx, retryInfo)
+	require.NoError(t, err)
+	require.NotNil(t, retryData.DiscountSnapshot)
+	require.Equal(t, firstSnapshot.Id, retryData.DiscountSnapshot.SnapshotID, "retry must keep the request-fixed snapshot")
+	require.Equal(t, 99, retryData.DiscountSnapshot.AppliedChannelId)
+	require.InDelta(t, 0.5, retryData.DiscountSnapshot.EffectiveRatio(), 1e-12, "retry keeps the request snapshot ratio, not the latest config")
+	retryQuota, err := common.QuotaFromFloatStrict(float64(retryData.QuotaToPreConsume) * 0.5)
+	require.NoError(t, err)
+	require.Equal(t, retryQuota, retryData.Quota)
+}
 
 func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)

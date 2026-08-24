@@ -104,11 +104,9 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 	}
 
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
-	if snap.GroupRatio == groupRatio {
-		return snap, nil
-	}
-
 	estimatedQuotaAfterGroup := snap.EstimatedQuotaBeforeGroup * groupRatio
+	// 组织折扣不大于 1.0，未打折预扣恒不低于折后结算，此处不再维护
+	// 渠道无关的补扣目标，也不读取折扣数据库。
 	estimatedQuota, err := billingexpr.QuotaRoundStrict(estimatedQuotaAfterGroup)
 	if err != nil {
 		return nil, err

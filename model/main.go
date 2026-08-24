@@ -268,6 +268,8 @@ func migrateDB() error {
 		&Organization{},
 		&OrganizationMember{},
 		&OrganizationBillingSettlementRule{},
+		&OrganizationDiscountSnapshot{},
+		&TaskSettlementJournal{},
 		&UserQuotaAdjustment{},
 		&UserSession{},
 		&AuthFlow{},
@@ -301,6 +303,9 @@ func migrateDB() error {
 		&AuthzRole{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := migrateLogBillingOperationIndex(DB); err != nil {
 		return err
 	}
 	if err := verifyQuotaBalanceSchema(); err != nil {
@@ -340,6 +345,8 @@ func migrateDBFast() error {
 		{&User{}, "User"},
 		{&Organization{}, "Organization"},
 		{&OrganizationMember{}, "OrganizationMember"},
+		{&OrganizationDiscountSnapshot{}, "OrganizationDiscountSnapshot"},
+		{&TaskSettlementJournal{}, "TaskSettlementJournal"},
 		{&OrganizationBillingSettlementRule{}, "OrganizationBillingSettlementRule"},
 		{&UserQuotaAdjustment{}, "UserQuotaAdjustment"},
 		{&UserSession{}, "UserSession"},
@@ -394,6 +401,9 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := migrateLogBillingOperationIndex(DB); err != nil {
+		return err
+	}
 	if err := verifyQuotaBalanceSchema(); err != nil {
 		return err
 	}
@@ -423,12 +433,18 @@ func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{})
+	if err := LOG_DB.AutoMigrate(&Log{}); err != nil {
+		return err
+	}
+	return migrateLogBillingOperationIndex(LOG_DB)
 }
 
 func migrateClickHouseLogDB() error {
 	ttlDays := clickHouseLogTTLDays()
 	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
+		return err
+	}
+	if err := LOG_DB.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS billing_operation_id Nullable(String) DEFAULT NULL").Error; err != nil {
 		return err
 	}
 	return syncClickHouseLogTTL(ttlDays)
@@ -479,6 +495,7 @@ CREATE TABLE IF NOT EXISTS logs (
 	ip String DEFAULT '',
 	request_id String DEFAULT '',
 	upstream_request_id String DEFAULT '',
+	billing_operation_id Nullable(String) DEFAULT NULL,
 	other String DEFAULT ''
 )
 ENGINE = MergeTree()

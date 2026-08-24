@@ -21,8 +21,11 @@ type Midjourney struct {
 	FailReason  string `json:"fail_reason"`
 	ChannelId   int    `json:"channel_id"`
 	Quota       int    `json:"quota"`
+	Group       string `json:"group" gorm:"type:varchar(50)"`
 	Buttons     string `json:"buttons"`
 	Properties  string `json:"properties"`
+	// 异步退款必须使用任务提交时固定的资金来源、令牌和计费倍率快照。
+	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 }
 
 // TaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段
@@ -168,6 +171,10 @@ func (midjourney *Midjourney) Update() error {
 	var err error
 	err = DB.Save(midjourney).Error
 	return err
+}
+
+func (midjourney *Midjourney) UpdateQuota() error {
+	return DB.Model(midjourney).Update("quota", midjourney.Quota).Error
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).

@@ -36,9 +36,12 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&Task{},
+		&Midjourney{},
 		&User{},
 		&Organization{},
 		&OrganizationMember{},
+		&OrganizationDiscountSnapshot{},
+		&TaskSettlementJournal{},
 		&OrganizationBillingSettlementRule{},
 		&UserQuotaAdjustment{},
 		&UserSession{},
@@ -71,7 +74,10 @@ func TestMain(m *testing.M) {
 func truncateTables(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
+		DB.Exec("DELETE FROM organization_discount_snapshots")
+		DB.Exec("DELETE FROM task_settlement_journals")
 		DB.Exec("DELETE FROM tasks")
+		DB.Exec("DELETE FROM midjourneys")
 		DB.Exec("DELETE FROM organization_billing_settlement_rules")
 		DB.Exec("DELETE FROM user_quota_adjustments")
 		DB.Exec("DELETE FROM organization_members")

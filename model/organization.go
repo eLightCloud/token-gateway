@@ -23,11 +23,12 @@ const (
 )
 
 type Organization struct {
-	Id        int    `json:"id"`
-	Name      string `json:"name" gorm:"type:varchar(128);not null"`
-	Status    int    `json:"status" gorm:"type:int;default:1;index"`
-	CreatedAt int64  `json:"created_at" gorm:"autoCreateTime;column:created_at"`
-	UpdatedAt int64  `json:"updated_at" gorm:"autoUpdateTime;column:updated_at"`
+	Id                        int    `json:"id"`
+	Name                      string `json:"name" gorm:"type:varchar(128);not null"`
+	Status                    int    `json:"status" gorm:"type:int;default:1;index"`
+	CurrentDiscountSnapshotId int    `json:"current_discount_snapshot_id" gorm:"type:int;default:0"`
+	CreatedAt                 int64  `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	UpdatedAt                 int64  `json:"updated_at" gorm:"autoUpdateTime;column:updated_at"`
 }
 
 type OrganizationMember struct {
@@ -60,11 +61,11 @@ type OrganizationBillingFilters struct {
 
 type OrganizationBillingSummary struct {
 	TotalQuota        int64 `json:"total_quota"`
-	RequestCount      int `json:"request_count"`
-	PromptTokens      int `json:"prompt_tokens"`
-	CompletionTokens  int `json:"completion_tokens"`
-	MemberCount       int `json:"member_count"`
-	ActiveMemberCount int `json:"active_member_count"`
+	RequestCount      int   `json:"request_count"`
+	PromptTokens      int   `json:"prompt_tokens"`
+	CompletionTokens  int   `json:"completion_tokens"`
+	MemberCount       int   `json:"member_count"`
+	ActiveMemberCount int   `json:"active_member_count"`
 }
 
 type OrganizationBillingDimension struct {

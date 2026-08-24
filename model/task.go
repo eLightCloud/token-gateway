@@ -114,12 +114,21 @@ type TaskPrivateData struct {
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
-	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
-	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
-	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
-	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
-	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
-	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+	ModelPrice      float64              `json:"model_price,omitempty"`       // 模型单价
+	GroupRatio      float64              `json:"group_ratio,omitempty"`       // 分组倍率
+	ModelRatio      float64              `json:"model_ratio,omitempty"`       // 模型倍率
+	OtherRatios     map[string]float64   `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
+	OriginModelName string               `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
+	PerCallBilling  bool                 `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+	Discount        *TaskBillingDiscount `json:"discount,omitempty"`          // 组织折扣快照（提交时事实）
+}
+
+// TaskBillingDiscount 只持久化异步结算所需的组织折扣事实：
+// 快照 ID、实际渠道 ID 和已应用倍率，不保存完整渠道映射。
+type TaskBillingDiscount struct {
+	SnapshotID int     `json:"snapshot_id,omitempty"`
+	ChannelId  int     `json:"channel_id,omitempty"`
+	Ratio      float64 `json:"ratio,omitempty"`
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）

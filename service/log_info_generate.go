@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -32,6 +33,46 @@ func attachQuotaSaturationToOther(other map[string]interface{}, clamp *common.Qu
 		other["admin_info"] = adminInfo
 	}
 	adminInfo["quota_saturation"] = clamp.AuditMap()
+}
+
+// AppendOrganizationDiscountBillingInfo writes the organization discount into
+// the consume log. The top-level "effective_ratio" is the final multiplier
+// applied to the base price (user_group_ratio × organization channel discount).
+// The request-fixed discount fact goes under admin_info.organization_discount
+// for administrator auditing.
+func AppendOrganizationDiscountBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil || relayInfo.PriceData.DiscountSnapshot == nil {
+		return
+	}
+	snapshot := relayInfo.PriceData.DiscountSnapshot
+	appendDiscountBillingInfo(other, relayInfo.PriceData.GroupRatioInfo.GroupRatio, snapshot.SnapshotID, snapshot.AppliedChannelId, snapshot.EffectiveRatio())
+}
+
+// appendOrganizationDiscountBillingInfo writes the persisted asynchronous
+// billing snapshot's discount fact using the same field semantics.
+func appendOrganizationDiscountBillingInfo(other map[string]interface{}, groupRatio float64, discount *model.TaskBillingDiscount) {
+	if other == nil || discount == nil {
+		return
+	}
+	appendDiscountBillingInfo(other, groupRatio, discount.SnapshotID, discount.ChannelId, discount.Ratio)
+}
+
+func appendDiscountBillingInfo(other map[string]interface{}, groupRatio float64, snapshotId, channelId int, ratio float64) {
+	if other == nil {
+		return
+	}
+	other["effective_ratio"] = groupRatio * ratio
+
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	if !ok {
+		adminInfo = make(map[string]interface{})
+		other["admin_info"] = adminInfo
+	}
+	adminInfo["organization_discount"] = map[string]interface{}{
+		"snapshot_id": snapshotId,
+		"channel_id":  channelId,
+		"ratio":       ratio,
+	}
 }
 
 // attachQuotaSaturation records the request's quota clamp (if any) onto the
@@ -115,6 +156,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
+	AppendOrganizationDiscountBillingInfo(relayInfo, other)
 	return other
 }
 
@@ -299,6 +341,9 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 		other["user_group_ratio"] = priceData.GroupRatioInfo.GroupSpecialRatio
 	}
 	appendRequestPath(nil, relayInfo, other)
+	if snapshot := priceData.DiscountSnapshot; snapshot != nil {
+		appendDiscountBillingInfo(other, priceData.GroupRatioInfo.GroupRatio, snapshot.SnapshotID, snapshot.AppliedChannelId, snapshot.EffectiveRatio())
+	}
 	return other
 }
 

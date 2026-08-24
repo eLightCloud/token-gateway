@@ -181,7 +181,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	info.OriginModelName = modelName
 	priceData, err := helper.ModelPriceHelperPerCall(c, info)
 	if err != nil {
-		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if errors.Is(err, service.ErrOrganizationDiscountLoadFailed) {
+			status = http.StatusInternalServerError
+		}
+		return nil, service.TaskErrorWrapper(err, "model_price_error", status)
 	}
 	info.PriceData = priceData
 
@@ -194,18 +198,25 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
-	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
+	// 6. 将 OtherRatios 分别应用到未打折预扣额度与折后最终额度（饱和转换，
+	//    防止溢出成负数）。两个值各自从自身基准计算，不得从彼此反推。
 	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
-		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
-		info.PriceData.Quota = quota
+		preConsumeWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.QuotaToPreConsume))
+		preConsumeQuota, clamp := common.QuotaFromFloatChecked(preConsumeWithRatios)
+		info.PriceData.QuotaToPreConsume = preConsumeQuota
 		noteTaskQuotaClamp(info, clamp)
+
+		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
+		quota, quotaClamp := common.QuotaFromFloatChecked(quotaWithRatios)
+		info.PriceData.Quota = quota
+		noteTaskQuotaClamp(info, quotaClamp)
 	}
 
-	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
+	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）。按未打折额度预扣，
+	//    成功后按折后额度结算并退回差额。
 	if info.Billing == nil && !info.PriceData.FreeModel {
 		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
+		if apiErr := service.PreConsumeBilling(c, info.PriceData.QuotaToPreConsume, info); apiErr != nil {
 			return nil, service.TaskErrorFromAPIError(apiErr)
 		}
 	}
@@ -243,10 +254,12 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
-		if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
-			// 基于调整后的 ratios 重新计算 quota
+		adjustedPreConsume, adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios)
+		if ok {
+			// 基于调整后的 ratios 分别重算两个额度
 			finalQuota = adjustedQuota
 			info.PriceData.ReplaceOtherRatios(adjustedRatios)
+			info.PriceData.QuotaToPreConsume = adjustedPreConsume
 			info.PriceData.Quota = finalQuota
 		}
 	}
@@ -259,25 +272,28 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}, nil
 }
 
-// recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
-// 公式: baseQuota × ∏(ratio) — 其中 baseQuota 是不含 OtherRatios 的基础额度。
-func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, bool) {
-	// 从 PriceData 获取不含 OtherRatios 的基础价格
-	baseQuota := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.Quota))
+// recalcQuotaFromRatios 根据 adjustedRatios 分别重算未打折预扣额度与折后最终额度。
+// 公式: baseQuota × ∏(ratio) — 两个额度各自从自身不含 OtherRatios 的基准计算，
+// 不得从彼此反推，避免舍入和重算漂移。
+func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, int, bool) {
 	priceData := info.PriceData
 	if !priceData.ReplaceOtherRatios(ratios) {
-		return 0, false
+		return 0, 0, false
 	}
-	// 应用新的 ratios
-	result := priceData.ApplyOtherRatiosToFloat(baseQuota)
-	quota, clamp := common.QuotaFromFloatChecked(result)
+	// 从各自额度中剥离旧 OtherRatios 得到基础值，再应用新 ratios
+	preConsumeBase := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.QuotaToPreConsume))
+	preConsumeQuota, clamp := common.QuotaFromFloatChecked(priceData.ApplyOtherRatiosToFloat(preConsumeBase))
 	noteTaskQuotaClamp(info, clamp)
-	return quota, true
+
+	quotaBase := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.Quota))
+	quota, quotaClamp := common.QuotaFromFloatChecked(priceData.ApplyOtherRatiosToFloat(quotaBase))
+	noteTaskQuotaClamp(info, quotaClamp)
+	return preConsumeQuota, quota, true
 }
 
 // noteTaskQuotaClamp records the first quota saturation event onto the task's
-// RelayInfo so LogTaskConsumption can surface it on the submit log's
-// admin_info. First non-nil clamp wins.
+// RelayInfo so the durable submit log can surface it in admin_info.
+// First non-nil clamp wins.
 func noteTaskQuotaClamp(info *relaycommon.RelayInfo, clamp *common.QuotaClamp) {
 	if clamp == nil || info == nil {
 		return

@@ -13,6 +13,43 @@ type GroupRatioInfo struct {
 	HasSpecialRatio   bool
 }
 
+// OrganizationDiscountSnapshot 在请求首次计费解析时固定组织渠道折扣。
+// ChannelDiscounts 是完整内存映射，渠道确定后只从中查找，不再访问数据库。
+type OrganizationDiscountSnapshot struct {
+	SnapshotID       int             `json:"snapshot_id"`
+	ChannelDiscounts map[int]float64 `json:"-"`
+	AppliedChannelId int             `json:"channel_id,omitempty"`
+	AppliedRatio     float64         `json:"ratio,omitempty"`
+}
+
+// RatioForChannel 从内存快照映射中查找渠道折扣；未配置返回 1.0。
+func (s *OrganizationDiscountSnapshot) RatioForChannel(channelId int) float64 {
+	if s == nil || channelId <= 0 {
+		return 1.0
+	}
+	if ratio, ok := s.ChannelDiscounts[channelId]; ok {
+		return ratio
+	}
+	return 1.0
+}
+
+// PinChannel records the only channel-specific discount fact used by billing.
+func (s *OrganizationDiscountSnapshot) PinChannel(channelId int) {
+	if s == nil {
+		return
+	}
+	s.AppliedChannelId = channelId
+	s.AppliedRatio = s.RatioForChannel(channelId)
+}
+
+// EffectiveRatio 返回实际应用的渠道折扣；未选择渠道时为 1.0。
+func (s *OrganizationDiscountSnapshot) EffectiveRatio() float64 {
+	if s == nil || s.AppliedRatio <= 0 {
+		return 1.0
+	}
+	return s.AppliedRatio
+}
+
 type PriceData struct {
 	FreeModel            bool
 	ModelPrice           float64
@@ -27,9 +64,13 @@ type PriceData struct {
 	AudioCompletionRatio float64
 	otherRatios          map[string]float64
 	UsePrice             bool
-	Quota                int // 按次计费的最终额度（MJ / Task）
-	QuotaToPreConsume    int // 按量计费的预消耗额度
+	Quota                int // 按次计费的折后最终额度（MJ / Task）
+	QuotaToPreConsume    int // 未应用组织折扣的准入/预扣额度
 	GroupRatioInfo       GroupRatioInfo
+	DiscountSnapshot     *OrganizationDiscountSnapshot
+	// DiscountSnapshotLoaded distinguishes "not resolved" from "resolved with no
+	// discount". Billing paths must never reload a resolved request.
+	DiscountSnapshotLoaded bool
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {

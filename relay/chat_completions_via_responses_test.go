@@ -32,12 +32,13 @@ func TestIsResponsesEventStreamContentType(t *testing.T) {
 func TestRecalcQuotaFromRatiosIgnoresInvalidMultipliers(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		PriceData: types.PriceData{
-			Quota: 100,
+			Quota:             100,
+			QuotaToPreConsume: 200,
 		},
 	}
 	info.PriceData.AddOtherRatio("duration", 2)
 
-	quota, ok := recalcQuotaFromRatios(info, map[string]float64{
+	preConsume, quota, ok := recalcQuotaFromRatios(info, map[string]float64{
 		"duration": 3,
 		"zero":     0,
 		"negative": -1,
@@ -47,18 +48,21 @@ func TestRecalcQuotaFromRatiosIgnoresInvalidMultipliers(t *testing.T) {
 
 	require.True(t, ok)
 	assert.Equal(t, 150, quota)
+	// 双额度契约：两个值各自应用同一组 OtherRatios，从自身基准独立计算
+	assert.Equal(t, 300, preConsume)
 	assert.True(t, info.PriceData.HasOtherRatio("duration"))
 }
 
 func TestRecalcQuotaFromRatiosRejectsAllInvalidAdjustedRatios(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		PriceData: types.PriceData{
-			Quota: 100,
+			Quota:             100,
+			QuotaToPreConsume: 200,
 		},
 	}
 	info.PriceData.AddOtherRatio("duration", 2)
 
-	quota, ok := recalcQuotaFromRatios(info, map[string]float64{
+	preConsume, quota, ok := recalcQuotaFromRatios(info, map[string]float64{
 		"zero":     0,
 		"negative": -1,
 		"nan":      math.NaN(),
@@ -67,5 +71,6 @@ func TestRecalcQuotaFromRatiosRejectsAllInvalidAdjustedRatios(t *testing.T) {
 
 	require.False(t, ok)
 	assert.Equal(t, 0, quota)
+	assert.Equal(t, 0, preConsume)
 	assert.True(t, info.PriceData.HasOtherRatio("duration"))
 }

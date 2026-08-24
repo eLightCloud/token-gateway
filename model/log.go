@@ -77,7 +77,11 @@ type Log struct {
 	Ip                string `json:"ip" gorm:"index;default:''"`
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
-	Other             string `json:"other"`
+	// BillingOperationId is set only by durable async billing adjustments. NULL
+	// remains unrestricted for ordinary logs; the unique value makes outbox
+	// replay idempotent on SQLite, MySQL and PostgreSQL.
+	BillingOperationId *string `json:"-" gorm:"type:varchar(128)"`
+	Other              string  `json:"other"`
 }
 
 // don't use iota, avoid change log type value
@@ -340,111 +344,136 @@ type RecordConsumeLogParams struct {
 	Other            map[string]interface{} `json:"other"`
 }
 
-func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
-	if !common.LogConsumeEnabled {
-		return
-	}
-	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
-	username := c.GetString("username")
-	requestId := c.GetString(common.RequestIdKey)
-	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
-	createdAt := common.GetTimestamp()
-	otherStr := common.MapToJsonStr(params.Other)
-	// 判断是否需要记录 IP
-	needRecordIp := false
-	if settingMap, err := GetUserSetting(userId, false); err == nil {
-		if settingMap.RecordIpLog {
-			needRecordIp = true
-		}
-	}
-	log := &Log{
+type RecordTaskBillingLogParams struct {
+	OperationId       string                 `json:"operation_id,omitempty"`
+	UserId            int                    `json:"user_id"`
+	Username          string                 `json:"username,omitempty"`
+	CreatedAt         int64                  `json:"created_at,omitempty"`
+	LogType           int                    `json:"log_type"`
+	Content           string                 `json:"content"`
+	ChannelId         int                    `json:"channel_id"`
+	ModelName         string                 `json:"model_name"`
+	Quota             int                    `json:"quota"`
+	PromptTokens      int                    `json:"prompt_tokens,omitempty"`
+	CompletionTokens  int                    `json:"completion_tokens,omitempty"`
+	TokenId           int                    `json:"token_id"`
+	TokenName         string                 `json:"token_name,omitempty"`
+	UseTimeSeconds    int                    `json:"use_time_seconds,omitempty"`
+	IsStream          bool                   `json:"is_stream,omitempty"`
+	Group             string                 `json:"group"`
+	Ip                string                 `json:"ip,omitempty"`
+	RequestId         string                 `json:"request_id,omitempty"`
+	UpstreamRequestId string                 `json:"upstream_request_id,omitempty"`
+	Other             map[string]interface{} `json:"other"`
+	NodeName          string                 `json:"node_name"` // 任务发起节点；为空时回退当前节点
+}
+
+// BuildConsumeBillingLogParams freezes every request-scoped field before a
+// durable billing journal is persisted. A later outbox replay therefore keeps
+// the original request id, IP and accounting period.
+func BuildConsumeBillingLogParams(c *gin.Context, userId int, params RecordConsumeLogParams) RecordTaskBillingLogParams {
+	result := RecordTaskBillingLogParams{
 		UserId:           userId,
-		Username:         username,
-		CreatedAt:        createdAt,
-		Type:             LogTypeConsume,
+		CreatedAt:        common.GetTimestamp(),
+		LogType:          LogTypeConsume,
 		Content:          params.Content,
-		PromptTokens:     params.PromptTokens,
-		CompletionTokens: params.CompletionTokens,
-		TokenName:        params.TokenName,
+		ChannelId:        params.ChannelId,
 		ModelName:        params.ModelName,
 		Quota:            params.Quota,
-		ChannelId:        params.ChannelId,
+		PromptTokens:     params.PromptTokens,
+		CompletionTokens: params.CompletionTokens,
 		TokenId:          params.TokenId,
-		UseTime:          params.UseTimeSeconds,
+		TokenName:        params.TokenName,
+		UseTimeSeconds:   params.UseTimeSeconds,
 		IsStream:         params.IsStream,
 		Group:            params.Group,
-		Ip: func() string {
-			if needRecordIp {
-				return c.ClientIP()
-			}
-			return ""
-		}(),
-		RequestId:         requestId,
-		UpstreamRequestId: upstreamRequestId,
-		Other:             otherStr,
+		Other:            params.Other,
+		NodeName:         common.NodeName,
 	}
-	err := createLog(log)
-	if err != nil {
+	if c == nil {
+		return result
+	}
+	result.Username = c.GetString("username")
+	result.RequestId = c.GetString(common.RequestIdKey)
+	result.UpstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
+	if settingMap, err := GetUserSetting(userId, false); err == nil && settingMap.RecordIpLog {
+		result.Ip = c.ClientIP()
+	}
+	return result
+}
+
+func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
+	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
+	if err := RecordTaskBillingLog(BuildConsumeBillingLogParams(c, userId, params)); err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
-	if common.DataExportEnabled {
-		LogQuotaData(QuotaDataLogParams{
-			UserID:    userId,
-			Username:  username,
-			ModelName: params.ModelName,
-			Quota:     params.Quota,
-			CreatedAt: createdAt,
-			TokenUsed: params.PromptTokens + params.CompletionTokens,
-			UseGroup:  params.Group,
-			TokenID:   params.TokenId,
-			ChannelID: params.ChannelId,
-			NodeName:  common.NodeName,
-		})
-	}
 }
 
-type RecordTaskBillingLogParams struct {
-	UserId    int
-	LogType   int
-	Content   string
-	ChannelId int
-	ModelName string
-	Quota     int
-	TokenId   int
-	Group     string
-	Other     map[string]interface{}
-	NodeName  string // 任务发起节点；为空时回退当前节点
-}
-
-func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
+func RecordTaskBillingLog(params RecordTaskBillingLogParams) error {
 	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
-		return
+		return nil
 	}
-	username, _ := GetUsernameById(params.UserId, false)
-	tokenName := ""
-	if params.TokenId > 0 {
+	if params.OperationId != "" {
+		var count int64
+		if err := LOG_DB.Model(&Log{}).
+			Where("billing_operation_id = ?", params.OperationId).
+			Limit(1).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return nil
+		}
+	}
+	username := params.Username
+	if username == "" {
+		username, _ = GetUsernameById(params.UserId, false)
+	}
+	tokenName := params.TokenName
+	if tokenName == "" && params.TokenId > 0 {
 		if token, err := GetTokenById(params.TokenId); err == nil {
 			tokenName = token.Name
 		}
 	}
-	createdAt := common.GetTimestamp()
+	createdAt := params.CreatedAt
+	if createdAt == 0 {
+		createdAt = common.GetTimestamp()
+	}
 	log := &Log{
-		UserId:    params.UserId,
-		Username:  username,
-		CreatedAt: createdAt,
-		Type:      params.LogType,
-		Content:   params.Content,
-		TokenName: tokenName,
-		ModelName: params.ModelName,
-		Quota:     params.Quota,
-		ChannelId: params.ChannelId,
-		TokenId:   params.TokenId,
-		Group:     params.Group,
-		Other:     common.MapToJsonStr(params.Other),
+		UserId:            params.UserId,
+		Username:          username,
+		CreatedAt:         createdAt,
+		Type:              params.LogType,
+		Content:           params.Content,
+		PromptTokens:      params.PromptTokens,
+		CompletionTokens:  params.CompletionTokens,
+		TokenName:         tokenName,
+		ModelName:         params.ModelName,
+		Quota:             params.Quota,
+		ChannelId:         params.ChannelId,
+		TokenId:           params.TokenId,
+		UseTime:           params.UseTimeSeconds,
+		IsStream:          params.IsStream,
+		Group:             params.Group,
+		Ip:                params.Ip,
+		RequestId:         params.RequestId,
+		UpstreamRequestId: params.UpstreamRequestId,
+		Other:             common.MapToJsonStr(params.Other),
+	}
+	if params.OperationId != "" {
+		operationId := params.OperationId
+		log.BillingOperationId = &operationId
 	}
 	err := createLog(log)
 	if err != nil {
-		common.SysLog("failed to record task billing log: " + err.Error())
+		if params.OperationId != "" {
+			var count int64
+			if queryErr := LOG_DB.Model(&Log{}).
+				Where("billing_operation_id = ?", params.OperationId).
+				Limit(1).Count(&count).Error; queryErr == nil && count > 0 {
+				return nil
+			}
+		}
+		return err
 	}
 	if params.LogType == LogTypeConsume && common.DataExportEnabled {
 		nodeName := params.NodeName
@@ -457,12 +486,14 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			ModelName: params.ModelName,
 			Quota:     params.Quota,
 			CreatedAt: createdAt,
+			TokenUsed: params.PromptTokens + params.CompletionTokens,
 			UseGroup:  params.Group,
 			TokenID:   params.TokenId,
 			ChannelID: params.ChannelId,
 			NodeName:  nodeName,
 		})
 	}
+	return nil
 }
 
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
@@ -611,8 +642,8 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 
 type Stat struct {
 	Quota int64 `json:"quota"`
-	Rpm   int `json:"rpm"`
-	Tpm   int `json:"tpm"`
+	Rpm   int   `json:"rpm"`
+	Tpm   int   `json:"tpm"`
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {

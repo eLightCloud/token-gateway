@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -75,9 +76,16 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 
 	groupRatioInfo := HandleGroupRatio(c, info)
 
+	// 请求首次计费解析时一次性加载组织折扣快照；数据库或解析错误时阻断请求。
+	// 预扣额度固定为未打折价格，渠道折扣只在结算时应用。
+	discountSnapshot, discountErr := service.LoadOrganizationDiscountSnapshot(info.UserId)
+	if discountErr != nil {
+		return hosttypes.PriceData{}, discountErr
+	}
+
 	// Check if this model uses tiered_expr billing
 	if billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModeTieredExpr {
-		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo)
+		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo, discountSnapshot)
 	}
 
 	var preConsumedQuota int
@@ -149,20 +157,22 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	}
 
 	priceData := hosttypes.PriceData{
-		FreeModel:            freeModel,
-		ModelPrice:           modelPrice,
-		ModelRatio:           modelRatio,
-		CompletionRatio:      completionRatio,
-		GroupRatioInfo:       groupRatioInfo,
-		UsePrice:             usePrice,
-		CacheRatio:           cacheRatio,
-		ImageRatio:           imageRatio,
-		AudioRatio:           audioRatio,
-		AudioCompletionRatio: audioCompletionRatio,
-		CacheCreationRatio:   cacheCreationRatio,
-		CacheCreation5mRatio: cacheCreationRatio5m,
-		CacheCreation1hRatio: cacheCreationRatio1h,
-		QuotaToPreConsume:    preConsumedQuota,
+		FreeModel:              freeModel,
+		ModelPrice:             modelPrice,
+		ModelRatio:             modelRatio,
+		CompletionRatio:        completionRatio,
+		GroupRatioInfo:         groupRatioInfo,
+		UsePrice:               usePrice,
+		CacheRatio:             cacheRatio,
+		ImageRatio:             imageRatio,
+		AudioRatio:             audioRatio,
+		AudioCompletionRatio:   audioCompletionRatio,
+		CacheCreationRatio:     cacheCreationRatio,
+		CacheCreation5mRatio:   cacheCreationRatio5m,
+		CacheCreation1hRatio:   cacheCreationRatio1h,
+		QuotaToPreConsume:      preConsumedQuota,
+		DiscountSnapshot:       discountSnapshot,
+		DiscountSnapshotLoaded: true,
 	}
 	if usePrice {
 		for name, ratio := range meta.BillingRatios {
@@ -184,8 +194,19 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 }
 
 // ModelPriceHelperPerCall 按次/按量计费的 PriceHelper (MJ、Task)
+// QuotaToPreConsume 为未打折准入/预扣额度，Quota 为应用实际渠道折扣后的最终额度。
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hosttypes.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
+
+	channelId := 0
+	if info.ChannelMeta != nil {
+		channelId = info.ChannelMeta.ChannelId
+	}
+	discountSnapshot, discountErr := service.ResolveOrganizationDiscountSnapshotForChannel(info.PriceData, info.UserId, channelId)
+	if discountErr != nil {
+		return hosttypes.PriceData{}, discountErr
+	}
+	discountRatio := discountSnapshot.EffectiveRatio()
 
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
 	usePrice := success
@@ -210,31 +231,44 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 		}
 	}
 
+	var quotaToPreConsume int
 	var quota int
 	freeModel := false
 
 	if usePrice {
+		baseQuota := modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio
 		var err error
-		quota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		quotaToPreConsume, err = common.QuotaFromFloatStrict(baseQuota)
+		if err != nil {
+			return hosttypes.PriceData{}, err
+		}
+		quota, err = common.QuotaFromFloatStrict(baseQuota * discountRatio)
 		if err != nil {
 			return hosttypes.PriceData{}, err
 		}
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelPrice == 0 {
+				quotaToPreConsume = 0
 				quota = 0
 				freeModel = true
 			}
 		}
 	} else {
 		// 按量计费：以模型倍率的一半作为预扣额度
+		baseQuota := modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio
 		var err error
-		quota, err = common.QuotaFromFloatStrict(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		quotaToPreConsume, err = common.QuotaFromFloatStrict(baseQuota)
+		if err != nil {
+			return hosttypes.PriceData{}, err
+		}
+		quota, err = common.QuotaFromFloatStrict(baseQuota * discountRatio)
 		if err != nil {
 			return hosttypes.PriceData{}, err
 		}
 		modelPrice = -1
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelRatio == 0 {
+				quotaToPreConsume = 0
 				quota = 0
 				freeModel = true
 			}
@@ -242,12 +276,15 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 	}
 
 	priceData := hosttypes.PriceData{
-		FreeModel:      freeModel,
-		ModelPrice:     modelPrice,
-		ModelRatio:     modelRatio,
-		UsePrice:       usePrice,
-		Quota:          quota,
-		GroupRatioInfo: groupRatioInfo,
+		FreeModel:              freeModel,
+		ModelPrice:             modelPrice,
+		ModelRatio:             modelRatio,
+		UsePrice:               usePrice,
+		Quota:                  quota,
+		QuotaToPreConsume:      quotaToPreConsume,
+		GroupRatioInfo:         groupRatioInfo,
+		DiscountSnapshot:       discountSnapshot,
+		DiscountSnapshotLoaded: true,
 	}
 	return priceData, nil
 }
@@ -266,7 +303,7 @@ func HasModelBillingConfig(modelName string) bool {
 	return ok && strings.TrimSpace(expr) != ""
 }
 
-func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {
+func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo, discountSnapshot *hosttypes.OrganizationDiscountSnapshot) (hosttypes.PriceData, error) {
 	exprStr, ok := billing_setting.GetBillingExpr(info.OriginModelName)
 	if !ok {
 		return hosttypes.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", info.OriginModelName)
@@ -293,6 +330,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 
 	// Expression coefficients are $/1M tokens prices; convert to quota the same way per-call billing does.
 	quotaBeforeGroup := rawCost / 1_000_000 * common.QuotaPerUnit
+	// 预扣固定为未打折价格；渠道折扣在结算时按请求快照应用。
 	preConsumedQuota, err := billingexpr.QuotaRoundStrict(quotaBeforeGroup * groupRatioInfo.GroupRatio)
 	if err != nil {
 		return hosttypes.PriceData{}, err
@@ -325,9 +363,11 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 	info.BillingRequestInput = &requestInput
 
 	priceData := hosttypes.PriceData{
-		FreeModel:         freeModel,
-		GroupRatioInfo:    groupRatioInfo,
-		QuotaToPreConsume: preConsumedQuota,
+		FreeModel:              freeModel,
+		GroupRatioInfo:         groupRatioInfo,
+		QuotaToPreConsume:      preConsumedQuota,
+		DiscountSnapshot:       discountSnapshot,
+		DiscountSnapshotLoaded: true,
 	}
 
 	logger.LogDebug(c, "model_price_helper_tiered result: model=%s preConsume=%d quotaBeforeGroup=%.2f groupRatio=%.2f tier=%s", info.OriginModelName, preConsumedQuota, quotaBeforeGroup, groupRatioInfo.GroupRatio, trace.MatchedTier)

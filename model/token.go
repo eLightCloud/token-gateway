@@ -421,6 +421,25 @@ func IncreaseTokenQuota(tokenId int, key string, quota int) (err error) {
 	return increaseTokenQuota(tokenId, int64(quota))
 }
 
+// IncreaseTokenQuotaDirect bypasses the process-local batch queue for durable
+// billing lifecycle operations. The database commits before the cache delta.
+func IncreaseTokenQuotaDirect(tokenId int, key string, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	if err := increaseTokenQuota(tokenId, int64(quota)); err != nil {
+		return err
+	}
+	if common.RedisEnabled {
+		gopool.Go(func() {
+			if err := cacheIncrTokenQuota(key, int64(quota)); err != nil {
+				common.SysLog("failed to increase token quota cache: " + err.Error())
+			}
+		})
+	}
+	return nil
+}
+
 func increaseTokenQuota(id int, quota int64) (err error) {
 	err = DB.Model(&Token{}).Where("id = ?", id).Updates(
 		map[string]interface{}{
@@ -449,6 +468,25 @@ func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 		return nil
 	}
 	return decreaseTokenQuota(id, int64(quota))
+}
+
+// DecreaseTokenQuotaDirect is the debit counterpart of
+// IncreaseTokenQuotaDirect and is used by pre-consume/reserve paths.
+func DecreaseTokenQuotaDirect(id int, key string, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	if err := decreaseTokenQuota(id, int64(quota)); err != nil {
+		return err
+	}
+	if common.RedisEnabled {
+		gopool.Go(func() {
+			if err := cacheDecrTokenQuota(key, int64(quota)); err != nil {
+				common.SysLog("failed to decrease token quota cache: " + err.Error())
+			}
+		})
+	}
+	return nil
 }
 
 func decreaseTokenQuota(id int, quota int64) (err error) {

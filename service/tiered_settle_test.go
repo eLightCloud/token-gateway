@@ -365,6 +365,38 @@ func TestPrepareTieredBillingForSelectedGroupUpdatesReservation(t *testing.T) {
 	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 }
 
+func TestPrepareTieredBillingForSelectedGroupKeepsReservationUndiscounted(t *testing.T) {
+	const expr = `tier("base", p)`
+	billing := &recordingBillingSettler{preConsumedQuota: 20_000}
+	relayInfo := &relaycommon.RelayInfo{
+		Billing: billing,
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			ExprString:                expr,
+			ExprHash:                  billingexpr.ExprHashString(expr),
+			GroupRatio:                0.20,
+			EstimatedQuotaBeforeGroup: 500_000,
+			EstimatedQuotaAfterGroup:  100_000,
+			QuotaPerUnit:              testQuotaPerUnit,
+		},
+		PriceData: types.PriceData{
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
+			DiscountSnapshot: &types.OrganizationDiscountSnapshot{
+				SnapshotID:       1,
+				ChannelDiscounts: map[int]float64{5: 0.4},
+				AppliedChannelId: 5,
+				AppliedRatio:     0.4,
+			},
+		},
+	}
+
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
+	// 组织折扣不进入预扣：目标恒为未打折额度，结算时才按请求快照打折。
+	require.Equal(t, []int{100_000}, billing.reserveTargets)
+	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	assert.InDelta(t, 0.4, relayInfo.PriceData.DiscountSnapshot.EffectiveRatio(), 1e-12)
+}
+
 func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *testing.T) {
 	truncate(t)
 	gin.SetMode(gin.TestMode)
@@ -404,7 +436,7 @@ func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *test
 
 	userQuota, err := model.GetUserQuota(userID, false)
 	require.NoError(t, err)
-	assert.Equal(t, 400_000, userQuota)
+	assert.EqualValues(t, 400_000, userQuota)
 }
 
 func TestPrepareTieredBillingForSelectedGroupPaidToFreeKeepsFreeModelFalse(t *testing.T) {
@@ -466,7 +498,7 @@ func TestPrepareTieredBillingForSelectedGroupTopUpArrearsAllowsNegativeBalance(t
 	}
 	session := &BillingSession{
 		relayInfo:        relayInfo,
-		funding:          &WalletFunding{userId: userID, consumed: 50_000},
+		funding:          &WalletFunding{userId: userID},
 		preConsumedQuota: 50_000,
 	}
 	relayInfo.Billing = session
@@ -479,14 +511,14 @@ func TestPrepareTieredBillingForSelectedGroupTopUpArrearsAllowsNegativeBalance(t
 	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 	userQuota, err := model.GetUserQuota(userID, false)
 	require.NoError(t, err)
-	assert.Equal(t, -30_000, userQuota)
+	assert.EqualValues(t, -30_000, userQuota)
 
 	// Settlement still reconciles against the full reservation: actual 80k
 	// refunds the 20k over-reserve, landing at seed - (actual - initial) = -10k.
 	require.NoError(t, session.Settle(80_000))
 	userQuota, err = model.GetUserQuota(userID, false)
 	require.NoError(t, err)
-	assert.Equal(t, -10_000, userQuota)
+	assert.EqualValues(t, -10_000, userQuota)
 }
 
 func TestBillingSessionReserveWalletTopUpDecrementsBalance(t *testing.T) {
@@ -501,7 +533,7 @@ func TestBillingSessionReserveWalletTopUpDecrementsBalance(t *testing.T) {
 	}
 	session := &BillingSession{
 		relayInfo:        relayInfo,
-		funding:          &WalletFunding{userId: userID, consumed: 50_000},
+		funding:          &WalletFunding{userId: userID},
 		preConsumedQuota: 50_000,
 	}
 
@@ -511,7 +543,7 @@ func TestBillingSessionReserveWalletTopUpDecrementsBalance(t *testing.T) {
 	assert.Equal(t, 100_000, relayInfo.FinalPreConsumedQuota)
 	userQuota, err := model.GetUserQuota(userID, false)
 	require.NoError(t, err)
-	assert.Equal(t, 450_000, userQuota)
+	assert.EqualValues(t, 450_000, userQuota)
 }
 
 func TestTryTieredSettleUsesFinalGroupAfterRetry(t *testing.T) {

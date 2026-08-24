@@ -289,6 +289,15 @@ func SetApiRouter(router *gin.Engine) {
 			adminOrganizationRoute.POST("/:id/members/:user_id/billing-start", controller.AdminUpdateOrganizationMemberBillingStart)
 			adminOrganizationRoute.POST("/:id/billing/billing-start/preview-batch", controller.AdminPreviewOrganizationMemberBillingStartBatch)
 		}
+		// 组织折扣是 Root 专属能力：独立挂载 RootAuth()，不进入上面的 AdminAuth() 组织组。
+		organizationDiscountRoute := apiRouter.Group("/admin/organizations/:id/discount")
+		organizationDiscountRoute.Use(middleware.RootAuth())
+		{
+			organizationDiscountRoute.GET("", controller.AdminGetOrganizationDiscount)
+			organizationDiscountRoute.PUT("", controller.AdminUpdateOrganizationDiscount)
+			organizationDiscountRoute.GET("/history", controller.AdminGetOrganizationDiscountHistory)
+			organizationDiscountRoute.GET("/channel-options", controller.AdminGetOrganizationDiscountChannelOptions)
+		}
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())
 		{

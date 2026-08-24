@@ -82,6 +82,7 @@ import {
 import { searchUsers } from '@/features/users/api'
 import { USER_ROLE } from '@/features/users/constants'
 import type { User } from '@/features/users/types'
+import { ROLE } from '@/lib/roles'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import {
   formatBillingAmountFromQuota,
@@ -91,6 +92,7 @@ import {
   stringToColor,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   addAdminOrganizationMember,
@@ -137,6 +139,7 @@ import {
   unixTimestampToBeijingDateInput,
 } from './beijing-time'
 import { canViewOrganizationBillingChannels } from './billing-visibility'
+import { OrganizationDiscountPanel } from './discount-panel'
 import { OrganizationInvoicePanel } from './invoice'
 import {
   ORGANIZATION_STATUS_DISABLED,
@@ -156,7 +159,12 @@ import {
 } from './types'
 
 const ROLE_OPTIONS: OrganizationRole[] = ['admin', 'member']
-type OrganizationDetailTab = 'members' | 'billing' | 'invoice' | 'logs'
+type OrganizationDetailTab =
+  | 'members'
+  | 'billing'
+  | 'invoice'
+  | 'logs'
+  | 'discount'
 
 // 摘要骨架屏占位槽位（稳定 key，避免使用数组 index 作为 key）。
 const SUMMARY_CARD_SKELETONS = [
@@ -198,6 +206,7 @@ function organizationDetailTabLabel(
   if (tab === 'members') return t('Members')
   if (tab === 'billing') return t('Billing')
   if (tab === 'invoice') return t('Invoice')
+  if (tab === 'discount') return t('Discount')
   return t('Logs')
 }
 
@@ -2058,6 +2067,10 @@ export function AdminOrganizationsPage() {
 export function AdminOrganizationDetailPage({ id }: { id: number }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  // 组织折扣是 Root 专属能力：普通 Admin 不显示折扣页签（后端同样返回 403）。
+  const isRoot = useAuthStore(
+    (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
+  )
   const [tab, setTab] = useState<OrganizationDetailTab>('members')
   const [memberDialogOpen, setMemberDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -2219,17 +2232,23 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
             variant='line'
             className='h-10 gap-6 p-0 group-data-horizontal/tabs:h-10'
           >
-            {(['members', 'billing', 'invoice', 'logs'] as const).map(
-              (item) => (
-                <TabsTrigger
-                  key={item}
-                  value={item}
-                  className='data-active:text-primary after:bg-primary min-w-14 px-0'
-                >
-                  {organizationDetailTabLabel(item, t)}
-                </TabsTrigger>
-              )
-            )}
+            {(
+              [
+                'members',
+                'billing',
+                'invoice',
+                'logs',
+                ...(isRoot ? (['discount'] as const) : []),
+              ] as OrganizationDetailTab[]
+            ).map((item) => (
+              <TabsTrigger
+                key={item}
+                value={item}
+                className='data-active:text-primary after:bg-primary min-w-14 px-0'
+              >
+                {organizationDetailTabLabel(item, t)}
+              </TabsTrigger>
+            ))}
           </TabsList>
         </Tabs>
       </header>
@@ -2359,6 +2378,9 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
             />
           </Panel>
         </div>
+      ) : null}
+      {tab === 'discount' && isRoot ? (
+        <OrganizationDiscountPanel organizationId={id} />
       ) : null}
       <MemberDialog
         open={memberDialogOpen}

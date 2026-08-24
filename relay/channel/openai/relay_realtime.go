@@ -201,25 +201,33 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 		}
 	})
 
+	var relayErr error
 	select {
 	case <-clientClosed:
 	case <-targetClosed:
 	case err := <-errChan:
-		//return service.OpenAIErrorWrapper(err, "realtime_error", http.StatusInternalServerError), nil
 		logger.LogError(c, "realtime error: "+err.Error())
+		relayErr = err
 	case <-c.Done():
 	}
 
 	if usage.TotalTokens != 0 {
-		_ = preConsumeUsage(c, info, usage, sumUsage)
+		if err := preConsumeUsage(c, info, usage, sumUsage); err != nil && relayErr == nil {
+			relayErr = err
+		}
 	}
 
 	if localUsage.TotalTokens != 0 {
-		_ = preConsumeUsage(c, info, localUsage, sumUsage)
+		if err := preConsumeUsage(c, info, localUsage, sumUsage); err != nil && relayErr == nil {
+			relayErr = err
+		}
 	}
 
 	// check usage total tokens, if 0, use local usage
 
+	if relayErr != nil {
+		return types.NewError(relayErr, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry()), nil
+	}
 	return nil, sumUsage
 }
 

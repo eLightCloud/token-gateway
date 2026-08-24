@@ -10,6 +10,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+
+	"github.com/gin-gonic/gin"
 )
 
 // RegisterScheduledSystemTasks wires the periodic channel test, upstream model
@@ -22,6 +24,7 @@ func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+	service.RegisterSystemTaskHandler(billingRecoveryHandler{})
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and
@@ -150,6 +153,30 @@ func (asyncTaskPollHandler) NewPayload() any { return nil }
 func (asyncTaskPollHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	summary := service.RunTaskPollingOnce(ctx, service.NewSystemTaskProgressReporter(task, runnerID))
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+// billingRecoveryHandler 重放未完成的持久账务操作，并把历史失败任务转换
+// 为同一 journal 退款路径（含 Midjourney progress=100% 的轮询死角）。
+// Enabled() 折叠空转检查，系统无残留时不产生任务行。
+type billingRecoveryHandler struct{}
+
+func (billingRecoveryHandler) Type() string { return model.SystemTaskTypeBillingRecovery }
+
+func (billingRecoveryHandler) Enabled() bool {
+	return model.HasPendingTaskSettlementJournals() || model.HasRefundPendingFailures()
+}
+
+func (billingRecoveryHandler) Interval() time.Duration { return 15 * time.Second }
+
+func (billingRecoveryHandler) NewPayload() any { return nil }
+
+func (billingRecoveryHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	settled := service.SweepPendingTaskSettlements(ctx)
+	refunded := service.SweepPendingRefunds(ctx)
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, gin.H{
+		"recovered_settlements": settled,
+		"refunded_tasks":        refunded,
+	}, nil)
 }
 
 func finishSystemTaskHandler(task *model.SystemTask, runnerID string, status model.SystemTaskStatus, result any, runErr error) {
