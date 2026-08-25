@@ -77,6 +77,8 @@ import {
   updateOrganizationSettlementRule,
 } from './invoice-api'
 import { organizationInvoiceCategoryName } from './invoice-category'
+import { OrganizationInvoiceFinancialSummary } from './invoice-financial-summary'
+import { formatOrganizationInvoiceUSD } from './invoice-format'
 import type {
   OrganizationInvoice,
   OrganizationInvoiceAccountAmount,
@@ -94,18 +96,6 @@ type SettlementRuleRowProps = {
   rule: OrganizationSettlementRuleOption
   isPending: boolean
   onSave: (rule: OrganizationSettlementRuleOption, factor: string) => void
-}
-
-const USD_FORMATTER = new Intl.NumberFormat('en-US', {
-  minimumFractionDigits: 4,
-  maximumFractionDigits: 4,
-})
-
-function formatUSD(value: string, emptyForZero = false): string {
-  const amount = Number(value)
-  if (!Number.isFinite(amount)) return '-'
-  if (emptyForZero && amount === 0) return '-'
-  return USD_FORMATTER.format(amount)
 }
 
 function factorLabel(
@@ -212,14 +202,14 @@ function CategoryInvoiceTable(props: {
                   key={account.user_id}
                   className='text-right tabular-nums'
                 >
-                  {formatUSD(
+                  {formatOrganizationInvoiceUSD(
                     accountAmount(row.account_amounts, account.user_id),
                     true
                   )}
                 </TableCell>
               ))}
               <TableCell className='text-right font-medium tabular-nums'>
-                {formatUSD(row.gross_amount_usd)}
+                {formatOrganizationInvoiceUSD(row.gross_amount_usd)}
               </TableCell>
               <TableCell className='text-right tabular-nums'>
                 {row.factor === '0.0000' ? (
@@ -229,7 +219,7 @@ function CategoryInvoiceTable(props: {
                 )}
               </TableCell>
               <TableCell className='text-right font-medium tabular-nums'>
-                {formatUSD(row.settled_amount_usd)}
+                {formatOrganizationInvoiceUSD(row.settled_amount_usd)}
               </TableCell>
             </TableRow>
           ))}
@@ -244,15 +234,19 @@ function CategoryInvoiceTable(props: {
                 key={account.user_id}
                 className='text-right tabular-nums'
               >
-                {formatUSD(account.gross_amount_usd)}
+                {formatOrganizationInvoiceUSD(account.gross_amount_usd)}
               </TableCell>
             ))}
             <TableCell className='text-right font-semibold tabular-nums'>
-              {formatUSD(props.invoice.gross_total_amount_usd)}
+              {formatOrganizationInvoiceUSD(
+                props.invoice.gross_total_amount_usd
+              )}
             </TableCell>
             <TableCell className='text-right'>—</TableCell>
             <TableCell className='text-right font-semibold tabular-nums'>
-              {formatUSD(props.invoice.settled_total_amount_usd)}
+              {formatOrganizationInvoiceUSD(
+                props.invoice.settled_total_amount_usd
+              )}
             </TableCell>
           </TableRow>
         </TableFooter>
@@ -297,14 +291,14 @@ function ModelInvoiceTable(props: {
                   key={account.user_id}
                   className='text-right tabular-nums'
                 >
-                  {formatUSD(
+                  {formatOrganizationInvoiceUSD(
                     accountAmount(row.account_amounts, account.user_id),
                     true
                   )}
                 </TableCell>
               ))}
               <TableCell className='text-right font-medium tabular-nums'>
-                {formatUSD(row.gross_amount_usd)}
+                {formatOrganizationInvoiceUSD(row.gross_amount_usd)}
               </TableCell>
               <TableCell className='text-right tabular-nums'>
                 {row.share_percent}%
@@ -322,11 +316,13 @@ function ModelInvoiceTable(props: {
                 key={account.user_id}
                 className='text-right tabular-nums'
               >
-                {formatUSD(account.gross_amount_usd)}
+                {formatOrganizationInvoiceUSD(account.gross_amount_usd)}
               </TableCell>
             ))}
             <TableCell className='text-right font-semibold tabular-nums'>
-              {formatUSD(props.invoice.gross_total_amount_usd)}
+              {formatOrganizationInvoiceUSD(
+                props.invoice.gross_total_amount_usd
+              )}
             </TableCell>
             <TableCell className='text-right'>100.0%</TableCell>
           </TableRow>
@@ -574,6 +570,7 @@ function SettlementRulesSheet(props: {
 
 export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const authenticatedUserId = useAuthStore((state) => state.auth.user?.id)
   const currentRange = getBeijingMonthDateRange()
   const previousRange = getBeijingMonthDateRange(Date.now(), -1)
@@ -589,12 +586,31 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
     organizationId: props.organizationId ?? props.currentOrganizationId,
     authenticatedUserId,
   }
+  const invoiceQueryKey = organizationInvoiceKeys.invoice(scope, params)
   const invoiceQuery = useQuery({
-    queryKey: organizationInvoiceKeys.invoice(scope, params),
+    queryKey: invoiceQueryKey,
     queryFn: () => getOrganizationInvoice(params, props.organizationId),
     enabled: Boolean(authenticatedUserId),
+    refetchInterval: (query) =>
+      query.state.data?.data?.generation_status === 'generating' ? 1500 : false,
   })
   const invoice = invoiceQuery.data?.data
+  const invoiceGenerating = invoice?.generation_status === 'generating'
+  const invoiceLoading = invoiceQuery.isLoading || invoiceGenerating
+  const sourceAsOf = invoice?.source_as_of
+    ? new Intl.DateTimeFormat(undefined, {
+        dateStyle: 'medium',
+        timeStyle: 'medium',
+        timeZone: 'Asia/Shanghai',
+      }).format(invoice.source_as_of * 1000)
+    : undefined
+  const refreshMutation = useMutation({
+    mutationFn: () =>
+      getOrganizationInvoice(params, props.organizationId, true),
+    onSuccess: (result) => {
+      queryClient.setQueryData(invoiceQueryKey, result)
+    },
+  })
   const invalidRange =
     !draftStartDate || !draftEndDate || draftStartDate > draftEndDate
   let invoiceError: string | undefined
@@ -659,13 +675,15 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
           <div className='flex flex-wrap gap-2'>
             <Button
               variant='outline'
-              onClick={() => void invoiceQuery.refetch()}
+              disabled={refreshMutation.isPending || invoiceGenerating}
+              onClick={() => refreshMutation.mutate()}
             >
               <RefreshCw data-icon='inline-start' />
               {t('Refresh')}
             </Button>
             <Button
               variant='outline'
+              disabled={invoiceGenerating || !invoice}
               onClick={() =>
                 void downloadOrganizationExport(
                   buildOrganizationInvoiceExportUrl(
@@ -699,12 +717,23 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
         </Card>
       ) : (
         <>
+          {invoiceGenerating ? (
+            <Card>
+              <CardContent className='text-muted-foreground py-10 text-center text-sm'>
+                {t('Generating...')}
+              </CardContent>
+            </Card>
+          ) : null}
           <div className='grid gap-4 md:grid-cols-3'>
             <Card size='sm'>
               <CardHeader>
                 <CardDescription>{t('Gross amount')}</CardDescription>
                 <CardTitle className='text-2xl tabular-nums'>
-                  ${formatUSD(invoice?.gross_total_amount_usd ?? '0')}
+                  {invoiceLoading ? (
+                    <Skeleton className='h-8 w-28' />
+                  ) : (
+                    `$${formatOrganizationInvoiceUSD(invoice?.gross_total_amount_usd ?? '0')}`
+                  )}
                 </CardTitle>
               </CardHeader>
             </Card>
@@ -712,7 +741,11 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
               <CardHeader>
                 <CardDescription>{t('Settled amount')}</CardDescription>
                 <CardTitle className='text-2xl tabular-nums'>
-                  ${formatUSD(invoice?.settled_total_amount_usd ?? '0')}
+                  {invoiceLoading ? (
+                    <Skeleton className='h-8 w-28' />
+                  ) : (
+                    `$${formatOrganizationInvoiceUSD(invoice?.settled_total_amount_usd ?? '0')}`
+                  )}
                 </CardTitle>
               </CardHeader>
             </Card>
@@ -725,9 +758,31 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
                   {invoice?.period.start_date ?? params.start_date} —{' '}
                   {invoice?.period.end_date ?? params.end_date}
                 </CardTitle>
+                {sourceAsOf ? (
+                  <p className='text-muted-foreground text-xs'>
+                    {t('Updated at')}: {sourceAsOf}
+                  </p>
+                ) : null}
               </CardHeader>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('Account financial summary')}</CardTitle>
+              <CardDescription>
+                {t(
+                  'All billing-period organization accounts, including accounts with no usage, are shown.'
+                )}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className='px-0'>
+              <OrganizationInvoiceFinancialSummary
+                invoice={invoice}
+                isLoading={invoiceLoading}
+              />
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>
@@ -741,7 +796,7 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
             <CardContent className='px-0'>
               <CategoryInvoiceTable
                 invoice={invoice}
-                isLoading={invoiceQuery.isLoading}
+                isLoading={invoiceLoading}
               />
             </CardContent>
           </Card>
@@ -756,10 +811,7 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
               </CardDescription>
             </CardHeader>
             <CardContent className='px-0'>
-              <ModelInvoiceTable
-                invoice={invoice}
-                isLoading={invoiceQuery.isLoading}
-              />
+              <ModelInvoiceTable invoice={invoice} isLoading={invoiceLoading} />
             </CardContent>
           </Card>
         </>

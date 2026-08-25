@@ -49,9 +49,18 @@ func TestMain(m *testing.M) {
 		&model.Organization{},
 		&model.OrganizationMember{},
 		&model.OrganizationDiscountSnapshot{},
+		&model.OrganizationBillingSettlementRule{},
+		&model.OrganizationInvoicePeriodSummary{},
+		&model.OrganizationInvoiceBaseline{},
+		&model.OrganizationInvoiceAccountBaseline{},
 		&model.TaskSettlementJournal{},
+		&model.UserQuotaAdjustment{},
+		&model.UserQuotaAdjustmentLegacyFact{},
+		&model.Checkin{},
+		&model.Redemption{},
 		&model.TopUp{},
 		&model.SubscriptionPlan{},
+		&model.SubscriptionOrder{},
 		&model.UserSubscription{},
 		&model.SubscriptionPreConsumeRecord{},
 		&model.SystemTask{},
@@ -79,8 +88,17 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM organizations")
 		model.DB.Exec("DELETE FROM organization_members")
 		model.DB.Exec("DELETE FROM organization_discount_snapshots")
+		model.DB.Exec("DELETE FROM organization_billing_settlement_rules")
+		model.DB.Exec("DELETE FROM organization_invoice_period_summaries")
+		model.DB.Exec("DELETE FROM organization_invoice_account_baselines")
+		model.DB.Exec("DELETE FROM organization_invoice_baselines")
 		model.DB.Exec("DELETE FROM task_settlement_journals")
+		model.DB.Exec("DELETE FROM user_quota_adjustments")
+		model.DB.Exec("DELETE FROM user_quota_adjustment_legacy_facts")
+		model.DB.Exec("DELETE FROM checkins")
+		model.DB.Exec("DELETE FROM redemptions")
 		model.DB.Exec("DELETE FROM top_ups")
+		model.DB.Exec("DELETE FROM subscription_orders")
 		model.DB.Exec("DELETE FROM subscription_pre_consume_records")
 		model.DB.Exec("DELETE FROM user_subscriptions")
 		model.DB.Exec("DELETE FROM subscription_plans")

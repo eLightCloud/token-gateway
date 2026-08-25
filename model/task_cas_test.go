@@ -43,7 +43,13 @@ func TestMain(m *testing.M) {
 		&OrganizationDiscountSnapshot{},
 		&TaskSettlementJournal{},
 		&OrganizationBillingSettlementRule{},
+		&OrganizationInvoicePeriodSummary{},
+		&OrganizationInvoiceBaseline{},
+		&OrganizationInvoiceAccountBaseline{},
 		&UserQuotaAdjustment{},
+		&UserQuotaAdjustmentLegacyFact{},
+		&Checkin{},
+		&Redemption{},
 		&UserSession{},
 		&AuthFlow{},
 		&ExternalIdentityClaim{},
@@ -79,7 +85,13 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM tasks")
 		DB.Exec("DELETE FROM midjourneys")
 		DB.Exec("DELETE FROM organization_billing_settlement_rules")
+		DB.Exec("DELETE FROM organization_invoice_period_summaries")
+		DB.Exec("DELETE FROM organization_invoice_account_baselines")
+		DB.Exec("DELETE FROM organization_invoice_baselines")
 		DB.Exec("DELETE FROM user_quota_adjustments")
+		DB.Exec("DELETE FROM user_quota_adjustment_legacy_facts")
+		DB.Exec("DELETE FROM checkins")
+		DB.Exec("DELETE FROM redemptions")
 		DB.Exec("DELETE FROM organization_members")
 		DB.Exec("DELETE FROM organizations")
 		DB.Exec("DELETE FROM auth_flows")

@@ -43,6 +43,9 @@ func TestParseOrganizationDiscountRatio(t *testing.T) {
 		{input: "1", want: 1_000_000},
 		{input: "0.123456", want: 123_456},
 		{input: "0.000001", want: 1},
+		{input: "1.000001", want: 1_000_001},
+		{input: "9.999999", want: 9_999_999},
+		{input: "9.9999990", want: 9_999_999},
 		// 超出六位小数必须报错，禁止静默截断
 		{input: "0.1234567", wantErr: true},
 		{input: "abc", wantErr: true},
@@ -50,8 +53,8 @@ func TestParseOrganizationDiscountRatio(t *testing.T) {
 		// 范围在 decimal 上先于整数转换校验，超大值不得窄化后落入合法区间
 		{input: "0", wantErr: true},
 		{input: "-0.5", wantErr: true},
-		{input: "1.000001", wantErr: true},
-		{input: "2", wantErr: true},
+		{input: "10", wantErr: true},
+		{input: "10.000001", wantErr: true},
 		{input: "999999999999999999999999", wantErr: true},
 	}
 	for _, tc := range cases {
@@ -74,9 +77,10 @@ func TestFormatOrganizationDiscountRatio(t *testing.T) {
 func TestValidateOrganizationDiscountRatioScaled(t *testing.T) {
 	assert.NoError(t, ValidateOrganizationDiscountRatioScaled(1))
 	assert.NoError(t, ValidateOrganizationDiscountRatioScaled(1_000_000))
+	assert.NoError(t, ValidateOrganizationDiscountRatioScaled(9_999_999))
 	assert.Error(t, ValidateOrganizationDiscountRatioScaled(0))
 	assert.Error(t, ValidateOrganizationDiscountRatioScaled(-1))
-	assert.Error(t, ValidateOrganizationDiscountRatioScaled(1_000_001))
+	assert.Error(t, ValidateOrganizationDiscountRatioScaled(10_000_000))
 }
 
 func TestMarshalOrganizationChannelDiscountsNormalizesOne(t *testing.T) {
@@ -93,9 +97,9 @@ func TestMarshalOrganizationChannelDiscountsNormalizesOne(t *testing.T) {
 }
 
 func TestUnmarshalOrganizationChannelDiscountsFailsClosedOnCorruption(t *testing.T) {
-	discounts, err := UnmarshalOrganizationChannelDiscounts(`{"12":800000,"35":950000}`)
+	discounts, err := UnmarshalOrganizationChannelDiscounts(`{"12":800000,"35":9500000}`)
 	require.NoError(t, err)
-	assert.Equal(t, map[int]int{12: 800_000, 35: 950_000}, discounts)
+	assert.Equal(t, map[int]int{12: 800_000, 35: 9_500_000}, discounts)
 
 	_, err = UnmarshalOrganizationChannelDiscounts(`{not-json`)
 	require.ErrorIs(t, err, ErrOrganizationDiscountInvalidJSON)
@@ -108,7 +112,7 @@ func TestUnmarshalOrganizationChannelDiscountsFailsClosedOnCorruption(t *testing
 	for _, payload := range []string{
 		`{"12":0}`,
 		`{"12":-5}`,
-		`{"12":1000001}`,
+		`{"12":10000000}`,
 	} {
 		_, err = UnmarshalOrganizationChannelDiscounts(payload)
 		require.ErrorIs(t, err, ErrOrganizationDiscountInvalidJSON, payload)
@@ -154,7 +158,7 @@ func TestSaveOrganizationDiscountRejectsInvalidInput(t *testing.T) {
 	_, err = SaveOrganizationDiscount(SaveOrganizationDiscountParams{
 		OrganizationId: 600,
 		ChannelDiscounts: []OrganizationChannelDiscountParam{
-			{ChannelId: 900, RatioScaled: 1_000_001},
+			{ChannelId: 900, RatioScaled: 10_000_000},
 		},
 	})
 	require.ErrorIs(t, err, ErrOrganizationDiscountInvalidRatio)

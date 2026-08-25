@@ -93,21 +93,35 @@ func writeOrganizationInvoiceCSV(
 		amountFormatter.amount(invoice.SettledTotalAmountUSD),
 	)
 	_ = writer.Write(categoryTotal)
-	topUpAmounts := []string{"用户当期成功充值订单金额"}
-	currentBalances := []string{"用户导出时剩余金额"}
+	previousBalanceAmounts := []string{"用户上期余额"}
+	periodRechargeAmounts := []string{"用户当期充值金额"}
+	consumptionAmounts := []string{"用户当期消费金额"}
+	currentBalances := []string{"用户当前余额"}
 	for _, account := range invoice.Accounts {
-		topUpAmounts = append(
-			topUpAmounts,
-			amountFormatter.amount(exportContext.AccountTopUpAndAdjustmentAmountsUSD[account.UserId]),
+		previousBalanceAmounts = append(
+			previousBalanceAmounts,
+			amountFormatter.amount(account.Financials.OpeningBalanceAmountUSD),
+		)
+		periodRechargeAmounts = append(
+			periodRechargeAmounts,
+			amountFormatter.amount(account.Financials.TotalInflowAmountUSD),
+		)
+		consumptionAmounts = append(
+			consumptionAmounts,
+			amountFormatter.amount(account.GrossAmountUSD),
 		)
 		currentBalances = append(
 			currentBalances,
-			amountFormatter.amount(exportContext.AccountCurrentBalanceAmountsUSD[account.UserId]),
+			amountFormatter.amount(account.Financials.CurrentBalanceAmountUSD),
 		)
 	}
-	topUpAmounts = append(topUpAmounts, "", "", "")
+	previousBalanceAmounts = append(previousBalanceAmounts, "", "", "")
+	periodRechargeAmounts = append(periodRechargeAmounts, "", "", "")
+	consumptionAmounts = append(consumptionAmounts, "", "", "")
 	currentBalances = append(currentBalances, "", "", "")
-	_ = writer.Write(topUpAmounts)
+	_ = writer.Write(previousBalanceAmounts)
+	_ = writer.Write(periodRechargeAmounts)
+	_ = writer.Write(consumptionAmounts)
 	_ = writer.Write(currentBalances)
 	_ = writer.Write([]string{})
 

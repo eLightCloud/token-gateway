@@ -131,7 +131,13 @@ func setupOrganizationE2E(t *testing.T) (organizationE2EFixture, *gin.Engine) {
 		&model.Organization{},
 		&model.OrganizationMember{},
 		&model.OrganizationBillingSettlementRule{},
+		&model.OrganizationInvoicePeriodSummary{},
+		&model.OrganizationInvoiceBaseline{},
+		&model.OrganizationInvoiceAccountBaseline{},
 		&model.UserQuotaAdjustment{},
+		&model.UserQuotaAdjustmentLegacyFact{},
+		&model.Checkin{},
+		&model.Redemption{},
 		&model.TopUp{},
 		&model.SubscriptionOrder{},
 		&model.Token{},
@@ -365,6 +371,50 @@ func requireOrganizationE2ESuccess(t *testing.T, recorder *httptest.ResponseReco
 	response := decodeOrganizationE2EResponse(t, recorder)
 	require.True(t, response.Success, response.Message)
 	return response
+}
+
+func requireOrganizationE2EInvoiceReady(
+	t *testing.T,
+	router *gin.Engine,
+	fixture organizationE2EFixture,
+	userId int,
+	target string,
+) model.OrganizationInvoice {
+	t.Helper()
+	var invoice model.OrganizationInvoice
+	lastResult := "no response"
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		recorder := performOrganizationE2ERequest(t, router, fixture, userId, http.MethodGet, target, nil)
+		if recorder.Code != http.StatusOK {
+			lastResult = fmt.Sprintf("http status %d", recorder.Code)
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		var response organizationE2EResponse
+		if err := common.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			lastResult = err.Error()
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		if !response.Success {
+			lastResult = response.Message
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		if err := common.Unmarshal(response.Data, &invoice); err != nil {
+			lastResult = err.Error()
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		lastResult = "generation status " + invoice.GenerationStatus
+		if invoice.GenerationStatus == model.OrganizationInvoiceGenerationStatusReady {
+			return invoice
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.FailNowf(t, "invoice did not become ready", "last invoice result: %s", lastResult)
+	return model.OrganizationInvoice{}
 }
 
 func TestOrganizationE2EPermissions(t *testing.T) {
@@ -916,6 +966,14 @@ func TestOrganizationE2EBillingStartExportsBackfill(t *testing.T) {
 func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	fixture, router := setupOrganizationE2E(t)
 	organizationId := fixture.Organization.Id
+	require.NoError(t, model.DB.Create(&model.OrganizationInvoiceBaseline{
+		OrganizationId: organizationId,
+		StartMonth:     202607,
+	}).Error)
+	require.NoError(t, model.DB.Create(&[]model.OrganizationInvoiceAccountBaseline{
+		{OrganizationId: organizationId, UserId: 1001},
+		{OrganizationId: organizationId, UserId: 1002},
+	}).Error)
 	invoiceQuery := "start_date=2026-07-01&end_date=2026-07-31"
 	require.NoError(t, model.LOG_DB.Create(&[]model.Log{
 		{
@@ -977,7 +1035,14 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 		"/api/organization/current/invoice?"+invoiceQuery,
 		nil,
 	))
-	currentInvoice := decodeOrganizationE2EData[model.OrganizationInvoice](t, currentInvoiceResponse)
+	assert.Equal(
+		t,
+		model.OrganizationInvoiceGenerationStatusGenerating,
+		decodeOrganizationE2EData[model.OrganizationInvoice](t, currentInvoiceResponse).GenerationStatus,
+	)
+	currentInvoice := requireOrganizationE2EInvoiceReady(
+		t, router, fixture, 1001, "/api/organization/current/invoice?"+invoiceQuery,
+	)
 	assert.Equal(t, int64(765), currentInvoice.GrossTotalQuota)
 	assert.Len(t, currentInvoice.Accounts, 2)
 	for _, account := range currentInvoice.Accounts {
@@ -1052,7 +1117,14 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 		"/api/organization/current/invoice?"+invoiceQuery,
 		nil,
 	))
-	settledInvoice := decodeOrganizationE2EData[model.OrganizationInvoice](t, settledResponse)
+	assert.Equal(
+		t,
+		model.OrganizationInvoiceGenerationStatusGenerating,
+		decodeOrganizationE2EData[model.OrganizationInvoice](t, settledResponse).GenerationStatus,
+	)
+	settledInvoice := requireOrganizationE2EInvoiceReady(
+		t, router, fixture, 1001, "/api/organization/current/invoice?"+invoiceQuery,
+	)
 	expectedSettled := decimal.NewFromFloat(677.5).
 		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
 		StringFixed(10)
@@ -1082,6 +1154,7 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 			UserId:          1001,
 			Amount:          2,
 			Money:           1.25,
+			CreditedQuota:   625_000,
 			TradeNo:         "organization-e2e-stripe-topup",
 			PaymentProvider: model.PaymentProviderStripe,
 			CompleteTime:    rechargeTime,
@@ -1096,6 +1169,27 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 			Status:          common.TopUpStatusSuccess,
 		},
 	}).Error)
+	refreshResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1001,
+		http.MethodGet,
+		"/api/organization/current/invoice?"+invoiceQuery+"&refresh=1",
+		nil,
+	))
+	assert.Equal(
+		t,
+		model.OrganizationInvoiceGenerationStatusGenerating,
+		decodeOrganizationE2EData[model.OrganizationInvoice](t, refreshResponse).GenerationStatus,
+	)
+	exportedInvoice := requireOrganizationE2EInvoiceReady(
+		t, router, fixture, 1001, "/api/organization/current/invoice?"+invoiceQuery,
+	)
+	exportedAccounts := make(map[string]model.OrganizationInvoiceAccount, len(exportedInvoice.Accounts))
+	for _, account := range exportedInvoice.Accounts {
+		exportedAccounts[account.Username] = account
+	}
 
 	exportResponse := performOrganizationE2ERequest(
 		t,
@@ -1125,7 +1219,9 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	exportRecords, err := exportReader.ReadAll()
 	require.NoError(t, err)
 	var categoryHeader []string
-	var topUpAmounts []string
+	var previousBalanceAmounts []string
+	var periodRechargeAmounts []string
+	var consumptionAmounts []string
 	var currentBalances []string
 	for _, record := range exportRecords {
 		if len(record) == 0 {
@@ -1134,14 +1230,20 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 		switch record[0] {
 		case "模型类别":
 			categoryHeader = record
-		case "用户当期成功充值订单金额":
-			topUpAmounts = record
-		case "用户导出时剩余金额":
+		case "用户上期余额":
+			previousBalanceAmounts = record
+		case "用户当期充值金额":
+			periodRechargeAmounts = record
+		case "用户当期消费金额":
+			consumptionAmounts = record
+		case "用户当前余额":
 			currentBalances = record
 		}
 	}
 	require.NotNil(t, categoryHeader)
-	require.NotNil(t, topUpAmounts)
+	require.NotNil(t, previousBalanceAmounts)
+	require.NotNil(t, periodRechargeAmounts)
+	require.NotNil(t, consumptionAmounts)
 	require.NotNil(t, currentBalances)
 	assert.Contains(t, categoryHeader, "org-admin")
 	assert.Contains(t, categoryHeader, "org-member")
@@ -1150,11 +1252,19 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	for column, username := range categoryHeader {
 		switch username {
 		case "org-admin":
-			assert.Equal(t, "1.250000", topUpAmounts[column])
+			assert.Equal(t, "1.250000", periodRechargeAmounts[column])
 			assert.Equal(t, "0.040000", currentBalances[column])
 		case "org-member":
-			assert.Equal(t, "0.000000", topUpAmounts[column])
+			assert.Equal(t, "0.000060", periodRechargeAmounts[column])
 			assert.Equal(t, "0.020000", currentBalances[column])
+		}
+		if account, ok := exportedAccounts[username]; ok {
+			expectedPreviousBalance, err := invoiceCSVAmount(account.Financials.OpeningBalanceAmountUSD)
+			require.NoError(t, err)
+			assert.Equal(t, expectedPreviousBalance, previousBalanceAmounts[column])
+			expectedConsumption, err := invoiceCSVAmount(account.GrossAmountUSD)
+			require.NoError(t, err)
+			assert.Equal(t, expectedConsumption, consumptionAmounts[column])
 		}
 	}
 	assert.NotContains(t, exportResponse.Body.String(), "组织 ID")

@@ -198,7 +198,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
-	// 6. 将 OtherRatios 分别应用到未打折预扣额度与折后最终额度（饱和转换，
+	// 6. 将 OtherRatios 分别应用到未应用组织倍率的预估额度与应用倍率后的最终额度（饱和转换，
 	//    防止溢出成负数）。两个值各自从自身基准计算，不得从彼此反推。
 	if !common.StringsContains(constant.TaskPricePatches, modelName) {
 		preConsumeWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.QuotaToPreConsume))
@@ -212,13 +212,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		noteTaskQuotaClamp(info, quotaClamp)
 	}
 
-	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）。按未打折额度预扣，
-	//    成功后按折后额度结算并退回差额。
-	if info.Billing == nil && !info.PriceData.FreeModel {
-		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.QuotaToPreConsume, info); apiErr != nil {
-			return nil, service.TaskErrorFromAPIError(apiErr)
-		}
+	// 7. 每次尝试都校准预扣目标：首次创建会话，跨渠道重试复用同一会话
+	//    Reserve 到更高目标；MJ 不经过此统一任务路径。
+	if apiErr := service.PrepareTaskBillingForAttempt(c, info); apiErr != nil {
+		return nil, service.TaskErrorFromAPIError(apiErr)
 	}
 
 	// 8. 构建请求体
@@ -272,7 +269,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}, nil
 }
 
-// recalcQuotaFromRatios 根据 adjustedRatios 分别重算未打折预扣额度与折后最终额度。
+// recalcQuotaFromRatios 根据 adjustedRatios 分别重算未应用组织倍率的预估额度与应用倍率后的最终额度。
 // 公式: baseQuota × ∏(ratio) — 两个额度各自从自身不含 OtherRatios 的基准计算，
 // 不得从彼此反推，避免舍入和重算漂移。
 func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, int, bool) {

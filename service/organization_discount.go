@@ -3,9 +3,12 @@ package service
 import (
 	"errors"
 	"fmt"
+	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/shopspring/decimal"
@@ -71,13 +74,39 @@ func ResolveOrganizationDiscountSnapshotForChannel(priceData hosttypes.PriceData
 
 // ApplyOrganizationDiscountForChannel 在渠道确定后把实际渠道折扣钉在请求内存快照上。
 // 只查同一内存映射；未配置渠道为 1.0，不访问数据库，因此没有错误路径。
-// 组织折扣不大于 1.0，渠道确定后的目标费用不会超过未打折预扣额，无需补扣。
 func ApplyOrganizationDiscountForChannel(relayInfo *relaycommon.RelayInfo, channelId int) {
 	snapshot := relayInfo.PriceData.DiscountSnapshot
 	if snapshot == nil {
 		return
 	}
 	snapshot.PinChannel(channelId)
+}
+
+// PrepareOrganizationDiscountReservation 在非分层同步请求选定渠道后，
+// 复用现有 BillingSession 把预扣补到已知组织加价目标。分层请求由其现有
+// PrepareTieredBillingForSelectedGroup 入口统一处理，避免重复 Reserve。
+func PrepareOrganizationDiscountReservation(relayInfo *relaycommon.RelayInfo) *relaytypes.NewAPIError {
+	if relayInfo == nil || relayInfo.Billing == nil || relayInfo.TieredBillingSnapshot != nil {
+		return nil
+	}
+	ratio := organizationDiscountRatioFloat(relayInfo.PriceData)
+	if ratio <= 1 {
+		return nil
+	}
+	targetQuota, err := common.QuotaFromFloatStrict(float64(relayInfo.PriceData.QuotaToPreConsume) * ratio)
+	if err != nil {
+		return relaytypes.NewErrorWithStatusCode(
+			err,
+			relaytypes.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			relaytypes.ErrOptionWithSkipRetry(),
+		)
+	}
+	if err := relayInfo.Billing.Reserve(targetQuota); err != nil {
+		return relaytypes.NewError(err, relaytypes.ErrorCodeUpdateDataError, relaytypes.ErrOptionWithSkipRetry())
+	}
+	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	return nil
 }
 
 // organizationDiscountMultiplier 返回实际应用折扣的 decimal 乘数（无折扣时为 1）。

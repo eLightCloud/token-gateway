@@ -91,6 +91,40 @@ func TestNewOrganizationInvoicePeriodUsesBeijingMonth(t *testing.T) {
 	assert.Equal(t, beijingInvoiceTimestamp(t, "2026-08-31 23:59:59"), period.EndTimestamp)
 }
 
+func TestOrganizationInvoiceIncludesFundedAccountWithoutUsage(t *testing.T) {
+	setupOrganizationTestState(t)
+	createOrganizationBillingTestFixture(t)
+	period, err := NewOrganizationInvoicePeriod("2026-08-01", "2026-08-31", time.Now())
+	require.NoError(t, err)
+	configureOrganizationInvoiceTestZeroBaseline(t, 100, 202608, 10, 11)
+	creditedAt := beijingInvoiceTimestamp(t, "2026-08-05 10:00:00")
+	require.NoError(t, DB.Create(&TopUp{
+		UserId:          11,
+		Amount:          2,
+		CreditedQuota:   1_000_000,
+		TradeNo:         "funded-without-usage",
+		PaymentProvider: PaymentProviderWaffo,
+		CompleteTime:    creditedAt,
+		Status:          common.TopUpStatusSuccess,
+	}).Error)
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", 11).Update("quota", int64(1_000_000)).Error)
+
+	invoice, err := GetOrganizationInvoice(100, period)
+	require.NoError(t, err)
+	var funded *OrganizationInvoiceAccount
+	for index := range invoice.Accounts {
+		if invoice.Accounts[index].UserId == 11 {
+			funded = &invoice.Accounts[index]
+			break
+		}
+	}
+	require.NotNil(t, funded)
+	assert.Zero(t, funded.GrossQuota)
+	assert.Equal(t, "2.0000000000", funded.Financials.TotalInflowAmountUSD)
+	assert.Equal(t, "0.0000000000", funded.Financials.TotalDeductionAmountUSD)
+	assert.Equal(t, "reconciled", funded.Financials.ReconciliationStatus)
+}
+
 func TestOrganizationInvoiceInputValidation(t *testing.T) {
 	_, err := NewOrganizationInvoicePeriod("2026-07-01", "", time.Now())
 	require.Error(t, err)
@@ -160,6 +194,14 @@ func TestOrganizationInvoiceMonthExpressionUsesEpochBoundaries(t *testing.T) {
 func TestGetOrganizationInvoiceBuildsAccountCrossTables(t *testing.T) {
 	setupOrganizationTestState(t)
 	organizationId := createOrganizationInvoiceTestFixture(t)
+	insertOrganizationTestUser(t, 12, "unused")
+	require.NoError(t, DB.Create(&OrganizationMember{
+		OrganizationId: organizationId,
+		UserId:         12,
+		Role:           OrganizationRoleMember,
+		JoinedAt:       0,
+		CurrentKey:     activeOrganizationCurrentKey(12),
+	}).Error)
 	require.NoError(t, DB.Create(&[]OrganizationBillingSettlementRule{
 		{
 			OrganizationId: organizationId,
@@ -181,11 +223,15 @@ func TestGetOrganizationInvoiceBuildsAccountCrossTables(t *testing.T) {
 
 	invoice, err := GetOrganizationInvoice(organizationId, period)
 	require.NoError(t, err)
-	require.Len(t, invoice.Accounts, 2)
+	require.Len(t, invoice.Accounts, 3)
 	assert.Equal(t, 11, invoice.Accounts[0].UserId)
 	assert.Equal(t, "member", invoice.Accounts[0].Username)
 	assert.Equal(t, "m************y", invoice.Accounts[0].DisplayName)
 	assert.Equal(t, int64(7000), invoice.Accounts[0].GrossQuota)
+	assert.Equal(t, 12, invoice.Accounts[2].UserId)
+	assert.Equal(t, "unused", invoice.Accounts[2].Username)
+	assert.Zero(t, invoice.Accounts[2].GrossQuota)
+	assert.Equal(t, "0.0000000000", invoice.Accounts[2].Financials.TotalInflowAmountUSD)
 	assert.Equal(t, int64(10000), invoice.GrossTotalQuota)
 	require.Len(t, invoice.ModelRows, 4)
 	assert.Equal(t, "custom/model:v1", invoice.ModelRows[0].ModelName)
@@ -360,11 +406,27 @@ func TestGetOrganizationInvoiceRejectsNegativeConsumeQuota(t *testing.T) {
 func TestUpdateOrganizationSettlementRuleUsesVersionCASAndIdempotence(t *testing.T) {
 	setupOrganizationTestState(t)
 	organizationId := createOrganizationInvoiceTestFixture(t)
+	period, err := NewOrganizationInvoicePeriod("2026-07-01", "2026-07-31", time.Now())
+	require.NoError(t, err)
+	summary, claimed, err := prepareOrganizationInvoiceSummary(organizationId, period, false, period.EndTimestamp+1)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, CompleteOrganizationInvoiceSummary(summary, &OrganizationInvoice{
+		GenerationStatus: OrganizationInvoiceGenerationStatusReady,
+		Period:           period,
+		Currency:         "USD",
+		Accounts:         []OrganizationInvoiceAccount{},
+		CategoryRows:     []OrganizationInvoiceCategoryRow{},
+		ModelRows:        []OrganizationInvoiceModelRow{},
+	}))
 
 	created, err := UpdateOrganizationSettlementRule(organizationId, "gpt", 202607, 9000, 0)
 	require.NoError(t, err)
 	assert.True(t, created.Changed)
 	assert.Equal(t, 1, created.Rule.Version)
+	var invalidated OrganizationInvoicePeriodSummary
+	require.NoError(t, DB.First(&invalidated, summary.Id).Error)
+	assert.Equal(t, OrganizationInvoiceSummaryStatusInvalidated, invalidated.Status)
 
 	idempotent, err := UpdateOrganizationSettlementRule(organizationId, "gpt", 202607, 9000, 0)
 	require.NoError(t, err)

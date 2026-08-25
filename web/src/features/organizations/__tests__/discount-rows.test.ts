@@ -56,7 +56,14 @@ describe('organization discount draft rows', () => {
   })
 
   test('accepts only billing-supported discount ratios', () => {
-    for (const ratio of ['0.000001', '0.8', '1', '1.000000']) {
+    for (const ratio of [
+      '0.000001',
+      '0.8',
+      '1',
+      '1.000001',
+      '1.5',
+      '9.999999',
+    ]) {
       assert.equal(isValidDiscountRatio(ratio), true, ratio)
     }
     for (const ratio of [
@@ -64,8 +71,10 @@ describe('organization discount draft rows', () => {
       'discount',
       '0',
       '-0.1',
-      '1.1',
+      '10',
+      '10.000001',
       '0.1234567',
+      '9.9999990',
       '1e-1',
     ]) {
       assert.equal(isValidDiscountRatio(ratio), false, ratio)

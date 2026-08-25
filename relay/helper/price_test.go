@@ -124,7 +124,7 @@ func TestModelPriceHelperPerCallDualQuotaAndRequestSnapshotAcrossRetries(t *test
 		Role:           model.OrganizationRoleMember,
 		CurrentKey:     &currentKey,
 	}).Error)
-	firstData, err := model.MarshalOrganizationChannelDiscounts(map[int]int{99: 500_000})
+	firstData, err := model.MarshalOrganizationChannelDiscounts(map[int]int{99: 500_000, 100: 5_000_000})
 	require.NoError(t, err)
 	firstSnapshot := model.OrganizationDiscountSnapshot{
 		Id:               1,
@@ -164,7 +164,7 @@ func TestModelPriceHelperPerCallDualQuotaAndRequestSnapshotAcrossRetries(t *test
 	require.Equal(t, expectedQuota, priceData.Quota)
 	info.PriceData = priceData
 
-	// 管理员保存新折扣（渠道 99 改为 0.1）后，重试同渠道仍复用原请求内存映射的 0.5
+	// 管理员保存新折扣后，跨渠道重试仍复用原请求内存映射中的倍率。
 	secondData, err := model.MarshalOrganizationChannelDiscounts(map[int]int{99: 100_000, 100: 800_000})
 	require.NoError(t, err)
 	secondSnapshot := model.OrganizationDiscountSnapshot{
@@ -180,16 +180,16 @@ func TestModelPriceHelperPerCallDualQuotaAndRequestSnapshotAcrossRetries(t *test
 		UserGroup:       "default",
 		UsingGroup:      "default",
 		OriginModelName: modelName,
-		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 99},
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: 100},
 		PriceData:       info.PriceData,
 	}
 	retryData, err := ModelPriceHelperPerCall(ctx, retryInfo)
 	require.NoError(t, err)
 	require.NotNil(t, retryData.DiscountSnapshot)
 	require.Equal(t, firstSnapshot.Id, retryData.DiscountSnapshot.SnapshotID, "retry must keep the request-fixed snapshot")
-	require.Equal(t, 99, retryData.DiscountSnapshot.AppliedChannelId)
-	require.InDelta(t, 0.5, retryData.DiscountSnapshot.EffectiveRatio(), 1e-12, "retry keeps the request snapshot ratio, not the latest config")
-	retryQuota, err := common.QuotaFromFloatStrict(float64(retryData.QuotaToPreConsume) * 0.5)
+	require.Equal(t, 100, retryData.DiscountSnapshot.AppliedChannelId)
+	require.InDelta(t, 5.0, retryData.DiscountSnapshot.EffectiveRatio(), 1e-12, "retry keeps the request snapshot ratio, not the latest config")
+	retryQuota, err := common.QuotaFromFloatStrict(float64(retryData.QuotaToPreConsume) * 5.0)
 	require.NoError(t, err)
 	require.Equal(t, retryQuota, retryData.Quota)
 }

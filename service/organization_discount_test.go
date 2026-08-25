@@ -104,6 +104,25 @@ func TestApplyOrganizationDiscountForChannelUsesInMemoryMapOnly(t *testing.T) {
 	assert.InDelta(t, 1.0, emptyInfo.PriceData.DiscountSnapshot.EffectiveRatio(), 1e-12)
 }
 
+func TestPrepareOrganizationDiscountReservationUsesSelectedChannelMarkup(t *testing.T) {
+	billing := &recordingBillingSettler{preConsumedQuota: 100}
+	snapshot := &types.OrganizationDiscountSnapshot{
+		ChannelDiscounts: map[int]float64{12: 0.8, 35: 2.5},
+	}
+	info := &relaycommon.RelayInfo{Billing: billing}
+	info.PriceData.QuotaToPreConsume = 100
+	info.PriceData.DiscountSnapshot = snapshot
+
+	ApplyOrganizationDiscountForChannel(info, 12)
+	require.Nil(t, PrepareOrganizationDiscountReservation(info))
+	assert.Empty(t, billing.reserveTargets)
+
+	ApplyOrganizationDiscountForChannel(info, 35)
+	require.Nil(t, PrepareOrganizationDiscountReservation(info))
+	assert.Equal(t, []int{250}, billing.reserveTargets)
+	assert.Equal(t, 250, info.FinalPreConsumedQuota)
+}
+
 func TestResolveOrganizationDiscountSnapshotForChannelKeepsRequestMap(t *testing.T) {
 	seedDiscountServiceFixture(t, 503, 42, 23, map[int]int{12: 800_000})
 

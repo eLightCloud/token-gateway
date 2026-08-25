@@ -61,6 +61,21 @@ func createOrganizationBillingTestFixture(t *testing.T) int {
 	return 100
 }
 
+func configureOrganizationInvoiceTestZeroBaseline(t *testing.T, organizationId, startMonth int, userIds ...int) {
+	t.Helper()
+	require.NoError(t, DB.Create(&OrganizationInvoiceBaseline{
+		OrganizationId: organizationId,
+		StartMonth:     startMonth,
+	}).Error)
+	for _, userId := range userIds {
+		require.NoError(t, DB.Create(&OrganizationInvoiceAccountBaseline{
+			OrganizationId: organizationId,
+			UserId:         userId,
+			OpeningQuota:   0,
+		}).Error)
+	}
+}
+
 func TestOrganizationBillingNames(t *testing.T) {
 	testCases := []struct {
 		name  string

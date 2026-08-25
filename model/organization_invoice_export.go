@@ -3,16 +3,13 @@ package model
 // OrganizationInvoiceExportContext contains the unmasked identity data that is
 // available only to the authorized Invoice CSV export path.
 type OrganizationInvoiceExportContext struct {
-	OrganizationName                    string
-	AccountDisplayNames                 map[int]string
-	AccountTopUpAndAdjustmentAmountsUSD map[int]string
-	AccountCurrentBalanceAmountsUSD     map[int]string
+	OrganizationName    string
+	AccountDisplayNames map[int]string
 }
 
 func GetOrganizationInvoiceExportContext(
 	organizationId int,
 	accounts []OrganizationInvoiceAccount,
-	period OrganizationInvoicePeriod,
 ) (*OrganizationInvoiceExportContext, error) {
 	organization, err := GetOrganizationById(organizationId)
 	if err != nil {
@@ -34,15 +31,8 @@ func GetOrganizationInvoiceExportContext(
 			displayNames[user.Id] = user.DisplayName
 		}
 	}
-	financials, err := getOrganizationInvoiceExportFinancials(accounts, period)
-	if err != nil {
-		return nil, err
-	}
-
 	return &OrganizationInvoiceExportContext{
-		OrganizationName:                    organization.Name,
-		AccountDisplayNames:                 displayNames,
-		AccountTopUpAndAdjustmentAmountsUSD: financials.successfulTopUpAndAdjustmentAmountsUSD,
-		AccountCurrentBalanceAmountsUSD:     financials.currentBalanceAmountsUSD,
+		OrganizationName:    organization.Name,
+		AccountDisplayNames: displayNames,
 	}, nil
 }

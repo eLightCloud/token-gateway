@@ -90,7 +90,7 @@ func TestTryTieredSettleUsesFrozenRequestInput(t *testing.T) {
 	}
 }
 
-func TestTryTieredSettleFallsBackToFrozenPreConsumeOnExprError(t *testing.T) {
+func TestTryTieredSettleFallsBackToSelectedGroupEstimateOnExprError(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
 		FinalPreConsumedQuota: 321,
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
@@ -106,12 +106,39 @@ func TestTryTieredSettleFallsBackToFrozenPreConsumeOnExprError(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle to apply")
 	}
-	if quota != 321 {
-		t.Fatalf("quota = %d, want 321", quota)
+	if quota != 123 {
+		t.Fatalf("quota = %d, want 123", quota)
 	}
 	if result != nil {
 		t.Fatalf("result = %#v, want nil", result)
 	}
+}
+
+func TestTryTieredSettleErrorFallbackAppliesOrganizationMarkupOnce(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{
+		// A previous or current Reserve can be higher than the selected group's
+		// base estimate and must never become the final billing base.
+		FinalPreConsumedQuota: 500_000,
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:              "tiered_expr",
+			ExprString:               `invalid +-+ expr`,
+			ExprHash:                 billingexpr.ExprHashString(`invalid +-+ expr`),
+			GroupRatio:               0.2,
+			EstimatedQuotaAfterGroup: 100_000,
+		},
+		PriceData: types.PriceData{
+			DiscountSnapshot: &types.OrganizationDiscountSnapshot{
+				AppliedChannelId: 5,
+				AppliedRatio:     2.5,
+			},
+		},
+	}
+
+	ok, baseQuota, result := TryTieredSettle(relayInfo, billingexpr.TokenParams{P: 100})
+	require.True(t, ok)
+	require.Nil(t, result)
+	assert.Equal(t, 100_000, baseQuota)
+	assert.Equal(t, 250_000, composeTieredTextQuota(relayInfo, textQuotaSummary{}, baseQuota, result))
 }
 
 // ---------------------------------------------------------------------------
@@ -365,7 +392,7 @@ func TestPrepareTieredBillingForSelectedGroupUpdatesReservation(t *testing.T) {
 	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 }
 
-func TestPrepareTieredBillingForSelectedGroupKeepsReservationUndiscounted(t *testing.T) {
+func TestPrepareTieredBillingForSelectedGroupKeepsFullPriceReservationForDiscount(t *testing.T) {
 	const expr = `tier("base", p)`
 	billing := &recordingBillingSettler{preConsumedQuota: 20_000}
 	relayInfo := &relaycommon.RelayInfo{
@@ -391,10 +418,40 @@ func TestPrepareTieredBillingForSelectedGroupKeepsReservationUndiscounted(t *tes
 	}
 
 	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
-	// 组织折扣不进入预扣：目标恒为未打折额度，结算时才按请求快照打折。
+	// 小于 1 的组织倍率仍按原价预扣，结算时退回折扣差额。
 	require.Equal(t, []int{100_000}, billing.reserveTargets)
 	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 	assert.InDelta(t, 0.4, relayInfo.PriceData.DiscountSnapshot.EffectiveRatio(), 1e-12)
+}
+
+func TestPrepareTieredBillingForSelectedGroupReservesOrganizationMarkup(t *testing.T) {
+	const expr = `tier("base", p)`
+	billing := &recordingBillingSettler{preConsumedQuota: 100_000}
+	relayInfo := &relaycommon.RelayInfo{
+		Billing: billing,
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			ExprString:                expr,
+			ExprHash:                  billingexpr.ExprHashString(expr),
+			GroupRatio:                0.20,
+			EstimatedQuotaBeforeGroup: 500_000,
+			EstimatedQuotaAfterGroup:  100_000,
+			QuotaPerUnit:              testQuotaPerUnit,
+		},
+		PriceData: types.PriceData{
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
+			DiscountSnapshot: &types.OrganizationDiscountSnapshot{
+				AppliedChannelId: 5,
+				AppliedRatio:     2.5,
+			},
+		},
+	}
+
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
+	require.Equal(t, []int{250_000}, billing.reserveTargets)
+	assert.Equal(t, 250_000, relayInfo.FinalPreConsumedQuota)
+	// 快照仍保存未应用组织倍率的分层估算，结算失败回退时不会二次乘倍率。
+	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 }
 
 func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *testing.T) {
