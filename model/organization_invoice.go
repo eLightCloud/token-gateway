@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -17,12 +18,14 @@ import (
 )
 
 const (
-	OrganizationInvoiceTimezone               = "Asia/Shanghai"
-	OrganizationSettlementFactorScale         = 10000
-	OrganizationSettlementMaxFactorScaled     = 100000
-	organizationInvoiceMaxMonths              = 24
-	organizationInvoiceCategoryKeyMaxLength   = 96
-	organizationInvoiceFallbackCategoryPrefix = "model."
+	OrganizationInvoiceTimezone                   = "Asia/Shanghai"
+	OrganizationSettlementFactorScale             = 10000
+	OrganizationSettlementMaxFactorScaled         = 100000
+	organizationInvoiceMaxMonths                  = 24
+	organizationInvoiceCategoryKeyMaxLength       = 96
+	organizationInvoiceFallbackCategoryPrefix     = "model."
+	OrganizationInvoiceGenerationStatusGenerating = "generating"
+	OrganizationInvoiceGenerationStatusReady      = "ready"
 )
 
 var organizationInvoiceLocation = time.FixedZone(OrganizationInvoiceTimezone, 8*60*60)
@@ -48,11 +51,12 @@ type OrganizationInvoicePeriod struct {
 }
 
 type OrganizationInvoiceAccount struct {
-	UserId         int    `json:"user_id"`
-	Username       string `json:"username"`
-	DisplayName    string `json:"display_name,omitempty"`
-	GrossQuota     int64  `json:"gross_quota"`
-	GrossAmountUSD string `json:"gross_amount_usd"`
+	UserId         int                                  `json:"user_id"`
+	Username       string                               `json:"username"`
+	DisplayName    string                               `json:"display_name,omitempty"`
+	GrossQuota     int64                                `json:"gross_quota"`
+	GrossAmountUSD string                               `json:"gross_amount_usd"`
+	Financials     OrganizationInvoiceAccountFinancials `json:"financials"`
 }
 
 type OrganizationInvoiceAccountAmount struct {
@@ -95,6 +99,10 @@ type OrganizationInvoiceModelRow struct {
 }
 
 type OrganizationInvoice struct {
+	GenerationStatus      string                           `json:"generation_status"`
+	SourceAsOf            int64                            `json:"source_as_of"`
+	CalculationVersion    int                              `json:"calculation_version"`
+	Revision              int                              `json:"revision"`
 	Period                OrganizationInvoicePeriod        `json:"period"`
 	Currency              string                           `json:"currency"`
 	Accounts              []OrganizationInvoiceAccount     `json:"accounts"`
@@ -321,75 +329,8 @@ func organizationInvoicePeriodExpression(months []organizationInvoiceMonthRange)
 	return builder.String(), args
 }
 
-func getOrganizationInvoiceAggregates(organizationId int, period OrganizationInvoicePeriod) ([]organizationInvoiceAggregate, error) {
-	members, err := activeAndHistoricalOrganizationMembers(organizationId, 0)
-	if err != nil {
-		return nil, err
-	}
-	months, err := organizationInvoiceMonths(period)
-	if err != nil {
-		return nil, err
-	}
-	periodExpression, periodArgs := organizationInvoicePeriodExpression(months)
-	filters := OrganizationBillingFilters{
-		StartTimestamp: period.StartTimestamp,
-		EndTimestamp:   period.EndTimestamp,
-		Types:          []int{LogTypeConsume},
-	}
-	aggregateMap := make(map[organizationInvoiceCellKey]*organizationInvoiceAggregate)
-	for _, member := range members {
-		tx, ok, err := applyOrganizationLogFilters(LOG_DB.Model(&Log{}), member, filters)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		var rows []organizationInvoiceAggregate
-		selectExpression := fmt.Sprintf(
-			"model_name, %s AS period_month, COALESCE(sum(quota), 0) AS total_quota, count(*) AS request_count, COALESCE(min(quota), 0) AS min_quota",
-			periodExpression,
-		)
-		if err := tx.Select(selectExpression, periodArgs...).
-			Group("model_name, period_month").
-			Scan(&rows).Error; err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			if row.PeriodMonth == 0 {
-				continue
-			}
-			if row.MinQuota < 0 || row.TotalQuota < 0 {
-				return nil, fmt.Errorf("organization invoice contains negative consume quota for user %d model %s", member.UserId, row.ModelName)
-			}
-			key := organizationInvoiceCellKey{
-				userId:      member.UserId,
-				modelName:   row.ModelName,
-				periodMonth: row.PeriodMonth,
-			}
-			item, exists := aggregateMap[key]
-			if !exists {
-				item = &organizationInvoiceAggregate{
-					UserId:      member.UserId,
-					ModelName:   row.ModelName,
-					PeriodMonth: row.PeriodMonth,
-				}
-				aggregateMap[key] = item
-			}
-			if err := addOrganizationInvoiceQuota(&item.TotalQuota, row.TotalQuota); err != nil {
-				return nil, err
-			}
-			if row.RequestCount > math.MaxInt64-item.RequestCount {
-				return nil, errors.New("organization invoice request count overflow")
-			}
-			item.RequestCount += row.RequestCount
-		}
-	}
-	items := make([]organizationInvoiceAggregate, 0, len(aggregateMap))
-	for _, item := range aggregateMap {
-		items = append(items, *item)
-	}
-	return items, nil
+func getOrganizationInvoiceAggregates(ctx context.Context, organizationId int, period OrganizationInvoicePeriod) ([]organizationInvoiceAggregate, error) {
+	return getOrganizationInvoiceAggregatesBatch(ctx, organizationId, period)
 }
 
 func addOrganizationInvoiceQuota(target *int64, value int64) error {
@@ -434,10 +375,25 @@ func resolveOrganizationSettlementRule(rules []OrganizationBillingSettlementRule
 }
 
 func GetOrganizationInvoice(organizationId int, period OrganizationInvoicePeriod) (*OrganizationInvoice, error) {
+	return GetOrganizationInvoiceWithContext(context.Background(), organizationId, period)
+}
+
+func GetOrganizationInvoiceWithContext(
+	ctx context.Context,
+	organizationId int,
+	period OrganizationInvoicePeriod,
+) (*OrganizationInvoice, error) {
+	if err := validateOrganizationInvoiceQuotaUnit(); err != nil {
+		return nil, err
+	}
 	if _, err := GetOrganizationById(organizationId); err != nil {
 		return nil, err
 	}
-	aggregates, err := getOrganizationInvoiceAggregates(organizationId, period)
+	accountScopes, err := getOrganizationInvoiceAccountScopes(organizationId, period)
+	if err != nil {
+		return nil, err
+	}
+	aggregates, err := getOrganizationInvoiceAggregates(ctx, organizationId, period)
 	if err != nil {
 		return nil, err
 	}
@@ -511,7 +467,11 @@ func GetOrganizationInvoice(organizationId int, period OrganizationInvoicePeriod
 		modelItem.accountQuotas[aggregate.UserId] = modelAccountQuota
 	}
 
-	accounts, err := buildOrganizationInvoiceAccounts(accountQuotas)
+	accountFinancials, err := getOrganizationInvoiceAccountFinancials(ctx, organizationId, accountScopes, period)
+	if err != nil {
+		return nil, err
+	}
+	accounts, err := buildOrganizationInvoiceAccounts(accountScopes, accountQuotas, accountFinancials)
 	if err != nil {
 		return nil, err
 	}
@@ -532,10 +492,14 @@ func GetOrganizationInvoice(organizationId int, period OrganizationInvoicePeriod
 	}, nil
 }
 
-func buildOrganizationInvoiceAccounts(accountQuotas map[int]int64) ([]OrganizationInvoiceAccount, error) {
-	userIds := make([]int, 0, len(accountQuotas))
-	for userId := range accountQuotas {
-		userIds = append(userIds, userId)
+func buildOrganizationInvoiceAccounts(
+	scopes []organizationInvoiceAccountScope,
+	accountQuotas map[int]int64,
+	financials map[int]OrganizationInvoiceAccountFinancials,
+) ([]OrganizationInvoiceAccount, error) {
+	userIds := make([]int, 0, len(scopes))
+	for _, scope := range scopes {
+		userIds = append(userIds, scope.userId)
 	}
 	var users []User
 	if len(userIds) > 0 {
@@ -547,15 +511,20 @@ func buildOrganizationInvoiceAccounts(accountQuotas map[int]int64) ([]Organizati
 	for _, user := range users {
 		userMap[user.Id] = user
 	}
-	accounts := make([]OrganizationInvoiceAccount, 0, len(accountQuotas))
-	for userId, quota := range accountQuotas {
-		user := userMap[userId]
+	if len(userMap) != len(userIds) {
+		return nil, errors.New("organization invoice account is missing from users")
+	}
+	accounts := make([]OrganizationInvoiceAccount, 0, len(scopes))
+	for _, scope := range scopes {
+		quota := accountQuotas[scope.userId]
+		user := userMap[scope.userId]
 		accounts = append(accounts, OrganizationInvoiceAccount{
-			UserId:         userId,
-			Username:       OrganizationBillingUsername(user.Username, userId),
+			UserId:         scope.userId,
+			Username:       OrganizationBillingUsername(user.Username, scope.userId),
 			DisplayName:    MaskOrganizationBillingName(user.DisplayName),
 			GrossQuota:     quota,
 			GrossAmountUSD: organizationInvoiceAmountString(quota),
+			Financials:     financials[scope.userId],
 		})
 	}
 	sort.Slice(accounts, func(i, j int) bool {
@@ -755,8 +724,13 @@ func UpdateOrganizationSettlementRule(
 	if categoryKey == "" || len(categoryKey) > organizationInvoiceCategoryKeyMaxLength {
 		return nil, errors.New("invalid settlement rule category")
 	}
-	if FormatOrganizationInvoiceMonth(effectiveMonth) == "" {
+	effectiveMonthText := FormatOrganizationInvoiceMonth(effectiveMonth)
+	if effectiveMonthText == "" {
 		return nil, errors.New("invalid effective month")
+	}
+	effectiveMonthStart, err := time.ParseInLocation("2006-01", effectiveMonthText, organizationInvoiceLocation)
+	if err != nil {
+		return nil, err
 	}
 	if factorScaled < 0 || factorScaled > OrganizationSettlementMaxFactorScaled {
 		return nil, errors.New("settlement factor is out of range")
@@ -816,7 +790,7 @@ func UpdateOrganizationSettlementRule(
 			result.Rule = rule
 			result.Changed = true
 			result.PreviousFactorScaled = previousFactorScaled
-			return nil
+			return invalidateOrganizationInvoiceSummariesFrom(tx, organizationId, effectiveMonthStart.Unix(), "invalidated by settlement rule change")
 		}
 		result.PreviousFactorScaled = rule.FactorScaled
 		if rule.FactorScaled == factorScaled {
@@ -846,7 +820,7 @@ func UpdateOrganizationSettlementRule(
 		rule.UpdatedAt = updatedAt
 		result.Rule = rule
 		result.Changed = true
-		return nil
+		return invalidateOrganizationInvoiceSummariesFrom(tx, organizationId, effectiveMonthStart.Unix(), "invalidated by settlement rule change")
 	})
 	if err != nil {
 		if createAttempted {

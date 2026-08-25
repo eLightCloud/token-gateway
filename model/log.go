@@ -81,6 +81,7 @@ type Log struct {
 	// remains unrestricted for ordinary logs; the unique value makes outbox
 	// replay idempotent on SQLite, MySQL and PostgreSQL.
 	BillingOperationId *string `json:"-" gorm:"type:varchar(128)"`
+	BillingSource      string  `json:"billing_source,omitempty" gorm:"type:varchar(32)"`
 	Other              string  `json:"other"`
 }
 
@@ -438,6 +439,10 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) error {
 	if createdAt == 0 {
 		createdAt = common.GetTimestamp()
 	}
+	billingSource, _ := params.Other["billing_source"].(string)
+	if billingSource == "" && (params.LogType == LogTypeConsume || params.LogType == LogTypeRefund) {
+		billingSource = "wallet"
+	}
 	log := &Log{
 		UserId:            params.UserId,
 		Username:          username,
@@ -457,6 +462,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) error {
 		Ip:                params.Ip,
 		RequestId:         params.RequestId,
 		UpstreamRequestId: params.UpstreamRequestId,
+		BillingSource:     billingSource,
 		Other:             common.MapToJsonStr(params.Other),
 	}
 	if params.OperationId != "" {

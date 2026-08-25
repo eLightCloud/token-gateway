@@ -54,7 +54,7 @@ export function nextDiscountRowKey(rows: DiscountRow[]): number {
 
 export function isValidDiscountRatio(value: string): boolean {
   const normalized = value.trim()
-  if (!/^(?:0(?:\.\d{1,6})?|1(?:\.0{1,6})?)$/.test(normalized)) {
+  if (!/^(?:0(?:\.\d{1,6})?|[1-9](?:\.\d{1,6})?)$/.test(normalized)) {
     return false
   }
   return Number(normalized) > 0

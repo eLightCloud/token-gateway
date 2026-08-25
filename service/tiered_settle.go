@@ -105,8 +105,6 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
 	estimatedQuotaAfterGroup := snap.EstimatedQuotaBeforeGroup * groupRatio
-	// 组织折扣不大于 1.0，未打折预扣恒不低于折后结算，此处不再维护
-	// 渠道无关的补扣目标，也不读取折扣数据库。
 	estimatedQuota, err := billingexpr.QuotaRoundStrict(estimatedQuotaAfterGroup)
 	if err != nil {
 		return nil, err
@@ -143,11 +141,27 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 	// The selected group is paid; clear a FreeModel flag frozen when the
 	// initial group was free so downstream state stays consistent.
 	relayInfo.PriceData.FreeModel = false
+	reserveTarget := snap.EstimatedQuotaAfterGroup
+	organizationRatio := organizationDiscountRatioFloat(relayInfo.PriceData)
+	if organizationRatio > 1 {
+		var err error
+		reserveTarget, err = billingexpr.QuotaRoundStrict(
+			snap.EstimatedQuotaBeforeGroup * snap.GroupRatio * organizationRatio,
+		)
+		if err != nil {
+			return types.NewErrorWithStatusCode(
+				err,
+				types.ErrorCodeModelPriceError,
+				http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+	}
 
 	if relayInfo.Billing == nil {
-		return PreConsumeBilling(c, snap.EstimatedQuotaAfterGroup, relayInfo)
+		return PreConsumeBilling(c, reserveTarget, relayInfo)
 	}
-	if err := relayInfo.Billing.Reserve(snap.EstimatedQuotaAfterGroup); err != nil {
+	if err := relayInfo.Billing.Reserve(reserveTarget); err != nil {
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
 	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
@@ -171,11 +185,10 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 
 	tr, err := billingexpr.ComputeTieredQuotaWithRequest(snap, params, requestInput)
 	if err != nil {
-		quota = relayInfo.FinalPreConsumedQuota
-		if quota <= 0 {
-			quota = snap.EstimatedQuotaAfterGroup
-		}
-		return true, quota, nil
+		// FinalPreConsumedQuota may include a higher prior reservation or the
+		// current organization markup. Return the selected group's frozen base
+		// estimate so callers apply the organization ratio exactly once.
+		return true, snap.EstimatedQuotaAfterGroup, nil
 	}
 
 	// Surface any int32 saturation from settlement onto RelayInfo so the

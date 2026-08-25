@@ -64,8 +64,8 @@ type PriceData struct {
 	AudioCompletionRatio float64
 	otherRatios          map[string]float64
 	UsePrice             bool
-	Quota                int // 按次计费的折后最终额度（MJ / Task）
-	QuotaToPreConsume    int // 未应用组织折扣的准入/预扣额度
+	Quota                int // 按次计费应用组织渠道倍率后的最终额度（MJ / Task）
+	QuotaToPreConsume    int // 未应用组织渠道倍率的预估额度
 	GroupRatioInfo       GroupRatioInfo
 	DiscountSnapshot     *OrganizationDiscountSnapshot
 	// DiscountSnapshotLoaded distinguishes "not resolved" from "resolved with no

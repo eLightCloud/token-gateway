@@ -14,15 +14,15 @@ import (
 const (
 	// OrganizationDiscountRatioScale 折扣定点缩放基数：0.8 -> 800000
 	OrganizationDiscountRatioScale = 1_000_000
-	// OrganizationDiscountMaxRatioScaled 折扣上限 1.0
-	OrganizationDiscountMaxRatioScaled = 1 * OrganizationDiscountRatioScale
+	// OrganizationDiscountMaxRatioScaled 组织渠道倍率严格小于 10，六位小数下最大为 9.999999。
+	OrganizationDiscountMaxRatioScaled = 10*OrganizationDiscountRatioScale - 1
 	// organizationDiscountMaxJSONBytes 为 MySQL TEXT 的 65,535 字节上限，
 	// 超限时在保存前拒绝，不依赖数据库截断。
 	organizationDiscountMaxJSONBytes = 65_535
 )
 
 var (
-	ErrOrganizationDiscountInvalidRatio         = errors.New("organization discount ratio must be in (0, 1]")
+	ErrOrganizationDiscountInvalidRatio         = errors.New("organization discount ratio must be in (0, 10)")
 	ErrOrganizationDiscountInvalidPrecision     = errors.New("organization discount ratio supports at most 6 decimal places")
 	ErrOrganizationDiscountDuplicateChannel     = errors.New("duplicate channel in organization discount")
 	ErrOrganizationDiscountInvalidChannel       = errors.New("invalid channel id in organization discount")
@@ -76,7 +76,7 @@ func OrganizationDiscountRatioFloatFromScaled(scaled int) float64 {
 	return float64(scaled) / float64(OrganizationDiscountRatioScale)
 }
 
-// ValidateOrganizationDiscountRatioScaled 校验折扣：0 < ratio <= 1.0
+// ValidateOrganizationDiscountRatioScaled 校验组织渠道倍率：0 < ratio < 10。
 func ValidateOrganizationDiscountRatioScaled(scaled int) error {
 	if scaled <= 0 || scaled > OrganizationDiscountMaxRatioScaled {
 		return fmt.Errorf("%w: scaled value %d out of range", ErrOrganizationDiscountInvalidRatio, scaled)

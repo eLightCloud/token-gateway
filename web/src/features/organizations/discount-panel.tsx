@@ -338,7 +338,7 @@ export function OrganizationDiscountPanel({
       <DiscountPanel
         title={t('Channel discounts')}
         description={t(
-          'Discounts are configured per channel; unconfigured channels bill at full price. Edits apply together on save.'
+          'Ratios are configured per channel; unconfigured channels bill at 1.0. For example, 0.8 charges 80% and 1.5 charges 150%. Edits apply together on save.'
         )}
         actions={
           <div className='flex items-center gap-2'>
@@ -411,7 +411,7 @@ export function OrganizationDiscountPanel({
                             type='number'
                             inputMode='decimal'
                             min='0.000001'
-                            max='1'
+                            max='9.999999'
                             step='0.000001'
                             value={row.ratio}
                             onChange={(e) =>
@@ -427,7 +427,7 @@ export function OrganizationDiscountPanel({
                           {ratioInvalid ? (
                             <FieldError id={ratioErrorId}>
                               {t(
-                                'Enter a number greater than 0 and no greater than 1, with up to 6 decimal places.'
+                                'Enter a number greater than 0 and less than 10, with up to 6 decimal places.'
                               )}
                             </FieldError>
                           ) : null}

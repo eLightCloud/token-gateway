@@ -215,7 +215,7 @@ func TestOrganizationDiscountAPISaveValidatesAndPersists(t *testing.T) {
 		},
 		{
 			"expected_snapshot_id": 0,
-			"channel_discounts":    []map[string]any{{"channel_id": 5100, "ratio": "1.5"}},
+			"channel_discounts":    []map[string]any{{"channel_id": 5100, "ratio": "10"}},
 		},
 		{
 			"expected_snapshot_id": 0,
@@ -234,7 +234,7 @@ func TestOrganizationDiscountAPISaveValidatesAndPersists(t *testing.T) {
 	recorder := performDiscountRequest(t, router, 3001, http.MethodPut, base, map[string]any{
 		"expected_snapshot_id": 0,
 		"channel_discounts": []map[string]any{
-			{"channel_id": 5100, "ratio": "0.8"},
+			{"channel_id": 5100, "ratio": "1.5"},
 			{"channel_id": 5101, "ratio": "1"}, // 1.0 归一化为未配置
 		},
 	})
@@ -255,7 +255,7 @@ func TestOrganizationDiscountAPISaveValidatesAndPersists(t *testing.T) {
 	item, ok := discounts[0].(map[string]any)
 	require.True(t, ok)
 	assert.InDelta(t, float64(5100), item["channel_id"], 1e-12)
-	assert.Equal(t, "0.8", item["ratio"])
+	assert.Equal(t, "1.5", item["ratio"])
 	assert.InDelta(t, float64(3001), data["created_by"], 1e-12)
 
 	// 409：基于过期 expected_snapshot_id 的并发提交

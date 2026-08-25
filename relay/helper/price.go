@@ -77,7 +77,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	// 请求首次计费解析时一次性加载组织折扣快照；数据库或解析错误时阻断请求。
-	// 预扣额度固定为未打折价格，渠道折扣只在结算时应用。
+	// 此处只计算未应用组织倍率的预估额度；渠道确定后再按需 Reserve 已知加价。
 	discountSnapshot, discountErr := service.LoadOrganizationDiscountSnapshot(info.UserId)
 	if discountErr != nil {
 		return hosttypes.PriceData{}, discountErr
@@ -194,7 +194,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 }
 
 // ModelPriceHelperPerCall 按次/按量计费的 PriceHelper (MJ、Task)
-// QuotaToPreConsume 为未打折准入/预扣额度，Quota 为应用实际渠道折扣后的最终额度。
+// QuotaToPreConsume 为未应用组织倍率的预估额度，Quota 为应用实际渠道倍率后的最终额度。
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hosttypes.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
@@ -330,7 +330,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 
 	// Expression coefficients are $/1M tokens prices; convert to quota the same way per-call billing does.
 	quotaBeforeGroup := rawCost / 1_000_000 * common.QuotaPerUnit
-	// 预扣固定为未打折价格；渠道折扣在结算时按请求快照应用。
+	// 此处保存未应用组织倍率的分层估算；渠道确定后按需 Reserve 已知加价。
 	preConsumedQuota, err := billingexpr.QuotaRoundStrict(quotaBeforeGroup * groupRatioInfo.GroupRatio)
 	if err != nil {
 		return hosttypes.PriceData{}, err

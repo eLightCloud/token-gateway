@@ -72,10 +72,12 @@ export const organizationInvoiceKeys = {
 
 export async function getOrganizationInvoice(
   params: OrganizationInvoiceParams,
-  organizationId?: number
+  organizationId?: number,
+  refresh = false
 ): Promise<ApiResponse<OrganizationInvoice>> {
+  const query = organizationInvoiceQuery(params)
   const response = await api.get(
-    `${organizationInvoiceBasePath(organizationId)}?${organizationInvoiceQuery(params)}`
+    `${organizationInvoiceBasePath(organizationId)}?${query}${refresh ? '&refresh=1' : ''}`
   )
   return response.data
 }

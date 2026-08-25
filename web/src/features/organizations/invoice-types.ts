@@ -33,6 +33,25 @@ export type OrganizationInvoiceAccount = {
   display_name?: string
   gross_quota: number
   gross_amount_usd: string
+  financials: OrganizationInvoiceAccountFinancials
+}
+
+export type OrganizationInvoiceAccountFinancials = {
+  opening_balance_amount_usd: string
+  payment_top_up_amount_usd: string
+  admin_increase_amount_usd: string
+  other_identified_inflow_amount_usd: string
+  total_inflow_amount_usd: string
+  ai_wallet_deduction_amount_usd: string
+  admin_decrease_amount_usd: string
+  other_deduction_amount_usd: string
+  total_deduction_amount_usd: string
+  closing_balance_amount_usd: string
+  current_balance_amount_usd: string
+  reconciliation_difference_amount_usd?: string
+  reconciliation_status: 'generating' | 'derived' | 'reconciled' | 'incomplete'
+  calculation_version: number
+  net_delta_quota: number
 }
 
 export type OrganizationInvoiceAccountAmount = {
@@ -75,6 +94,10 @@ export type OrganizationInvoiceModelRow = {
 }
 
 export type OrganizationInvoice = {
+  generation_status: 'generating' | 'ready'
+  source_as_of: number
+  calculation_version: number
+  revision: number
   period: OrganizationInvoicePeriod
   currency: 'USD'
   accounts: OrganizationInvoiceAccount[]

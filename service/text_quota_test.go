@@ -645,7 +645,7 @@ func TestComposeTieredTextQuotaFallbackKeepsToolCallSurcharges(t *testing.T) {
 	require.Equal(t, 13750, quota)
 }
 
-func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
+func TestComposeTieredTextQuotaErrorFallbackUsesSelectedGroupEstimate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(w)
@@ -675,10 +675,10 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 
 	// tieredResult=nil simulates a settlement error where TryTieredSettle
-	// falls back to FinalPreConsumedQuota (2000), which differs from
-	// EstimatedQuotaBeforeGroup * GroupRatio (1250).
-	preConsumedFallback := 2000
-	quota := composeTieredTextQuota(relayInfo, summary, preConsumedFallback, nil)
+	// supplies the selected group's frozen estimate and the surcharge is still
+	// composed exactly once.
+	selectedGroupFallback := 2000
+	quota := composeTieredTextQuota(relayInfo, summary, selectedGroupFallback, nil)
 
 	require.Equal(t, int64(12500), summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	require.Equal(t, 14500, quota)

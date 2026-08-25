@@ -12,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -86,7 +87,7 @@ func getOrganizationInvoice(c *gin.Context, organizationId int) {
 	if !ok {
 		return
 	}
-	invoice, err := model.GetOrganizationInvoice(organizationId, period)
+	invoice, err := service.GetOrganizationInvoice(organizationId, period, c.Query("refresh") == "1")
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -260,12 +261,16 @@ func exportOrganizationInvoice(c *gin.Context, organizationId int) {
 	if !ok {
 		return
 	}
-	invoice, err := model.GetOrganizationInvoice(organizationId, period)
+	invoice, err := service.GetOrganizationInvoice(organizationId, period, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	exportContext, err := model.GetOrganizationInvoiceExportContext(organizationId, invoice.Accounts, invoice.Period)
+	if invoice.GenerationStatus != model.OrganizationInvoiceGenerationStatusReady {
+		common.ApiErrorMsg(c, "organization invoice is still generating")
+		return
+	}
+	exportContext, err := model.GetOrganizationInvoiceExportContext(organizationId, invoice.Accounts)
 	if err != nil {
 		common.ApiError(c, err)
 		return

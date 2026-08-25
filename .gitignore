@@ -7,6 +7,8 @@ upload
 *.db
 build
 *.db-journal
+*.dump
+*.db.bak-*
 logs
 web/dist
 web/node_modules
