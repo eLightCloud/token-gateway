@@ -27,6 +27,9 @@ plans
 electron/node_modules
 electron/dist
 /data/
+/deploy/
+deploy/data/
+deploy/pg_data/
 .gomodcache/
 .gocache-temp
 .gopath
