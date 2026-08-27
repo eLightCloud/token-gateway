@@ -361,7 +361,12 @@ func AddOrganizationMember(organizationId int, userId int, role string) (*Organi
 		if err := tx.Create(&member).Error; err != nil {
 			return err
 		}
-		return nil
+		return invalidateOrganizationInvoiceSummariesFrom(
+			tx,
+			organizationId,
+			organizationInvoiceMonthStartContaining(member.BillingStartAt),
+			"invalidated by membership addition",
+		)
 	})
 	if err != nil {
 		return nil, err
@@ -413,10 +418,18 @@ func RemoveOrganizationMember(organizationId int, userId int) error {
 				return err
 			}
 		}
-		return tx.Model(&OrganizationMember{}).Where("id = ?", member.Id).Updates(map[string]interface{}{
+		if err := tx.Model(&OrganizationMember{}).Where("id = ?", member.Id).Updates(map[string]interface{}{
 			"left_at":     now,
 			"current_key": nil,
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		return invalidateOrganizationInvoiceSummariesFrom(
+			tx,
+			organizationId,
+			organizationInvoiceMonthStartContaining(now),
+			"invalidated by membership removal",
+		)
 	})
 }
 
@@ -1322,6 +1335,20 @@ func UpdateOrganizationMemberBillingStart(organizationId, userId int, candidate,
 			return nil
 		}
 		if err := tx.Model(&OrganizationMember{}).Where("id = ?", updated.Id).Update("billing_start_at", candidate).Error; err != nil {
+			return err
+		}
+		// 起点调整会把 [candidate, oldEffective) 的历史消费纳入或移出账单口径，受影响的
+		// 最早账单月由两端中更早者决定。
+		billingChangeStart := oldEffective
+		if candidate < billingChangeStart {
+			billingChangeStart = candidate
+		}
+		if err := invalidateOrganizationInvoiceSummariesFrom(
+			tx,
+			organizationId,
+			organizationInvoiceMonthStartContaining(billingChangeStart),
+			"invalidated by billing start change",
+		); err != nil {
 			return err
 		}
 		updated.BillingStartAt = candidate
