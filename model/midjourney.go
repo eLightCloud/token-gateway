@@ -26,6 +26,9 @@ type Midjourney struct {
 	Properties  string `json:"properties"`
 	// 异步退款必须使用任务提交时固定的资金来源、令牌和计费倍率快照。
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
+
+	TokenId          int `json:"-" gorm:"default:0"`
+	BillingChannelId int `json:"-" gorm:"default:0"`
 }
 
 // TaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段
@@ -175,6 +178,19 @@ func (midjourney *Midjourney) Update() error {
 
 func (midjourney *Midjourney) UpdateQuota() error {
 	return DB.Model(midjourney).Update("quota", midjourney.Quota).Error
+}
+
+func (midjourney *Midjourney) UpdateBillingState() error {
+	return DB.Model(midjourney).
+		Select("quota", "token_id", "billing_channel_id").
+		Updates(midjourney).Error
+}
+
+func (midjourney *Midjourney) GetBillingChannelId() int {
+	if midjourney.BillingChannelId > 0 {
+		return midjourney.BillingChannelId
+	}
+	return midjourney.ChannelId
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).

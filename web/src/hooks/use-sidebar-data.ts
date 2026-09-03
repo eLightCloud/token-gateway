@@ -29,6 +29,7 @@ import {
   LayoutDashboard,
   ListTodo,
   MessageSquare,
+  PlugZap,
   Radio,
   ReceiptText,
   ServerCog,
@@ -217,6 +218,9 @@ export function useSidebarData(): SidebarData {
             title: t('Token bill'),
             url: '/reconciliation',
             icon: ReceiptText,
+            title: t('Task Plugins'),
+            url: '/task-plugins',
+            icon: PlugZap,
             requiredRole: ROLE.SUPER_ADMIN,
           },
           {
