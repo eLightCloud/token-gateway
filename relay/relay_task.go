@@ -321,17 +321,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
 		info.PriceData.Quota = quota
 		noteTaskQuotaClamp(info, clamp)
-
-		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
-		quota, quotaClamp := common.QuotaFromFloatChecked(quotaWithRatios)
-		info.PriceData.Quota = quota
-		noteTaskQuotaClamp(info, quotaClamp)
 	}
 
-	// 7. 每次尝试都校准预扣目标：首次创建会话，跨渠道重试复用同一会话
-	//    Reserve 到更高目标；MJ 不经过此统一任务路径。
-	if apiErr := service.PrepareTaskBillingForAttempt(c, info); apiErr != nil {
-		return nil, service.TaskErrorFromAPIError(apiErr)
+	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
+	if info.Billing == nil && !info.PriceData.FreeModel {
+		info.ForcePreConsume = true
+		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
+			return nil, service.TaskErrorFromAPIError(apiErr)
+		}
 	}
 
 	// 8. 构建请求体
@@ -368,7 +365,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	finalQuota := info.PriceData.Quota
 	if info.TieredBillingSnapshot == nil {
 		if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, parsed.TaskData); len(adjustedRatios) > 0 {
-			if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
+			if _, adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
 				// 基于调整后的 ratios 重新计算 quota
 				finalQuota = adjustedQuota
 				info.PriceData.ReplaceOtherRatios(adjustedRatios)

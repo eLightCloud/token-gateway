@@ -219,8 +219,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		}
 	}
 
-	// 准入检查按未打折额度，实际扣费与记账只使用折后额度。
-	if userQuota-int64(priceData.QuotaToPreConsume) < 0 {
+	if userQuota-int64(priceData.Quota) < 0 {
 		return &dto.MidjourneyResponse{
 			Code:        4,
 			Description: "quota_not_enough",
@@ -234,11 +233,6 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		return &mjResp.Response
 	}
 	midjResponse := &mjResp.Response
-	chargedQuota := 0
-	shouldCharge := mjResp.StatusCode == http.StatusOK && midjResponse.Code == 1
-	if shouldCharge {
-		chargedQuota = priceData.Quota
-	}
 	midjourneyTask := &model.Midjourney{
 		UserId:      info.UserId,
 		Code:        midjResponse.Code,
@@ -266,12 +260,9 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	if billingErr != nil {
 		common.SysLog("error consuming Midjourney quota: " + billingErr.Error())
 	}
+	err = midjourneyTask.Insert()
 	if err != nil {
-		if midjourneyTask.Id > 0 {
-			common.SysError("complete midjourney task billing error: " + err.Error())
-		} else {
-			return service.MidjourneyErrorWrapper(constant.MjRequestError, "insert_midjourney_task_failed")
-		}
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, "insert_midjourney_task_failed")
 	}
 	billingApplied, billingErr := service.SettleMidjourneyTaskBilling(info, midjourneyTask, billingPrepared)
 	if billingErr != nil {
@@ -541,8 +532,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		}
 	}
 
-	// 准入检查按未打折额度，实际扣费与记账只使用折后额度。
-	if consumeQuota && userQuota-int64(priceData.QuotaToPreConsume) < 0 {
+	if consumeQuota && userQuota-int64(priceData.Quota) < 0 {
 		return &dto.MidjourneyResponse{
 			Code:        4,
 			Description: "quota_not_enough",
@@ -634,13 +624,9 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	}
 	err = midjourneyTask.Insert()
 	if err != nil {
-		if midjourneyTask.Id > 0 {
-			common.SysError("complete midjourney task billing error: " + err.Error())
-		} else {
-			return &dto.MidjourneyResponse{
-				Code:        4,
-				Description: "insert_midjourney_task_failed",
-			}
+		return &dto.MidjourneyResponse{
+			Code:        4,
+			Description: "insert_midjourney_task_failed",
 		}
 	}
 	billingApplied, billingErr := service.SettleMidjourneyTaskBilling(relayInfo, midjourneyTask, billingPrepared)

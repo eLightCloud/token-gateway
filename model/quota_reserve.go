@@ -107,7 +107,7 @@ func cacheApplyTokenQuotaDelta(id int, key string, delta int64) (cacheQuotaResul
 // 直写模式下要求行存在（用户已删除时报错，交由调用方补偿缓存）。
 func persistUserQuotaDelta(id int, delta int) error {
 	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, delta)
+		addNewRecord(BatchUpdateTypeUserQuota, id, int64(delta))
 		return nil
 	}
 	result := DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", delta))
@@ -122,7 +122,7 @@ func persistUserQuotaDelta(id int, delta int) error {
 
 func persistTokenQuotaDelta(id int, delta int) error {
 	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeTokenQuota, id, delta)
+		addNewRecord(BatchUpdateTypeTokenQuota, id, int64(delta))
 		return nil
 	}
 	result := DB.Model(&Token{}).Where("id = ?", id).Updates(

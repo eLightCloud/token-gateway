@@ -554,16 +554,6 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		task.Progress = taskResult.Progress
 	}
 
-	// Persist billing before the terminal status. If journal creation itself
-	// fails, the task remains pollable and the existing 15-second poller retries;
-	// if application fails after creation, billing_recovery replays the same fact.
-	if shouldSettle && !settleTaskBillingOnComplete(ctx, adaptor, task, taskResult) {
-		return fmt.Errorf("task %s billing settlement is pending recovery", task.TaskID)
-	}
-	if shouldRefund && !RefundTaskQuota(ctx, task, task.FailReason) {
-		return fmt.Errorf("task %s refund is pending recovery", task.TaskID)
-	}
-
 	isDone := task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure
 	if isDone && snap.Status != task.Status {
 		won, err := task.UpdateWithStatus(snap.Status)

@@ -10,21 +10,13 @@ import (
 // Quota conversions are centralized here so every billing path shares one
 // saturation + logging policy. Single-request charges stay bounded to int32;
 // top-ups and wallet-priced purchases use a JavaScript-safe 64-bit domain.
+// MaxWalletQuota / MinWalletQuota / MaxTokenQuota are declared in
+// quota_balance.go as int64 wallet-domain bounds (this repo's 64-bit quota
+// balance extension); single-request charge bounds remain int32 here.
 const (
-	MaxQuota       = math.MaxInt32
-	MinQuota       = math.MinInt32
-	MaxWalletQuota = 1<<53 - 1
+	MaxQuota = math.MaxInt32
+	MinQuota = math.MinInt32
 )
-
-// ValidateWalletQuota enforces the upper bound shared by wallet mutations.
-// Negative balances remain valid because billing can temporarily overdraw a
-// wallet; callers that accept credits must apply their own positive check.
-func ValidateWalletQuota(quota int) error {
-	if quota > MaxWalletQuota {
-		return fmt.Errorf("wallet quota exceeds %d", MaxWalletQuota)
-	}
-	return nil
-}
 
 // QuotaClampKind identifies why a quota conversion had to be saturated.
 type QuotaClampKind string
@@ -169,7 +161,11 @@ func QuotaFromDecimalStrict(d decimal.Decimal) (int, error) {
 
 // WalletQuotaFromDecimalStrict converts wallet and top-up values within the
 // JavaScript-safe integer range, which is also exactly representable by float64.
-func WalletQuotaFromDecimalStrict(d decimal.Decimal) (int, error) {
+func WalletQuotaFromDecimalStrict(d decimal.Decimal) (int64, error) {
 	f, _ := d.Round(0).Float64()
-	return strictQuota(saturateQuotaBounded(f, "WalletQuotaFromDecimal", MaxWalletQuota, -MaxWalletQuota))
+	quota, clamp := saturateQuotaBounded(f, "WalletQuotaFromDecimal", int(MaxWalletQuota), -int(MaxWalletQuota))
+	if clamp != nil {
+		return 0, clamp
+	}
+	return int64(quota), nil
 }

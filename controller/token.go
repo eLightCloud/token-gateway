@@ -15,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
-	"github.com/shopspring/decimal"
 )
 
 type tokenAutoGroupsInput struct {
@@ -42,14 +41,8 @@ type tokenResponse struct {
 	AutoGroups []string `json:"auto_groups"`
 }
 
-func maxTokenQuota() int {
-	quota, err := common.WalletQuotaFromDecimalStrict(
-		decimal.NewFromInt(1_000_000_000).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-	)
-	if err != nil {
-		return common.MaxWalletQuota
-	}
-	return quota
+func maxTokenQuota() int64 {
+	return common.MaxTokenQuota
 }
 
 func buildMaskedTokenResponse(token *model.Token) *tokenResponse {

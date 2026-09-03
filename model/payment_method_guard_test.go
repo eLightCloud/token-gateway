@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func insertUserForPaymentGuardTest(t *testing.T, id int, quota int) *User {
+func insertUserForPaymentGuardTest(t *testing.T, id int, quota int64) *User {
 	t.Helper()
 	user := &User{
 		Id:       id,
@@ -316,9 +316,9 @@ func TestRechargeEpayEnforcesFinalWalletQuotaLimit(t *testing.T) {
 
 	testCases := []struct {
 		name         string
-		currentQuota int
+		currentQuota int64
 		wantErr      bool
-		wantQuota    int
+		wantQuota    int64
 		wantStatus   string
 	}{
 		{

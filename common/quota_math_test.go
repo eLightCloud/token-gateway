@@ -131,7 +131,7 @@ func TestQuotaFromDecimalChecked(t *testing.T) {
 func TestWalletQuotaFromDecimalStrict(t *testing.T) {
 	quota, err := WalletQuotaFromDecimalStrict(decimal.NewFromInt(4_294_500_000))
 	require.NoError(t, err)
-	assert.Equal(t, 4_294_500_000, quota)
+	assert.Equal(t, int64(4_294_500_000), quota)
 
 	quota, err = WalletQuotaFromDecimalStrict(decimal.NewFromInt(MaxWalletQuota))
 	require.NoError(t, err)

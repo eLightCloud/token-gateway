@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -241,4 +242,50 @@ func ApplyOneShotBillingAndRecordConsumeLog(ctx *gin.Context, relayInfo *relayco
 		ApplyUsage:     true,
 		ApplyToken:     !relayInfo.IsPlayground,
 	}, &logParams)
+}
+
+func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
+	if relayInfo.Billing != nil {
+		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
+		delta := actualQuota - preConsumed
+
+		if delta > 0 {
+			logger.LogInfo(ctx, fmt.Sprintf("预扣费后补扣费：%s（实际消耗：%s，预扣费：%s）",
+				logger.FormatQuota(delta),
+				logger.FormatQuota(actualQuota),
+				logger.FormatQuota(preConsumed),
+			))
+		} else if delta < 0 {
+			logger.LogInfo(ctx, fmt.Sprintf("预扣费后返还扣费：%s（实际消耗：%s，预扣费：%s）",
+				logger.FormatQuota(-delta),
+				logger.FormatQuota(actualQuota),
+				logger.FormatQuota(preConsumed),
+			))
+		} else {
+			logger.LogInfo(ctx, fmt.Sprintf("预扣费与实际消耗一致，无需调整：%s（按次计费）",
+				logger.FormatQuota(actualQuota),
+			))
+		}
+
+		if err := relayInfo.Billing.Settle(actualQuota); err != nil {
+			return err
+		}
+
+		// 发送额度通知（订阅计费使用订阅剩余额度）
+		if actualQuota != 0 {
+			if relayInfo.BillingSource == BillingSourceSubscription {
+				checkAndSendSubscriptionQuotaNotify(relayInfo)
+			} else {
+				checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumed, preConsumed)
+			}
+		}
+		return nil
+	}
+
+	// 回退：无 BillingSession 时使用旧路径
+	quotaDelta := actualQuota - relayInfo.FinalPreConsumedQuota
+	if quotaDelta != 0 {
+		return PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+	}
+	return nil
 }

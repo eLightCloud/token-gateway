@@ -105,3 +105,18 @@ func cacheGetTokenByKey(key string) (*Token, error) {
 	token.Key = key
 	return &token, nil
 }
+
+// cacheDeleteToken / cacheIncrTokenQuota / cacheDecrTokenQuota 是本地计费
+// 扩展（64-bit 余额迁移）使用的兼容入口。上游 fence 型缓存不再做增量更新：
+// 配额变更在数据库提交后只需失效缓存，下一次读取即从数据库刷新。
+func cacheDeleteToken(key string) error {
+	return invalidateTokenCacheForMutation(key)
+}
+
+func cacheIncrTokenQuota(key string, increment int64) error {
+	return invalidateTokenCacheForMutation(key)
+}
+
+func cacheDecrTokenQuota(key string, decrement int64) error {
+	return invalidateTokenCacheForMutation(key)
+}

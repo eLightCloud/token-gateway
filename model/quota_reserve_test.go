@@ -20,7 +20,7 @@ func createReserveTestUser(t *testing.T, quota int) User {
 		Status:      common.UserStatusEnabled,
 		Group:       "default",
 		AuthVersion: 1,
-		Quota:       quota,
+		Quota:       int64(quota),
 		AffCode:     "reserve-aff-" + common.GetRandomString(8),
 	}
 	require.NoError(t, DB.Create(&user).Error)
@@ -35,13 +35,13 @@ func createReserveTestToken(t *testing.T, remainQuota int) Token {
 		Name:        "reserve-test",
 		Status:      common.TokenStatusEnabled,
 		ExpiredTime: -1,
-		RemainQuota: remainQuota,
+		RemainQuota: int64(remainQuota),
 	}
 	require.NoError(t, token.Insert())
 	return token
 }
 
-func getUserQuotaFromDB(t *testing.T, id int) int {
+func getUserQuotaFromDB(t *testing.T, id int) int64 {
 	t.Helper()
 	var user User
 	require.NoError(t, DB.Select("quota").First(&user, id).Error)
@@ -61,14 +61,14 @@ func resetBatchUpdateTestState(t *testing.T) {
 	common.BatchUpdateEnabled = false
 	for i := 0; i < BatchUpdateTypeCount; i++ {
 		batchUpdateLocks[i].Lock()
-		batchUpdateStores[i] = make(map[int]int)
+		batchUpdateStores[i] = make(map[int]int64)
 		batchUpdateLocks[i].Unlock()
 	}
 	t.Cleanup(func() {
 		common.BatchUpdateEnabled = oldBatchEnabled
 		for i := 0; i < BatchUpdateTypeCount; i++ {
 			batchUpdateLocks[i].Lock()
-			batchUpdateStores[i] = make(map[int]int)
+			batchUpdateStores[i] = make(map[int]int64)
 			batchUpdateLocks[i].Unlock()
 		}
 	})
@@ -148,7 +148,7 @@ func TestBatchUpdateAccumulatesTwoMaximumRequestCharges(t *testing.T) {
 	require.NoError(t, DecreaseUserQuota(user.Id, common.MaxQuota, false))
 
 	batchUpdate()
-	assert.Equal(t, 100, getUserQuotaFromDB(t, user.Id))
+	assert.Equal(t, int64(100), getUserQuotaFromDB(t, user.Id))
 }
 
 func TestBatchUpdateAccumulatorSaturatesOverflow(t *testing.T) {
@@ -157,16 +157,16 @@ func TestBatchUpdateAccumulatorSaturatesOverflow(t *testing.T) {
 	addNewRecord(BatchUpdateTypeUserQuota, 1, math.MaxInt)
 	addNewRecord(BatchUpdateTypeUserQuota, 1, 1)
 	batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
-	assert.Equal(t, math.MaxInt, batchUpdateStores[BatchUpdateTypeUserQuota][1])
+	assert.EqualValues(t, math.MaxInt, batchUpdateStores[BatchUpdateTypeUserQuota][1])
 	batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
 
 	batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
-	batchUpdateStores[BatchUpdateTypeUserQuota] = make(map[int]int)
+	batchUpdateStores[BatchUpdateTypeUserQuota] = make(map[int]int64)
 	batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
 	addNewRecord(BatchUpdateTypeUserQuota, 1, math.MinInt)
 	addNewRecord(BatchUpdateTypeUserQuota, 1, -1)
 	batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
-	assert.Equal(t, math.MinInt, batchUpdateStores[BatchUpdateTypeUserQuota][1])
+	assert.EqualValues(t, math.MinInt, batchUpdateStores[BatchUpdateTypeUserQuota][1])
 	batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
 }
 

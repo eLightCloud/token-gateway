@@ -186,12 +186,12 @@ func getMinTopup() int64 {
 		if err != nil {
 			return common.MaxWalletQuota
 		}
-		minTopup = quota
+		minTopup = int(quota)
 	}
 	return int64(minTopup)
 }
 
-func getTopUpQuota(amount int64) (int, error) {
+func getTopUpQuota(amount int64) (int64, error) {
 	quota := decimal.NewFromInt(amount)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
@@ -220,7 +220,7 @@ func getMaxTopUpAmount() int64 {
 	return maxStoredAmount.IntPart()
 }
 
-func validateCreditedQuota(quota decimal.Decimal) (int, error) {
+func validateCreditedQuota(quota decimal.Decimal) (int64, error) {
 	value, err := common.WalletQuotaFromDecimalStrict(quota)
 	if err != nil {
 		return 0, errors.New("充值额度超出系统可表示范围")
@@ -231,7 +231,7 @@ func validateCreditedQuota(quota decimal.Decimal) (int, error) {
 	return value, nil
 }
 
-func validateTopUpQuota(amount int64) (int, error) {
+func validateTopUpQuota(amount int64) (int64, error) {
 	quota, err := getTopUpQuota(amount)
 	if err == nil && quota > 0 {
 		return quota, nil

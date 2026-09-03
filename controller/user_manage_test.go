@@ -188,6 +188,8 @@ func TestManageUserQuotaAdjustmentPersistsInvoiceFact(t *testing.T) {
 	assert.Equal(t, int64(500_000), adjustment.DeltaQuota)
 	assert.Equal(t, int64(1_000_000), adjustment.BalanceBefore)
 	assert.Equal(t, int64(1_500_000), adjustment.BalanceAfter)
+}
+
 func TestManageUserQuotaRespectsWalletCeiling(t *testing.T) {
 	db := setupManageUserTestDB(t)
 	user := model.User{

@@ -46,6 +46,7 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&model.Task{},
+		&model.TaskSettlementJournal{},
 		&model.Midjourney{},
 		&model.User{},
 		&model.Token{},
@@ -493,11 +494,11 @@ func getUserQuota(t *testing.T, id int) int64 {
 	return user.Quota
 }
 
-func getUserUsageAccounting(t *testing.T, id int) (int, int) {
+func getUserUsageAccounting(t *testing.T, id int) (int64, int64) {
 	t.Helper()
 	var user model.User
 	require.NoError(t, model.DB.Select("used_quota", "request_count").Where("id = ?", id).First(&user).Error)
-	return user.UsedQuota, user.RequestCount
+	return user.UsedQuota, int64(user.RequestCount)
 }
 
 func getChannelUsedQuota(t *testing.T, id int) int64 {
@@ -507,7 +508,7 @@ func getChannelUsedQuota(t *testing.T, id int) int64 {
 	return channel.UsedQuota
 }
 
-func getTokenRemainQuota(t *testing.T, id int) int {
+func getTokenRemainQuota(t *testing.T, id int) int64 {
 	t.Helper()
 	var token model.Token
 	require.NoError(t, model.DB.Select("remain_quota").Where("id = ?", id).First(&token).Error)
