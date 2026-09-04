@@ -27,6 +27,10 @@ func (w *WalletFunding) Source() string { return BillingSourceWallet }
 type SubscriptionFunding struct {
 	subscriptionId int
 	preConsumed    int64
+	requestId      string
+	userId         int
+	modelName      string
+	amount         int
 	// 以下字段在 PreConsume 成功后填充，供 RelayInfo 同步使用
 	AmountTotal     int64
 	AmountUsedAfter int64

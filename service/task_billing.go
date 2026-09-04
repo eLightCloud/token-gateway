@@ -37,20 +37,20 @@ func BuildTaskConsumptionLog(c *gin.Context, info *relaycommon.RelayInfo) model.
 			}
 		}
 	}
-	other := make(map[string]interface{})
-	other["is_task"] = true
-	other["request_path"] = c.Request.URL.Path
-	other["model_price"] = info.PriceData.ModelPrice
+	other := model.NewLogOther()
+	other.SetPublic("is_task", true)
+	other.SetPublic("request_path", c.Request.URL.Path)
+	other.SetPublic("model_price", info.PriceData.ModelPrice)
 	if info.PriceData.ModelRatio > 0 {
-		other["model_ratio"] = info.PriceData.ModelRatio
+		other.SetPublic("model_ratio", info.PriceData.ModelRatio)
 	}
-	other["group_ratio"] = info.PriceData.GroupRatioInfo.GroupRatio
+	other.SetPublic("group_ratio", info.PriceData.GroupRatioInfo.GroupRatio)
 	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
-		other["user_group_ratio"] = info.PriceData.GroupRatioInfo.GroupSpecialRatio
+		other.SetPublic("user_group_ratio", info.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	if info.IsModelMapped {
-		other["is_model_mapped"] = true
-		other["upstream_model_name"] = info.UpstreamModelName
+		other.SetPublic("is_model_mapped", true)
+		other.SetPublic("upstream_model_name", info.UpstreamModelName)
 	}
 	AppendOrganizationDiscountBillingInfo(info, other)
 	attachQuotaSaturation(c, info, other)
@@ -99,43 +99,43 @@ func SnapshotTaskBillingContext(info *relaycommon.RelayInfo) *model.TaskBillingC
 
 // appendTaskBillingContextInfo appends the immutable asynchronous billing
 // snapshot to a billing log using the same field semantics as synchronous logs.
-func appendTaskBillingContextInfo(other map[string]interface{}, bc *model.TaskBillingContext) {
+func appendTaskBillingContextInfo(other *model.LogOther, bc *model.TaskBillingContext) {
 	if other == nil || bc == nil {
 		return
 	}
-	other["model_price"] = bc.ModelPrice
+	other.SetPublic("model_price", bc.ModelPrice)
 	if bc.ModelRatio > 0 {
-		other["model_ratio"] = bc.ModelRatio
+		other.SetPublic("model_ratio", bc.ModelRatio)
 	}
-	other["group_ratio"] = bc.GroupRatio
+	other.SetPublic("group_ratio", bc.GroupRatio)
 	if priceData := taskBillingContextPriceData(bc); priceData != nil {
 		for k, v := range priceData.OtherRatios() {
-			other[k] = v
+			other.SetPublic(k, v)
 		}
 	}
 	appendOrganizationDiscountBillingInfo(other, bc.GroupRatio, bc.Discount)
 }
 
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
-func taskBillingOther(task *model.Task) map[string]interface{} {
-	other := make(map[string]interface{})
+func taskBillingOther(task *model.Task) *model.LogOther {
+	other := model.NewLogOther()
 	if bc := task.PrivateData.BillingContext; bc != nil {
-		other["model_price"] = bc.ModelPrice
+		other.SetPublic("model_price", bc.ModelPrice)
 		if bc.ModelRatio > 0 {
-			other["model_ratio"] = bc.ModelRatio
+			other.SetPublic("model_ratio", bc.ModelRatio)
 		}
-		other["group_ratio"] = bc.GroupRatio
+		other.SetPublic("group_ratio", bc.GroupRatio)
 		if priceData := taskBillingContextPriceData(bc); priceData != nil {
 			for k, v := range priceData.OtherRatios() {
-				other[k] = v
+				other.SetPublic(k, v)
 			}
 		}
 		if snap := bc.TieredSnapshot; snap != nil {
-			other["billing_mode"] = "tiered_expr"
-			other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
-			other["matched_tier"] = snap.EstimatedTier
+			other.SetPublic("billing_mode", "tiered_expr")
+			other.SetPublic("expr_b64", base64.StdEncoding.EncodeToString([]byte(snap.ExprString)))
+			other.SetPublic("matched_tier", snap.EstimatedTier)
 			if len(snap.UsageFacts) > 0 {
-				other["usage_facts"] = snap.UsageFacts
+				other.SetPublic("usage_facts", snap.UsageFacts)
 			}
 		}
 		// 本地扩展：组织折扣审计信息（发票对账依赖该字段）。
@@ -143,12 +143,32 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 	}
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
-		other["is_model_mapped"] = true
-		other["upstream_model_name"] = props.UpstreamModelName
+		other.SetPublic("is_model_mapped", true)
+		other.SetPublic("upstream_model_name", props.UpstreamModelName)
 	}
 	appendTaskLogInfo(task, other)
 	return other
 }
+
+// toLogOther 把本地 map 形态的日志字段桥接为 rc.31 的 LogOther 投影：
+// admin_info/root_info 分区迁移到对应命名空间，其余键进入 public 区。
+func toLogOther(other map[string]interface{}) *model.LogOther {
+	lo := model.NewLogOther()
+	if other == nil {
+		return lo
+	}
+	if adminInfo, ok := other["admin_info"].(map[string]interface{}); ok {
+		lo.MergeAdmin(adminInfo)
+		delete(other, "admin_info")
+	}
+	if rootInfo, ok := other["root_info"].(map[string]interface{}); ok {
+		lo.MergeRoot(rootInfo)
+		delete(other, "root_info")
+	}
+	lo.MergePublic(other)
+	return lo
+}
+
 func taskBillingContextPriceData(bc *model.TaskBillingContext) *types.PriceData {
 	if bc == nil || len(bc.OtherRatios) == 0 {
 		return nil
@@ -177,8 +197,8 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		return true
 	}
 	other := taskBillingOther(task)
-	other["task_id"] = task.TaskID
-	other["reason"] = reason
+	other.SetPublic("task_id", task.TaskID)
+	other.SetPublic("reason", reason)
 	logParams := model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   model.LogTypeRefund,
@@ -251,9 +271,9 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		logQuota = -quotaDelta
 	}
 	other := taskBillingOther(task)
-	other["task_id"] = task.TaskID
-	other["pre_consumed_quota"] = preConsumedQuota
-	other["actual_quota"] = actualQuota
+	other.SetPublic("task_id", task.TaskID)
+	other.SetPublic("pre_consumed_quota", preConsumedQuota)
+	other.SetPublic("actual_quota", actualQuota)
 	for _, clamp := range clamps {
 		attachQuotaSaturationToOther(other, clamp)
 	}
@@ -269,6 +289,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		Other:     other,
 		NodeName:  task.PrivateData.NodeName,
 	}
+	fmt.Println("ZZ recalc: task.ID=", task.ID, "quota=", task.Quota, "actual=", actualQuota)
 	journal := &model.TaskSettlementJournal{
 		RequestId:           fmt.Sprintf("task-recalculate:%d", task.ID),
 		Operation:           model.TaskSettlementOperationRecalculate,
@@ -311,6 +332,15 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		// 新任务只使用提交时快照，避免轮询期间配置变更造成扣费与日志不一致。
 		modelRatio = bc.ModelRatio
 		finalGroupRatio = bc.GroupRatio
+		if modelRatio <= 0 {
+			// 快照未记录倍率（旧数据/部分上游），回退实时配置。
+			if r, ok, _ := ratio_setting.GetModelRatio(taskModelName(task)); ok && r > 0 {
+				modelRatio = r
+			}
+		}
+		if finalGroupRatio <= 0 {
+			finalGroupRatio = 1
+		}
 	} else {
 		// 历史任务没有 BillingContext，只能保留旧的运行时配置回退。
 		modelName := taskModelName(task)
@@ -399,27 +429,27 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 			logContent = fmt.Sprintf("%s, 计算参数：%s", logContent, strings.Join(contents, ", "))
 		}
 	}
-	other := make(map[string]interface{})
-	other["is_task"] = true
-	other["request_path"] = c.Request.URL.Path
-	other["model_price"] = info.PriceData.ModelPrice
+	other := model.NewLogOther()
+	other.SetPublic("is_task", true)
+	other.SetPublic("request_path", c.Request.URL.Path)
+	other.SetPublic("model_price", info.PriceData.ModelPrice)
 	if info.PriceData.ModelRatio > 0 {
-		other["model_ratio"] = info.PriceData.ModelRatio
+		other.SetPublic("model_ratio", info.PriceData.ModelRatio)
 	}
-	other["group_ratio"] = info.PriceData.GroupRatioInfo.GroupRatio
+	other.SetPublic("group_ratio", info.PriceData.GroupRatioInfo.GroupRatio)
 	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
-		other["user_group_ratio"] = info.PriceData.GroupRatioInfo.GroupSpecialRatio
+		other.SetPublic("user_group_ratio", info.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	if info.IsModelMapped {
-		other["is_model_mapped"] = true
-		other["upstream_model_name"] = info.UpstreamModelName
+		other.SetPublic("is_model_mapped", true)
+		other.SetPublic("upstream_model_name", info.UpstreamModelName)
 	}
 	if snap := info.TieredBillingSnapshot; snap != nil {
-		other["billing_mode"] = "tiered_expr"
-		other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
-		other["matched_tier"] = snap.EstimatedTier
+		other.SetPublic("billing_mode", "tiered_expr")
+		other.SetPublic("expr_b64", base64.StdEncoding.EncodeToString([]byte(snap.ExprString)))
+		other.SetPublic("matched_tier", snap.EstimatedTier)
 		if len(snap.UsageFacts) > 0 {
-			other["usage_facts"] = snap.UsageFacts
+			other.SetPublic("usage_facts", snap.UsageFacts)
 		}
 	}
 	appendTaskLogInfo(task, other)
@@ -445,12 +475,12 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 // resolveTokenKey 通过 TokenId 运行时获取令牌 Key（用于 Redis 缓存操作）。
 // 如果令牌已被删除或查询失败，返回空字符串。
 
-func appendTaskLogInfo(task *model.Task, other map[string]interface{}) {
+func appendTaskLogInfo(task *model.Task, other *model.LogOther) {
 	if task == nil || other == nil {
 		return
 	}
 	if task.TaskID != "" {
-		other["task_id"] = task.TaskID
+		other.SetPublic("task_id", task.TaskID)
 	}
 	if task.PrivateData.Execution != nil {
 		AppendTaskPluginAuditInfo(other, task.PrivateData.Execution.TaskPlugin)
@@ -458,15 +488,10 @@ func appendTaskLogInfo(task *model.Task, other map[string]interface{}) {
 	if task.PrivateData.UpstreamTaskID == "" && task.PrivateData.NodeName == "" {
 		return
 	}
-	rootInfo, ok := other["root_info"].(map[string]interface{})
-	if !ok || rootInfo == nil {
-		rootInfo = map[string]interface{}{}
-		other["root_info"] = rootInfo
-	}
 	if task.PrivateData.UpstreamTaskID != "" {
-		rootInfo["upstream_task_id"] = task.PrivateData.UpstreamTaskID
+		other.SetRoot("upstream_task_id", task.PrivateData.UpstreamTaskID)
 	}
 	if task.PrivateData.NodeName != "" {
-		rootInfo["node_name"] = task.PrivateData.NodeName
+		other.SetRoot("node_name", task.PrivateData.NodeName)
 	}
 }

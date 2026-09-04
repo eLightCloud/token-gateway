@@ -126,7 +126,8 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 	tokenName := ctx.GetString("token_name")
 	oai := apiErr.ToOpenAIError()
 
-	other := map[string]any{
+	other := model.NewLogOther()
+	other.MergePublic(map[string]interface{}{
 		"violation_fee":        true,
 		"violation_fee_code":   string(types.ErrorCodeViolationFeeGrokCSAM),
 		"fee_quota":            feeQuota,
@@ -136,7 +137,7 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		"upstream_error_type":  oai.Type,
 		"upstream_error_code":  fmt.Sprintf("%v", oai.Code),
 		"violation_fee_marker": CSAMViolationMarker,
-	}
+	})
 
 	if err := ApplyOneShotBillingAndRecordConsumeLog(ctx, relayInfo, "violation-fee", feeQuota, model.RecordConsumeLogParams{
 		ChannelId:      relayInfo.ChannelId,

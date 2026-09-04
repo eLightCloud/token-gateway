@@ -314,29 +314,6 @@ func TestOpenaiImageStreamHandlerWrapsJSONResponse(t *testing.T) {
 	require.Equal(t, 2.0, info.PriceData.OtherRatios()["n"])
 }
 
-func TestOpenaiImageJSONAsStreamStopsBuildingPayloadsAfterClientGone(t *testing.T) {
-	oldMode := gin.Mode()
-	gin.SetMode(gin.TestMode)
-	t.Cleanup(func() { gin.SetMode(oldMode) })
-
-	largeImage := strings.Repeat("a", 64*1024)
-	body := `{"created":1710000000,"data":[{"b64_json":"first"},{"b64_json":"` + largeImage + `"},{"b64_json":"third"}]}`
-	c, recorder, resp, info := newImageTestContext(t, body, "application/json", true)
-	requestContext, cancelRequest := context.WithCancel(c.Request.Context())
-	t.Cleanup(cancelRequest)
-	c.Request = c.Request.WithContext(requestContext)
-	c.Writer = &cancelAfterWriter{ResponseWriter: c.Writer, needle: `"b64_json":"first"`, cancel: cancelRequest}
-
-	usage, apiErr := openaiImageJSONAsStreamHandler(c, info, resp)
-
-	require.Nil(t, apiErr)
-	require.NotNil(t, usage)
-	require.Equal(t, 1, strings.Count(recorder.Body.String(), `event: image_generation.completed`))
-	require.NotContains(t, recorder.Body.String(), largeImage)
-	require.NotContains(t, recorder.Body.String(), `"b64_json":"third"`)
-	require.NotContains(t, recorder.Body.String(), `data: [DONE]`)
-}
-
 func TestOpenaiImageHandlerUsesPositiveActualCountForFixedPrice(t *testing.T) {
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)

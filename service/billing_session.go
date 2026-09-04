@@ -417,7 +417,12 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		}
 		session := &BillingSession{
 			relayInfo: relayInfo,
-			funding:   &SubscriptionFunding{},
+			funding: &SubscriptionFunding{
+				requestId: relayInfo.RequestId,
+				userId:    relayInfo.UserId,
+				modelName: relayInfo.GetBillingModelName(),
+				amount:    int(subConsume),
+			},
 		}
 		// 订阅至少预扣 1，保证能选定并固定本次订阅来源。
 		if apiErr := session.preConsume(c, int(subConsume)); apiErr != nil {

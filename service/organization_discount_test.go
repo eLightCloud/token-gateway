@@ -62,7 +62,7 @@ func TestLoadOrganizationDiscountSnapshotReturnsFullMap(t *testing.T) {
 	snapshot, err := LoadOrganizationDiscountSnapshot(42)
 	require.NoError(t, err)
 	require.NotNil(t, snapshot)
-	assert.Equal(t, 21, snapshot.SnapshotID)
+	assert.EqualValues(t, 21, snapshot.SnapshotID)
 	assert.InDelta(t, 0.8, snapshot.ChannelDiscounts[12], 1e-12)
 	assert.InDelta(t, 0.95, snapshot.ChannelDiscounts[35], 1e-12)
 	// 未配置渠道在内存映射查找时为 1.0
@@ -90,7 +90,7 @@ func TestApplyOrganizationDiscountForChannelUsesInMemoryMapOnly(t *testing.T) {
 
 	ApplyOrganizationDiscountForChannel(info, 12)
 	assert.InDelta(t, 0.8, snapshot.EffectiveRatio(), 1e-12)
-	assert.Equal(t, 12, snapshot.AppliedChannelId)
+	assert.EqualValues(t, 12, snapshot.AppliedChannelId)
 
 	// 重试切换渠道：同一内存映射中的新渠道倍率，未配置渠道为 1.0
 	ApplyOrganizationDiscountForChannel(info, 35)
@@ -119,8 +119,8 @@ func TestPrepareOrganizationDiscountReservationUsesSelectedChannelMarkup(t *test
 
 	ApplyOrganizationDiscountForChannel(info, 35)
 	require.Nil(t, PrepareOrganizationDiscountReservation(info))
-	assert.Equal(t, []int{250}, billing.reserveTargets)
-	assert.Equal(t, 250, info.FinalPreConsumedQuota)
+	assert.EqualValues(t, []int{250}, billing.reserveTargets)
+	assert.EqualValues(t, 250, info.FinalPreConsumedQuota)
 }
 
 func TestResolveOrganizationDiscountSnapshotForChannelKeepsRequestMap(t *testing.T) {
@@ -140,7 +140,7 @@ func TestResolveOrganizationDiscountSnapshotForChannelKeepsRequestMap(t *testing
 	retrySnapshot, err := ResolveOrganizationDiscountSnapshotForChannel(priceData, 42, 35)
 	require.NoError(t, err)
 	require.NotNil(t, retrySnapshot)
-	assert.Equal(t, 23, retrySnapshot.SnapshotID)
+	assert.EqualValues(t, 23, retrySnapshot.SnapshotID)
 	assert.InDelta(t, 1.0, retrySnapshot.EffectiveRatio(), 1e-12, "channel 35 was not configured in snapshot 23")
 
 	// 已解析且无折扣的请求保持 nil
@@ -173,22 +173,23 @@ func TestAppendOrganizationDiscountBillingInfoShape(t *testing.T) {
 	}
 	ApplyOrganizationDiscountForChannel(info, 12)
 
-	other := map[string]interface{}{}
+	other := model.NewLogOther()
 	AppendOrganizationDiscountBillingInfo(info, other)
 
-	assert.InDelta(t, 1.2, other["effective_ratio"], 1e-12)
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	rendered := other.Snapshot()
+	assert.InDelta(t, 1.2, rendered["effective_ratio"], 1e-12)
+	adminInfo, ok := rendered["admin_info"].(map[string]interface{})
 	require.True(t, ok)
 	discount, ok := adminInfo["organization_discount"].(map[string]interface{})
 	require.True(t, ok)
-	assert.Equal(t, 21, discount["snapshot_id"])
-	assert.Equal(t, 12, discount["channel_id"])
+	assert.EqualValues(t, 21, discount["snapshot_id"])
+	assert.EqualValues(t, 12, discount["channel_id"])
 	assert.InDelta(t, 0.8, discount["ratio"], 1e-12)
 
 	// 无折扣请求不写任何折扣字段
-	emptyOther := map[string]interface{}{}
+	emptyOther := model.NewLogOther()
 	AppendOrganizationDiscountBillingInfo(&relaycommon.RelayInfo{}, emptyOther)
-	assert.NotContains(t, emptyOther, "effective_ratio")
+	assert.NotContains(t, emptyOther.Snapshot(), "effective_ratio")
 }
 
 func TestPreWssConsumeQuotaRequiresResolvedDiscountSnapshot(t *testing.T) {

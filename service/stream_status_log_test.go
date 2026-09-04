@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+
 	"errors"
+	"github.com/QuantumNous/new-api/model"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -50,11 +52,11 @@ func TestAppendStreamStatusPreservesClientAndUpstreamOutcomes(t *testing.T) {
 			status.SetEndReason(tt.endReason, tt.endErr)
 			status.SetUpstreamResult(tt.upstreamResult, tt.upstreamErr)
 			relayInfo := &relaycommon.RelayInfo{IsStream: true, StreamStatus: status}
-			other := map[string]interface{}{}
+			other := model.NewLogOther()
 
 			appendStreamStatus(relayInfo, other)
 
-			streamInfo, ok := other["stream_status"].(map[string]interface{})
+			streamInfo, ok := other.Snapshot()["stream_status"].(map[string]interface{})
 			require.True(t, ok)
 			assert.Equal(t, tt.wantStatus, streamInfo["status"])
 			assert.Equal(t, string(tt.endReason), streamInfo["end_reason"])
@@ -77,11 +79,11 @@ func TestAppendStreamStatusOmitsUnknownUpstreamOutcome(t *testing.T) {
 	status := relaycommon.NewStreamStatus()
 	status.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
 	relayInfo := &relaycommon.RelayInfo{IsStream: true, StreamStatus: status}
-	other := map[string]interface{}{}
+	other := model.NewLogOther()
 
 	appendStreamStatus(relayInfo, other)
 
-	streamInfo, ok := other["stream_status"].(map[string]interface{})
+	streamInfo, ok := other.Snapshot()["stream_status"].(map[string]interface{})
 	require.True(t, ok)
 	assert.NotContains(t, streamInfo, "upstream_result")
 	assert.NotContains(t, streamInfo, "upstream_error")

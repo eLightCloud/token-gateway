@@ -12,9 +12,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -215,35 +213,6 @@ func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
 	}
 }
 
-func TestAwsStreamInvokeContextDetachesOnlyAfterEstablishment(t *testing.T) {
-	originalRelayTimeout := common.RelayTimeout
-	common.RelayTimeout = 0
-	t.Cleanup(func() { common.RelayTimeout = originalRelayTimeout })
-
-	t.Run("before establishment", func(t *testing.T) {
-		parent, cancelParent := context.WithCancel(context.Background())
-		streamContext := newAwsStreamInvokeContext(parent)
-		defer streamContext.Close()
-		cancelParent()
-		select {
-		case <-streamContext.Done():
-		case <-time.After(time.Second):
-			t.Fatal("stream invoke context did not observe pre-establishment cancellation")
-		}
-		require.ErrorIs(t, streamContext.Err(), context.Canceled)
-	})
-
-	t.Run("after establishment", func(t *testing.T) {
-		parent, cancelParent := context.WithCancel(context.Background())
-		streamContext := newAwsStreamInvokeContext(parent)
-		streamContext.MarkEstablished()
-		cancelParent()
-		assert.NoError(t, streamContext.Err())
-		streamContext.Close()
-		require.ErrorIs(t, streamContext.Err(), context.Canceled)
-	})
-}
-
 func TestNewAwsInvokeErrorSkipsRetryOnlyForClientCancellation(t *testing.T) {
 	canceledContext, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -388,7 +357,7 @@ func TestAwsStreamHandlerUsesFinalUpstreamUsage(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "[DONE]")
 }
 
-func TestAwsStreamHandlerContinuesAfterClientCancellationAndUsesFinalBillingUsage(t *testing.T) {
+func TestAwsStreamHandlerStopsAtClientCancellation(t *testing.T) {
 	originalRelayTimeout := common.RelayTimeout
 	common.RelayTimeout = 0
 	t.Cleanup(func() {
@@ -426,11 +395,7 @@ func TestAwsStreamHandlerContinuesAfterClientCancellationAndUsesFinalBillingUsag
 			}
 
 			<-releaseFinal
-			if err := writeAwsStreamEvent(writer, `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":423}}`); err != nil {
-				producerResults <- err
-				return
-			}
-			producerResults <- writeAwsStreamEvent(writer, `{"type":"message_stop"}`)
+			producerResults <- writeAwsStreamEvent(writer, `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":423}}`)
 		}()
 		return newAwsStreamResponse(request, reader), nil
 	}))
@@ -438,7 +403,6 @@ func TestAwsStreamHandlerContinuesAfterClientCancellationAndUsesFinalBillingUsag
 	responseWriter := newAwsNotifyingResponseWriter("partial")
 	c := newAwsTestContext(responseWriter, requestContext)
 	adaptor := &Adaptor{AwsClient: client, AwsReq: newAwsStreamInput()}
-	info := newAwsTestRelayInfo()
 
 	type handlerResult struct {
 		err   *relaytypes.NewAPIError
@@ -446,7 +410,7 @@ func TestAwsStreamHandlerContinuesAfterClientCancellationAndUsesFinalBillingUsag
 	}
 	results := make(chan handlerResult, 1)
 	go func() {
-		err, usage := awsStreamHandler(c, info, adaptor)
+		err, usage := awsStreamHandler(c, newAwsTestRelayInfo(), adaptor)
 		results <- handlerResult{err: err, usage: usage}
 	}()
 
@@ -464,126 +428,25 @@ func TestAwsStreamHandlerContinuesAfterClientCancellationAndUsesFinalBillingUsag
 		t.Fatal("partial response was not written")
 	}
 	cancelRequest()
-	require.NoError(t, upstreamContext.Err())
-	select {
-	case result := <-results:
-		t.Fatalf("stream handler returned before the upstream terminal: %v", result.err)
-	case <-time.After(100 * time.Millisecond):
-	}
-	release()
 
 	var result handlerResult
 	select {
 	case result = <-results:
 	case <-time.After(5 * time.Second):
-		t.Fatal("stream handler did not finish after the upstream terminal")
+		t.Fatal("stream handler did not stop after client cancellation")
 	}
 
+	require.ErrorIs(t, upstreamContext.Err(), context.Canceled)
 	require.Nil(t, result.err)
 	require.NotNil(t, result.usage)
-	require.NotNil(t, result.usage.BillingUsage)
-	require.NotNil(t, result.usage.BillingUsage.ClaudeUsage)
-	assert.Equal(t, dto.BillingUsageSourceClaudeMessages, result.usage.BillingUsage.Source)
-	assert.Equal(t, dto.BillingUsageSemanticAnthropic, result.usage.BillingUsage.Semantic)
-	assert.Equal(t, 100, result.usage.BillingUsage.ClaudeUsage.InputTokens)
-	assert.Equal(t, 423, result.usage.BillingUsage.ClaudeUsage.OutputTokens)
 	assert.Equal(t, bodyLengthBeforeCancel, responseWriter.Body.Len())
 	assert.NotContains(t, responseWriter.Body.String(), "[DONE]")
-	require.NotNil(t, result.usage)
-	require.Nil(t, helper.ValidateTextStreamCompletion(info))
 
+	release()
 	select {
 	case producerErr := <-producerResults:
-		require.NoError(t, producerErr)
+		require.Error(t, producerErr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("upstream producer did not observe the closed stream")
-	}
-}
-
-func TestAwsStreamHandlerDrainTimeoutClassification(t *testing.T) {
-	tests := []struct {
-		name           string
-		continueEvents bool
-		wantResult     relaycommon.StreamUpstreamResult
-	}{
-		{name: "silent upstream", wantResult: relaycommon.StreamUpstreamResultIdleTimeout},
-		{name: "business events continue", continueEvents: true, wantResult: relaycommon.StreamUpstreamResultDrainTimeout},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			oldStreamingTimeout := constant.StreamingTimeout
-			constant.StreamingTimeout = 1
-			t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
-			oldRelayTimeout := common.RelayTimeout
-			common.RelayTimeout = 0
-			t.Cleanup(func() { common.RelayTimeout = oldRelayTimeout })
-
-			requestContext, cancelRequest := context.WithCancel(context.Background())
-			t.Cleanup(cancelRequest)
-			producerDone := make(chan struct{})
-			client := newAwsTestClient(awsHTTPClientFunc(func(request *http.Request) (*http.Response, error) {
-				reader, writer := io.Pipe()
-				go func() {
-					defer close(producerDone)
-					defer writer.Close()
-					initialEvents := []string{
-						`{"type":"message_start","message":{"id":"msg_test","model":"claude-test","usage":{"input_tokens":10,"output_tokens":1}}}`,
-						`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
-					}
-					for _, event := range initialEvents {
-						if writeAwsStreamEvent(writer, event) != nil {
-							return
-						}
-					}
-					if !test.continueEvents {
-						<-request.Context().Done()
-						return
-					}
-					ticker := time.NewTicker(50 * time.Millisecond)
-					defer ticker.Stop()
-					for range ticker.C {
-						if writeAwsStreamEvent(writer, `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"tail"}}`) != nil {
-							return
-						}
-					}
-				}()
-				return newAwsStreamResponse(request, reader), nil
-			}))
-
-			responseWriter := newAwsNotifyingResponseWriter("partial")
-			c := newAwsTestContext(responseWriter, requestContext)
-			info := newAwsTestRelayInfo()
-			adaptor := &Adaptor{AwsClient: client, AwsReq: newAwsStreamInput()}
-			type handlerResult struct {
-				err *relaytypes.NewAPIError
-			}
-			results := make(chan handlerResult, 1)
-			go func() {
-				handlerErr, _ := awsStreamHandler(c, info, adaptor)
-				results <- handlerResult{err: handlerErr}
-			}()
-
-			select {
-			case <-responseWriter.notified:
-			case <-time.After(5 * time.Second):
-				t.Fatal("initial AWS stream event was not forwarded")
-			}
-			cancelRequest()
-
-			select {
-			case result := <-results:
-				require.NotNil(t, result.err)
-			case <-time.After(4 * time.Second):
-				t.Fatal("AWS stream did not stop at drain deadline")
-			}
-			upstreamResult, _ := info.StreamStatus.GetUpstreamResult()
-			assert.Equal(t, test.wantResult, upstreamResult)
-			require.Error(t, helper.ValidateTextStreamCompletion(info))
-			select {
-			case <-producerDone:
-			case <-time.After(2 * time.Second):
-				t.Fatal("AWS event producer did not exit after stream close")
-			}
-		})
 	}
 }

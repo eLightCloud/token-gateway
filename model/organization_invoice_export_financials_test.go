@@ -361,9 +361,11 @@ func TestRecordTaskBillingLogPersistsStructuredBillingSource(t *testing.T) {
 		LogType:   LogTypeConsume,
 		Quota:     100,
 		ModelName: "gpt-test",
-		Other: map[string]interface{}{
-			"billing_source": "subscription",
-		},
+		Other: func() *LogOther {
+			lo := NewLogOther()
+			lo.SetPublic("billing_source", "subscription")
+			return lo
+		}(),
 	}))
 	var log Log
 	require.NoError(t, LOG_DB.Where("user_id = ? AND type = ?", 40, LogTypeConsume).First(&log).Error)
