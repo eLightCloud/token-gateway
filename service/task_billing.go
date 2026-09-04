@@ -119,15 +119,36 @@ func appendTaskBillingContextInfo(other map[string]interface{}, bc *model.TaskBi
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
 func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
-	appendTaskBillingContextInfo(other, task.PrivateData.BillingContext)
+	if bc := task.PrivateData.BillingContext; bc != nil {
+		other["model_price"] = bc.ModelPrice
+		if bc.ModelRatio > 0 {
+			other["model_ratio"] = bc.ModelRatio
+		}
+		other["group_ratio"] = bc.GroupRatio
+		if priceData := taskBillingContextPriceData(bc); priceData != nil {
+			for k, v := range priceData.OtherRatios() {
+				other[k] = v
+			}
+		}
+		if snap := bc.TieredSnapshot; snap != nil {
+			other["billing_mode"] = "tiered_expr"
+			other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
+			other["matched_tier"] = snap.EstimatedTier
+			if len(snap.UsageFacts) > 0 {
+				other["usage_facts"] = snap.UsageFacts
+			}
+		}
+		// 本地扩展：组织折扣审计信息（发票对账依赖该字段）。
+		appendOrganizationDiscountBillingInfo(other, bc.GroupRatio, bc.Discount)
+	}
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = props.UpstreamModelName
 	}
+	appendTaskLogInfo(task, other)
 	return other
 }
-
 func taskBillingContextPriceData(bc *model.TaskBillingContext) *types.PriceData {
 	if bc == nil || len(bc.OtherRatios) == 0 {
 		return nil
@@ -199,7 +220,8 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 // reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
 // clamps 可选：若计算 actualQuota 时发生额度饱和，将其记入日志 admin_info（仅管理员可见）。
 func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamps ...*common.QuotaClamp) bool {
-	if actualQuota <= 0 {
+	// actualQuota == 0 表示零用量成功：全额退还预扣额度（仅拒绝负数，防止负计费）。
+	if actualQuota < 0 {
 		return true
 	}
 	preConsumedQuota := task.Quota

@@ -495,7 +495,7 @@ func TestRefundTaskQuota_FundingFailureKeepsPendingMarker(t *testing.T) {
 
 	assert.False(t, RefundTaskQuota(ctx, task, "subscription missing"))
 	assert.Equal(t, preConsumed, task.Quota)
-	assert.Equal(t, preConsumed, getTaskQuota(t, task.ID))
+	assert.EqualValues(t, preConsumed, getTaskQuota(t, task.ID))
 	assert.Equal(t, int64(0), countLogs(t))
 }
 
@@ -598,7 +598,7 @@ func TestRecalculateTaskQuotaByTokensUsesImmutableBillingSnapshot(t *testing.T) 
 	// 100 * 2 * 1.5 * 2 * 0.8 * 0.5 = 240. The model name has no
 	// runtime ratio configuration, proving that settlement used the snapshot.
 	assert.Equal(t, 240, task.Quota)
-	assert.Equal(t, int64(initialQuota-140), getUserQuota(t, userID))
+	assert.EqualValues(t, int64(initialQuota-140), getUserQuota(t, userID))
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeConsume, log.Type)
@@ -755,7 +755,7 @@ func TestCASGuardedRefund_Win(t *testing.T) {
 	// CAS wins: task in DB should now be FAILURE
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
-	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+	assert.Equal(t, model.TaskStatusFailure, reloaded.Status)
 	assert.Zero(t, reloaded.Quota)
 
 	// Refund should have happened
@@ -821,7 +821,7 @@ func TestCASGuardedSettle_Win(t *testing.T) {
 	// CAS wins: task should be SUCCESS
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
-	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
+	assert.Equal(t, model.TaskStatusSuccess, reloaded.Status)
 
 	// Settlement should refund the over-charge (5000 - 3000 = 2000 back to user)
 	assert.EqualValues(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
@@ -1008,8 +1008,8 @@ func TestMidjourneyRefundRestoresEveryAccountingElementOnBillingChannel(t *testi
 	billed, err := SettleMidjourneyTaskBilling(relayInfo, task, prepared)
 	require.NoError(t, err)
 	require.True(t, billed)
-	assert.Equal(t, initialUserQuota-chargedQuota, getUserQuota(t, userID))
-	assert.Equal(t, initialTokenQuota-chargedQuota, getTokenRemainQuota(t, tokenID))
+	assert.EqualValues(t, initialUserQuota-chargedQuota, getUserQuota(t, userID))
+	assert.EqualValues(t, initialTokenQuota-chargedQuota, getTokenRemainQuota(t, tokenID))
 	persisted := getMidjourneyTask(t, task.Id)
 	assert.Equal(t, chargedQuota, persisted.Quota)
 	assert.Equal(t, tokenID, persisted.TokenId)
@@ -1018,12 +1018,12 @@ func TestMidjourneyRefundRestoresEveryAccountingElementOnBillingChannel(t *testi
 	seedChargedAccounting(t, userID, billingChannelID, tokenID, chargedQuota, 1)
 
 	assert.True(t, RefundMidjourneyQuota(ctx, task, "构图失败"))
-	assert.Equal(t, initialUserQuota, getUserQuota(t, userID))
-	assert.Equal(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
+	assert.EqualValues(t, initialUserQuota, getUserQuota(t, userID))
+	assert.EqualValues(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
 	assert.Zero(t, getTokenUsedQuota(t, tokenID))
 	usedQuota, requestCount := getUserUsageAccounting(t, userID)
 	assert.Zero(t, usedQuota)
-	assert.Equal(t, 1, requestCount)
+	assert.EqualValues(t, 1, requestCount)
 	assert.Zero(t, getChannelUsedQuota(t, billingChannelID))
 	assert.Zero(t, getChannelUsedQuota(t, executionChannelID))
 
@@ -1090,12 +1090,12 @@ func TestRefundMidjourneyQuotaUsesLegacyChannelFallbackWithoutTokenAdjustment(t 
 
 	assert.True(t, RefundMidjourneyQuota(ctx, task, "legacy failure"))
 
-	assert.Equal(t, walletAfterCharge+chargedQuota, getUserQuota(t, userID))
-	assert.Equal(t, tokenQuota, getTokenRemainQuota(t, tokenID))
+	assert.EqualValues(t, walletAfterCharge+chargedQuota, getUserQuota(t, userID))
+	assert.EqualValues(t, tokenQuota, getTokenRemainQuota(t, tokenID))
 	assert.Zero(t, getTokenUsedQuota(t, tokenID))
 	usedQuota, requestCount := getUserUsageAccounting(t, userID)
 	assert.Zero(t, usedQuota)
-	assert.Equal(t, 1, requestCount)
+	assert.EqualValues(t, 1, requestCount)
 	assert.Zero(t, getChannelUsedQuota(t, channelID))
 	log := getLastLog(t)
 	require.NotNil(t, log)
@@ -1143,8 +1143,8 @@ func TestSettleMidjourneyTaskBillingFundingFailureClearsMarkers(t *testing.T) {
 
 	require.Error(t, err)
 	assert.False(t, billed)
-	assert.Equal(t, initialUserQuota, getUserQuota(t, userID))
-	assert.Equal(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
+	assert.EqualValues(t, initialUserQuota, getUserQuota(t, userID))
+	assert.EqualValues(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
 	persisted := getMidjourneyTask(t, task.Id)
 	assert.Zero(t, persisted.Quota)
 	assert.Zero(t, persisted.TokenId)
@@ -1183,8 +1183,8 @@ func TestSettleMidjourneyTaskBillingRequiresPersistedTask(t *testing.T) {
 
 	require.Error(t, err)
 	assert.False(t, billed)
-	assert.Equal(t, initialUserQuota, getUserQuota(t, userID))
-	assert.Equal(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
+	assert.EqualValues(t, initialUserQuota, getUserQuota(t, userID))
+	assert.EqualValues(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
 }
 
 func TestSettleMidjourneyTaskBillingTokenFailureKeepsFundingRefundable(t *testing.T) {
@@ -1228,8 +1228,8 @@ func TestSettleMidjourneyTaskBillingTokenFailureKeepsFundingRefundable(t *testin
 
 	require.Error(t, err)
 	require.True(t, billed)
-	assert.Equal(t, initialUserQuota-chargedQuota, getUserQuota(t, userID))
-	assert.Equal(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
+	assert.EqualValues(t, initialUserQuota-chargedQuota, getUserQuota(t, userID))
+	assert.EqualValues(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
 	assert.Zero(t, getTokenUsedQuota(t, tokenID))
 	persisted := getMidjourneyTask(t, task.Id)
 	assert.Equal(t, chargedQuota, persisted.Quota)
@@ -1238,11 +1238,11 @@ func TestSettleMidjourneyTaskBillingTokenFailureKeepsFundingRefundable(t *testin
 
 	seedChargedAccounting(t, userID, channelID, 0, chargedQuota, 1)
 	assert.True(t, RefundMidjourneyQuota(ctx, task, "token settlement failed"))
-	assert.Equal(t, initialUserQuota, getUserQuota(t, userID))
-	assert.Equal(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
+	assert.EqualValues(t, initialUserQuota, getUserQuota(t, userID))
+	assert.EqualValues(t, initialTokenQuota, getTokenRemainQuota(t, tokenID))
 	usedQuota, requestCount := getUserUsageAccounting(t, userID)
 	assert.Zero(t, usedQuota)
-	assert.Equal(t, 1, requestCount)
+	assert.EqualValues(t, 1, requestCount)
 	assert.Zero(t, getChannelUsedQuota(t, channelID))
 	log := getLastLog(t)
 	require.NotNil(t, log)
