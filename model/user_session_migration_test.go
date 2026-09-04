@@ -72,7 +72,7 @@ func TestUserSessionPreviousRefreshHashSchemaUsesNullableVarchar(t *testing.T) {
 	require.NoError(t, statement.Parse(&UserSession{}))
 	field := statement.Schema.LookUpField("PreviousRefreshHash")
 	require.NotNil(t, field)
-	assert.Equal(t, "varchar(64)", field.TagSettings["TYPE"])
+	assert.EqualValues(t, "varchar(64)", field.TagSettings["TYPE"])
 	assert.False(t, field.NotNull)
 }
 
@@ -94,7 +94,7 @@ func testPreviousRefreshHashMigration(t *testing.T, db *gorm.DB, recorder *migra
 		Select("sid", "previous_refresh_hash").
 		Where("sid = ?", "legacy-session").
 		First(&session).Error)
-	assert.Equal(t, digest, session.PreviousRefreshHash, "legacy CHAR padding must be normalized on database reads")
+	assert.EqualValues(t, digest, session.PreviousRefreshHash, "legacy CHAR padding must be normalized on database reads")
 
 	columnTypes, err := db.Table(tableName).Migrator().ColumnTypes(&previousRefreshHashMigrationTarget{})
 	require.NoError(t, err)

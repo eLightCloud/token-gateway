@@ -23,8 +23,8 @@ func TestChannelInfoScanSupportsDatabaseJSONTypes(t *testing.T) {
 			var channelInfo ChannelInfo
 			require.NoError(t, channelInfo.Scan(tt.value))
 			assert.True(t, channelInfo.IsMultiKey)
-			assert.Equal(t, 2, channelInfo.MultiKeySize)
-			assert.Equal(t, "random", string(channelInfo.MultiKeyMode))
+			assert.EqualValues(t, 2, channelInfo.MultiKeySize)
+			assert.EqualValues(t, "random", string(channelInfo.MultiKeyMode))
 		})
 	}
 }

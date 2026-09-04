@@ -56,7 +56,7 @@ func testTokenKeyMigrationNonPostgreSQL(t *testing.T, db *gorm.DB) {
 
 	var preserved Token
 	require.NoError(t, tableDB.Where(&Token{Key: "preserved-key"}).First(&preserved).Error)
-	assert.Equal(t, 1, preserved.UserId)
+	assert.EqualValues(t, 1, preserved.UserId)
 	expectedIndex := db.NamingStrategy.IndexName(tableName, "key")
 	assert.True(t, db.Migrator().HasIndex(tableName, expectedIndex))
 }
@@ -266,8 +266,8 @@ func TestMigrateTokenKeyUniquenessPostgreSQL(t *testing.T) {
 
 			var preserved Token
 			require.NoError(t, tx.First(&preserved, original.Id).Error)
-			assert.Equal(t, original.Key, preserved.Key)
-			assert.Equal(t, original.Name, preserved.Name)
+			assert.EqualValues(t, original.Key, preserved.Key)
+			assert.EqualValues(t, original.Name, preserved.Name)
 
 			constraints, err := inspectTokenKeyUniqueConstraints(tx, "tokens")
 			require.NoError(t, err)

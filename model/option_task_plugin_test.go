@@ -37,7 +37,7 @@ export function parseTaskResult() { return {}; }
 	require.NoError(t, updateOptionMap("TaskPluginEnabled", "false"))
 
 	assert.False(t, constant.TaskPluginEnabled)
-	assert.Equal(t, "false", common.OptionMap["TaskPluginEnabled"])
+	assert.EqualValues(t, "false", common.OptionMap["TaskPluginEnabled"])
 	_, ok = jsplugin.DefaultRegistry.Get(key)
 	assert.False(t, ok)
 
@@ -59,7 +59,7 @@ func TestTaskPluginOverrideEnabledOptionUpdatesRuntimeSwitch(t *testing.T) {
 	require.NoError(t, updateOptionMap("TaskPluginOverrideEnabled", "false"))
 
 	assert.False(t, constant.TaskPluginOverrideEnabled)
-	assert.Equal(t, "false", common.OptionMap["TaskPluginOverrideEnabled"])
+	assert.EqualValues(t, "false", common.OptionMap["TaskPluginOverrideEnabled"])
 }
 
 func TestTaskPluginDisabledFactoryKeysOptionUpdatesRegistry(t *testing.T) {
@@ -85,8 +85,8 @@ export function parseTaskResult() { return {}; }
 
 	require.NoError(t, updateOptionMap(setting.TaskPluginDisabledFactoryKeysKey, `["option-factory-off"]`))
 
-	assert.Equal(t, `["option-factory-off"]`, common.OptionMap[setting.TaskPluginDisabledFactoryKeysKey])
+	assert.EqualValues(t, `["option-factory-off"]`, common.OptionMap[setting.TaskPluginDisabledFactoryKeysKey])
 	_, ok = jsplugin.DefaultRegistry.Get(key)
 	assert.False(t, ok)
-	assert.Equal(t, []string{key}, jsplugin.DefaultRegistry.Snapshot().DisabledFactory)
+	assert.EqualValues(t, []string{key}, jsplugin.DefaultRegistry.Snapshot().DisabledFactory)
 }

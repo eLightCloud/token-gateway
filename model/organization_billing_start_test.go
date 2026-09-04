@@ -10,10 +10,10 @@ import (
 // BillingStartAt == 0（功能上线前的存量记录）必须回退到 JoinedAt，保证未回填时账单总额不变。
 func TestEffectiveBillingStartFallsBackToJoinedAt(t *testing.T) {
 	member := OrganizationMember{JoinedAt: 1000, BillingStartAt: 0}
-	assert.Equal(t, int64(1000), effectiveBillingStart(member))
+	assert.EqualValues(t, int64(1000), effectiveBillingStart(member))
 
 	member.BillingStartAt = 800
-	assert.Equal(t, int64(800), effectiveBillingStart(member))
+	assert.EqualValues(t, int64(800), effectiveBillingStart(member))
 }
 
 // TestIntervalsOverlap 锁定同组织窗口不相交校验的区间语义，防止同一条日志被两段

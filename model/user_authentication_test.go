@@ -125,7 +125,7 @@ func TestHardDeleteUserPublishesTombstoneAndPurgesAuthenticationData(t *testing.
 	assert.False(t, server.Exists(getUserAuthFenceKey(user.Id)))
 	committed, err := common.RDB.Get(t.Context(), getUserAuthVersionKey(user.Id)).Result()
 	require.NoError(t, err)
-	assert.Equal(t, "2", committed)
+	assert.EqualValues(t, "2", committed)
 	assert.False(t, server.Exists(getUserCacheKey(user.Id)))
 }
 
@@ -155,7 +155,7 @@ func TestIncrementFailedAttemptsCountsConcurrentFailures(t *testing.T) {
 
 	var reloaded TwoFA
 	require.NoError(t, DB.First(&reloaded, twoFA.Id).Error)
-	assert.Equal(t, attempts, reloaded.FailedAttempts)
+	assert.EqualValues(t, attempts, reloaded.FailedAttempts)
 }
 
 func TestValidateBackupCodeCanOnlySucceedOnce(t *testing.T) {
@@ -193,7 +193,7 @@ func TestValidateBackupCodeCanOnlySucceedOnce(t *testing.T) {
 			wins++
 		}
 	}
-	assert.Equal(t, 1, wins)
+	assert.EqualValues(t, 1, wins)
 
 	remaining, err := GetUnusedBackupCodeCount(123)
 	require.NoError(t, err)
@@ -288,12 +288,12 @@ func TestUpdatePasskeyAssertionStateCannotRewriteRegistrationIdentity(t *testing
 
 	var updated PasskeyCredential
 	require.NoError(t, DB.First(&updated, stored.ID).Error)
-	assert.Equal(t, stored.CredentialID, updated.CredentialID)
-	assert.Equal(t, stored.PublicKey, updated.PublicKey)
-	assert.Equal(t, stored.AttestationType, updated.AttestationType)
-	assert.Equal(t, stored.AAGUID, updated.AAGUID)
-	assert.Equal(t, stored.Transports, updated.Transports)
-	assert.Equal(t, stored.Attachment, updated.Attachment)
+	assert.EqualValues(t, stored.CredentialID, updated.CredentialID)
+	assert.EqualValues(t, stored.PublicKey, updated.PublicKey)
+	assert.EqualValues(t, stored.AttestationType, updated.AttestationType)
+	assert.EqualValues(t, stored.AAGUID, updated.AAGUID)
+	assert.EqualValues(t, stored.Transports, updated.Transports)
+	assert.EqualValues(t, stored.Attachment, updated.Attachment)
 	assert.EqualValues(t, 8, updated.SignCount)
 	assert.True(t, updated.CloneWarning)
 	assert.True(t, updated.UserPresent)
@@ -301,7 +301,7 @@ func TestUpdatePasskeyAssertionStateCannotRewriteRegistrationIdentity(t *testing
 	assert.True(t, updated.BackupEligible)
 	assert.True(t, updated.BackupState)
 	require.NotNil(t, updated.LastUsedAt)
-	assert.Equal(t, usedAt.Unix(), updated.LastUsedAt.Unix())
+	assert.EqualValues(t, usedAt.Unix(), updated.LastUsedAt.Unix())
 
 	validated.ID = []byte("another-credential")
 	assert.ErrorIs(t, UpdatePasskeyAssertionState(user.Id, validated, usedAt), ErrPasskeyNotFound)
@@ -311,5 +311,5 @@ func assertUserAuthVersion(t *testing.T, userID int, expected int64) {
 	t.Helper()
 	var version int64
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", userID).Select("auth_version").Scan(&version).Error)
-	assert.Equal(t, expected, version)
+	assert.EqualValues(t, expected, version)
 }

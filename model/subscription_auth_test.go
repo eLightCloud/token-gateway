@@ -59,30 +59,30 @@ func TestSubscriptionGroupTransitionsPreserveAuthVersionAndSessions(t *testing.T
 
 	var updated User
 	require.NoError(t, DB.First(&updated, user.Id).Error)
-	assert.Equal(t, "pro", updated.Group)
+	assert.EqualValues(t, "pro", updated.Group)
 	assert.EqualValues(t, 1, updated.AuthVersion)
 	var session UserSession
 	require.NoError(t, DB.First(&session, "sid = ?", "subscription-auth-session").Error)
-	assert.Equal(t, UserSessionStatusActive, session.Status)
+	assert.EqualValues(t, UserSessionStatusActive, session.Status)
 	cached, err := GetUserCache(user.Id)
 	require.NoError(t, err)
-	assert.Equal(t, "pro", cached.Group)
+	assert.EqualValues(t, "pro", cached.Group)
 	assert.EqualValues(t, 1, cached.AuthVersion)
 
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
 		target, err := downgradeUserGroupForSubscriptionTx(tx, subscription, now+1)
-		assert.Equal(t, "default", target)
+		assert.EqualValues(t, "default", target)
 		return err
 	}))
 	require.NoError(t, RefreshUserGroupCache(user.Id))
 	require.NoError(t, DB.First(&updated, user.Id).Error)
-	assert.Equal(t, "default", updated.Group)
+	assert.EqualValues(t, "default", updated.Group)
 	assert.EqualValues(t, 1, updated.AuthVersion)
 	require.NoError(t, DB.First(&session, "sid = ?", "subscription-auth-session").Error)
-	assert.Equal(t, UserSessionStatusActive, session.Status)
+	assert.EqualValues(t, UserSessionStatusActive, session.Status)
 	cached, err = GetUserCache(user.Id)
 	require.NoError(t, err)
-	assert.Equal(t, "default", cached.Group)
+	assert.EqualValues(t, "default", cached.Group)
 }
 
 func TestSubscriptionGroupCacheRefreshFailureDoesNotChangeCommittedResult(t *testing.T) {
@@ -142,9 +142,9 @@ func TestSubscriptionGroupCacheRefreshFailureDoesNotChangeCommittedResult(t *tes
 
 	var updated User
 	require.NoError(t, DB.First(&updated, user.Id).Error)
-	assert.Equal(t, "pro", updated.Group)
+	assert.EqualValues(t, "pro", updated.Group)
 	assert.EqualValues(t, 1, updated.AuthVersion)
 	var subscription UserSubscription
 	require.NoError(t, DB.Where("user_id = ?", user.Id).First(&subscription).Error)
-	assert.Equal(t, "active", subscription.Status)
+	assert.EqualValues(t, "active", subscription.Status)
 }

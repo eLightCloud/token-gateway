@@ -64,14 +64,14 @@ func TestParseOrganizationDiscountRatio(t *testing.T) {
 			continue
 		}
 		require.NoError(t, err, "input %q", tc.input)
-		assert.Equal(t, tc.want, got, "input %q", tc.input)
+		assert.EqualValues(t, tc.want, got, "input %q", tc.input)
 	}
 }
 
 func TestFormatOrganizationDiscountRatio(t *testing.T) {
-	assert.Equal(t, "0.85", FormatOrganizationDiscountRatio(850_000))
-	assert.Equal(t, "1", FormatOrganizationDiscountRatio(1_000_000))
-	assert.Equal(t, "0.123456", FormatOrganizationDiscountRatio(123_456))
+	assert.EqualValues(t, "0.85", FormatOrganizationDiscountRatio(850_000))
+	assert.EqualValues(t, "1", FormatOrganizationDiscountRatio(1_000_000))
+	assert.EqualValues(t, "0.123456", FormatOrganizationDiscountRatio(123_456))
 }
 
 func TestValidateOrganizationDiscountRatioScaled(t *testing.T) {
@@ -93,13 +93,13 @@ func TestMarshalOrganizationChannelDiscountsNormalizesOne(t *testing.T) {
 
 	empty, err := MarshalOrganizationChannelDiscounts(map[int]int{})
 	require.NoError(t, err)
-	assert.Equal(t, "{}", empty)
+	assert.EqualValues(t, "{}", empty)
 }
 
 func TestUnmarshalOrganizationChannelDiscountsFailsClosedOnCorruption(t *testing.T) {
 	discounts, err := UnmarshalOrganizationChannelDiscounts(`{"12":800000,"35":9500000}`)
 	require.NoError(t, err)
-	assert.Equal(t, map[int]int{12: 800_000, 35: 9_500_000}, discounts)
+	assert.EqualValues(t, map[int]int{12: 800_000, 35: 9_500_000}, discounts)
 
 	_, err = UnmarshalOrganizationChannelDiscounts(`{not-json`)
 	require.ErrorIs(t, err, ErrOrganizationDiscountInvalidJSON)
@@ -182,17 +182,17 @@ func TestSaveOrganizationDiscountNormalizesAndClears(t *testing.T) {
 	current, err := GetCurrentOrganizationDiscountSnapshot(601)
 	require.NoError(t, err)
 	require.NotNil(t, current)
-	assert.Equal(t, first.Id, current.Id)
+	assert.EqualValues(t, first.Id, current.Id)
 	discounts, err := UnmarshalOrganizationChannelDiscounts(current.ChannelDiscounts)
 	require.NoError(t, err)
-	assert.Equal(t, map[int]int{900: 800_000}, discounts)
+	assert.EqualValues(t, map[int]int{900: 800_000}, discounts)
 
 	// 空集合清除全部组织折扣：新快照仍追加，当前指针指向空配置
 	cleared := saveDiscounts(t, 601, 1, first.Id)
 	current, err = GetCurrentOrganizationDiscountSnapshot(601)
 	require.NoError(t, err)
 	require.NotNil(t, current)
-	assert.Equal(t, cleared.Id, current.Id)
+	assert.EqualValues(t, cleared.Id, current.Id)
 	discounts, err = UnmarshalOrganizationChannelDiscounts(current.ChannelDiscounts)
 	require.NoError(t, err)
 	assert.Empty(t, discounts)
@@ -221,14 +221,14 @@ func TestSaveOrganizationDiscountOptimisticLockConflictRollsBack(t *testing.T) {
 	// 冲突事务不得残留历史快照，也不得覆盖已提交数据
 	var count int64
 	require.NoError(t, DB.Model(&OrganizationDiscountSnapshot{}).Where("organization_id = ?", 602).Count(&count).Error)
-	assert.Equal(t, int64(2), count)
+	assert.EqualValues(t, int64(2), count)
 	current, err := GetCurrentOrganizationDiscountSnapshot(602)
 	require.NoError(t, err)
 	require.NotNil(t, current)
-	assert.Equal(t, second.Id, current.Id)
+	assert.EqualValues(t, second.Id, current.Id)
 	discounts, err := UnmarshalOrganizationChannelDiscounts(current.ChannelDiscounts)
 	require.NoError(t, err)
-	assert.Equal(t, map[int]int{900: 900_000}, discounts)
+	assert.EqualValues(t, map[int]int{900: 900_000}, discounts)
 }
 
 func TestSaveOrganizationDiscountSerializesConcurrentSaves(t *testing.T) {
@@ -266,12 +266,12 @@ func TestSaveOrganizationDiscountSerializesConcurrentSaves(t *testing.T) {
 			conflicts++
 		}
 	}
-	assert.Equal(t, workers-1, conflicts, "only one concurrent save may win")
+	assert.EqualValues(t, workers-1, conflicts, "only one concurrent save may win")
 
 	// 成功者数量 + 首份快照 = 全部历史，失败者不残留
 	var count int64
 	require.NoError(t, DB.Model(&OrganizationDiscountSnapshot{}).Where("organization_id = ?", 603).Count(&count).Error)
-	assert.Equal(t, int64(2), count)
+	assert.EqualValues(t, int64(2), count)
 }
 
 func TestGetCurrentOrganizationDiscountSnapshotForUser(t *testing.T) {
@@ -295,7 +295,7 @@ func TestGetCurrentOrganizationDiscountSnapshotForUser(t *testing.T) {
 	snapshot, err = GetCurrentOrganizationDiscountSnapshotForUser(1)
 	require.NoError(t, err)
 	require.NotNil(t, snapshot)
-	assert.Equal(t, created.Id, snapshot.Id)
+	assert.EqualValues(t, created.Id, snapshot.Id)
 
 	// 无组织用户 → nil, nil
 	snapshot, err = GetCurrentOrganizationDiscountSnapshotForUser(404)
@@ -321,34 +321,34 @@ func TestGetOrganizationDiscountHistoryDerivesChangesAcrossPages(t *testing.T) {
 	pageOne, err := GetOrganizationDiscountHistory(605, 0, 2)
 	require.NoError(t, err)
 	require.Len(t, pageOne.Items, 2)
-	assert.Equal(t, int64(3), pageOne.Total)
+	assert.EqualValues(t, int64(3), pageOne.Total)
 
 	thirdItem := pageOne.Items[0]
-	assert.Equal(t, third.Id, thirdItem.Snapshot.Id)
+	assert.EqualValues(t, third.Id, thirdItem.Snapshot.Id)
 	// third 相对 second：仅渠道 900 被移除（second 有 900+901，third 只有 901）
 	require.Len(t, thirdItem.Changes, 1)
-	assert.Equal(t, 900, thirdItem.Changes[0].ChannelId)
-	assert.Equal(t, 800_000+100_000, thirdItem.Changes[0].OldScaled)
+	assert.EqualValues(t, 900, thirdItem.Changes[0].ChannelId)
+	assert.EqualValues(t, 800_000+100_000, thirdItem.Changes[0].OldScaled)
 	assert.Zero(t, thirdItem.Changes[0].NewScaled)
 
 	secondItem := pageOne.Items[1]
-	assert.Equal(t, second.Id, secondItem.Snapshot.Id)
+	assert.EqualValues(t, second.Id, secondItem.Snapshot.Id)
 	require.Len(t, secondItem.Changes, 2)
-	assert.Equal(t, 900, secondItem.Changes[0].ChannelId)
-	assert.Equal(t, 800_000, secondItem.Changes[0].OldScaled)
-	assert.Equal(t, 900_000, secondItem.Changes[0].NewScaled)
-	assert.Equal(t, 901, secondItem.Changes[1].ChannelId)
+	assert.EqualValues(t, 900, secondItem.Changes[0].ChannelId)
+	assert.EqualValues(t, 800_000, secondItem.Changes[0].OldScaled)
+	assert.EqualValues(t, 900_000, secondItem.Changes[0].NewScaled)
+	assert.EqualValues(t, 901, secondItem.Changes[1].ChannelId)
 	assert.Zero(t, secondItem.Changes[1].OldScaled)
-	assert.Equal(t, 950_000, secondItem.Changes[1].NewScaled)
+	assert.EqualValues(t, 950_000, secondItem.Changes[1].NewScaled)
 
 	// 第二页：组织第一份快照，只有它以空配置作为变更前状态
 	pageTwo, err := GetOrganizationDiscountHistory(605, 2, 2)
 	require.NoError(t, err)
 	require.Len(t, pageTwo.Items, 1)
 	firstItem := pageTwo.Items[0]
-	assert.Equal(t, first.Id, firstItem.Snapshot.Id)
+	assert.EqualValues(t, first.Id, firstItem.Snapshot.Id)
 	require.Len(t, firstItem.Changes, 1)
-	assert.Equal(t, 900, firstItem.Changes[0].ChannelId)
+	assert.EqualValues(t, 900, firstItem.Changes[0].ChannelId)
 	assert.Zero(t, firstItem.Changes[0].OldScaled, "first snapshot prior state is empty config")
-	assert.Equal(t, 800_000, firstItem.Changes[0].NewScaled)
+	assert.EqualValues(t, 800_000, firstItem.Changes[0].NewScaled)
 }

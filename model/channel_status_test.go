@@ -44,11 +44,11 @@ func TestUpdateChannelStatusPersistsMultiKeyState(t *testing.T) {
 
 	var stored Channel
 	require.NoError(t, DB.First(&stored, channel.Id).Error)
-	assert.Equal(t, common.ChannelStatusEnabled, stored.Status)
-	assert.Equal(t, common.ChannelStatusAutoDisabled, stored.ChannelInfo.MultiKeyStatusList[0])
-	assert.Equal(t, "provider rejected key", stored.ChannelInfo.MultiKeyDisabledReason[0])
+	assert.EqualValues(t, common.ChannelStatusEnabled, stored.Status)
+	assert.EqualValues(t, common.ChannelStatusAutoDisabled, stored.ChannelInfo.MultiKeyStatusList[0])
+	assert.EqualValues(t, "provider rejected key", stored.ChannelInfo.MultiKeyDisabledReason[0])
 	assert.NotZero(t, stored.ChannelInfo.MultiKeyDisabledTime[0])
-	assert.Equal(t, 1, stored.ChannelInfo.MultiKeyPollingIndex)
+	assert.EqualValues(t, 1, stored.ChannelInfo.MultiKeyPollingIndex)
 }
 
 func TestSaveStatusStateFromSingleKeySnapshotPreservesUnownedColumns(t *testing.T) {
@@ -90,13 +90,13 @@ func TestSaveStatusStateFromSingleKeySnapshotPreservesUnownedColumns(t *testing.
 
 	var stored Channel
 	require.NoError(t, DB.First(&stored, channel.Id).Error)
-	assert.Equal(t, common.ChannelStatusManuallyDisabled, stored.Status)
-	assert.Equal(t, "rotated-key", stored.Key)
-	assert.Equal(t, int64(350), stored.UsedQuota)
-	assert.Equal(t, "concurrent-model", stored.Models)
-	assert.Equal(t, concurrentChannelInfo, stored.ChannelInfo)
+	assert.EqualValues(t, common.ChannelStatusManuallyDisabled, stored.Status)
+	assert.EqualValues(t, "rotated-key", stored.Key)
+	assert.EqualValues(t, int64(350), stored.UsedQuota)
+	assert.EqualValues(t, "concurrent-model", stored.Models)
+	assert.EqualValues(t, concurrentChannelInfo, stored.ChannelInfo)
 
 	otherInfo := stored.GetOtherInfo()
-	assert.Equal(t, "manual operation", otherInfo["status_reason"])
-	assert.Equal(t, float64(1234), otherInfo["status_time"])
+	assert.EqualValues(t, "manual operation", otherInfo["status_reason"])
+	assert.EqualValues(t, float64(1234), otherInfo["status_time"])
 }

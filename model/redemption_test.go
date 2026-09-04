@@ -90,12 +90,12 @@ func TestSearchRedemptionsFiltersAndPaginates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rows, total, err := SearchRedemptions(tt.keyword, tt.status, tt.startIdx, tt.num)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantTotal, total)
+			assert.EqualValues(t, tt.wantTotal, total)
 			gotIds := make([]int, 0, len(rows))
 			for _, row := range rows {
 				gotIds = append(gotIds, row.Id)
 			}
-			assert.Equal(t, tt.wantIds, gotIds)
+			assert.EqualValues(t, tt.wantIds, gotIds)
 		})
 	}
 }
@@ -130,22 +130,22 @@ func TestRedeemCreditsQuotaExactlyOnce(t *testing.T) {
 
 	quota, err := Redeem(key, userId)
 	require.NoError(t, err)
-	assert.Equal(t, 500, quota)
+	assert.EqualValues(t, 500, quota)
 
 	var user User
 	require.NoError(t, DB.First(&user, "id = ?", userId).Error)
-	assert.Equal(t, 500, user.Quota)
+	assert.EqualValues(t, 500, user.Quota)
 
 	var redemption Redemption
 	require.NoError(t, DB.First(&redemption, "name = ?", "redeem-test").Error)
-	assert.Equal(t, common.RedemptionCodeStatusUsed, redemption.Status)
-	assert.Equal(t, userId, redemption.UsedUserId)
+	assert.EqualValues(t, common.RedemptionCodeStatusUsed, redemption.Status)
+	assert.EqualValues(t, userId, redemption.UsedUserId)
 
 	// Redeeming the same code again must fail and must not credit quota.
 	_, err = Redeem(key, userId)
 	require.Error(t, err)
 	require.NoError(t, DB.First(&user, "id = ?", userId).Error)
-	assert.Equal(t, 500, user.Quota)
+	assert.EqualValues(t, 500, user.Quota)
 }
 
 func TestRedeemRejectsWalletOverflow(t *testing.T) {
@@ -157,11 +157,11 @@ func TestRedeemRejectsWalletOverflow(t *testing.T) {
 
 	var user User
 	require.NoError(t, DB.First(&user, "id = ?", userId).Error)
-	assert.Equal(t, common.MaxWalletQuota-10, user.Quota)
+	assert.EqualValues(t, common.MaxWalletQuota-10, user.Quota)
 
 	var redemption Redemption
 	require.NoError(t, DB.First(&redemption, "key = ?", key).Error)
-	assert.Equal(t, common.RedemptionCodeStatusEnabled, redemption.Status)
+	assert.EqualValues(t, common.RedemptionCodeStatusEnabled, redemption.Status)
 }
 
 func TestRedemptionQuotaRejectsWalletOverflow(t *testing.T) {
@@ -202,9 +202,9 @@ func TestRedeemConcurrentSingleSuccess(t *testing.T) {
 			successCount++
 		}
 	}
-	assert.Equal(t, 1, successCount, "exactly one concurrent redeem should succeed")
+	assert.EqualValues(t, 1, successCount, "exactly one concurrent redeem should succeed")
 
 	var user User
 	require.NoError(t, DB.First(&user, "id = ?", userId).Error)
-	assert.Equal(t, 300, user.Quota, "quota must be credited exactly once")
+	assert.EqualValues(t, 300, user.Quota, "quota must be credited exactly once")
 }

@@ -140,7 +140,7 @@ func TestGetTaskForProtocolObservationScopesOwnerAndPlatform(t *testing.T) {
 	got, exists, err := GetTaskForProtocolObservation(context.Background(), 7, "plugin-a", task.TaskID)
 	require.NoError(t, err)
 	require.True(t, exists)
-	assert.Equal(t, task.ID, got.ID)
+	assert.EqualValues(t, task.ID, got.ID)
 
 	for _, query := range []struct {
 		userID   int
@@ -216,12 +216,12 @@ func TestSnapshot_Roundtrip(t *testing.T) {
 		Data: json.RawMessage(`{"model":"test-model"}`),
 	}
 	snap := task.Snapshot()
-	assert.Equal(t, task.Status, snap.Status)
-	assert.Equal(t, task.Progress, snap.Progress)
-	assert.Equal(t, task.StartTime, snap.StartTime)
-	assert.Equal(t, task.FinishTime, snap.FinishTime)
-	assert.Equal(t, task.FailReason, snap.FailReason)
-	assert.Equal(t, task.PrivateData.ResultURL, snap.ResultURL)
+	assert.EqualValues(t, task.Status, snap.Status)
+	assert.EqualValues(t, task.Progress, snap.Progress)
+	assert.EqualValues(t, task.StartTime, snap.StartTime)
+	assert.EqualValues(t, task.FinishTime, snap.FinishTime)
+	assert.EqualValues(t, task.FailReason, snap.FailReason)
+	assert.EqualValues(t, task.PrivateData.ResultURL, snap.ResultURL)
 	assert.JSONEq(t, string(task.Data), string(snap.Data))
 }
 
@@ -249,7 +249,7 @@ func TestUpdateWithStatus_Win(t *testing.T) {
 	var reloaded Task
 	require.NoError(t, DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, TaskStatusSuccess, reloaded.Status)
-	assert.Equal(t, "100%", reloaded.Progress)
+	assert.EqualValues(t, "100%", reloaded.Progress)
 }
 
 func TestUpdateWithStatus_Lose(t *testing.T) {
@@ -316,5 +316,5 @@ func TestUpdateWithStatus_ConcurrentWinner(t *testing.T) {
 			winCount++
 		}
 	}
-	assert.Equal(t, 1, winCount, "exactly one goroutine should win the CAS")
+	assert.EqualValues(t, 1, winCount, "exactly one goroutine should win the CAS")
 }

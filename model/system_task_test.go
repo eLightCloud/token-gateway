@@ -42,16 +42,16 @@ func TestSystemTaskCreateAndActiveLifecycle(t *testing.T) {
 	task, err := CreateSystemTask(SystemTaskTypeLogCleanup, payload, state)
 	require.NoError(t, err)
 	require.NotNil(t, task.ActiveKey)
-	assert.Equal(t, SystemTaskTypeLogCleanup, *task.ActiveKey)
+	assert.EqualValues(t, SystemTaskTypeLogCleanup, *task.ActiveKey)
 
 	var decodedPayload testSystemTaskPayload
 	require.NoError(t, task.DecodePayload(&decodedPayload))
-	assert.Equal(t, payload, decodedPayload)
+	assert.EqualValues(t, payload, decodedPayload)
 
 	activeTask, err := GetActiveSystemTask(SystemTaskTypeLogCleanup)
 	require.NoError(t, err)
 	require.NotNil(t, activeTask)
-	assert.Equal(t, task.TaskID, activeTask.TaskID)
+	assert.EqualValues(t, task.TaskID, activeTask.TaskID)
 
 	runnerID := "runner-a"
 	claimedTask, claimed, err := ClaimSystemTask(task.ID, SystemTaskTypeLogCleanup, runnerID, common.GetTimestamp()+60)
@@ -86,7 +86,7 @@ func TestSystemTaskActiveKeyPreventsDuplicateActiveRun(t *testing.T) {
 	activeTask, err := GetActiveSystemTask(SystemTaskTypeLogCleanup)
 	require.NoError(t, err)
 	require.NotNil(t, activeTask)
-	assert.Equal(t, task.TaskID, activeTask.TaskID)
+	assert.EqualValues(t, task.TaskID, activeTask.TaskID)
 }
 
 func TestSystemTaskLockPreventsConcurrentClaim(t *testing.T) {
@@ -105,12 +105,12 @@ func TestSystemTaskLockPreventsConcurrentClaim(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, claimed)
 
-	assert.Equal(t, "runner-a", claimedTask.LockedBy)
+	assert.EqualValues(t, "runner-a", claimedTask.LockedBy)
 
 	reloadedSecond, err := GetSystemTaskByTaskID(secondTask.TaskID)
 	require.NoError(t, err)
 	require.NotNil(t, reloadedSecond)
-	assert.Equal(t, SystemTaskStatusPending, reloadedSecond.Status)
+	assert.EqualValues(t, SystemTaskStatusPending, reloadedSecond.Status)
 }
 
 func TestExpiredSystemTaskLockFailsOldRunAndClaimsLegacyPendingRun(t *testing.T) {
@@ -130,14 +130,14 @@ func TestExpiredSystemTaskLockFailsOldRunAndClaimsLegacyPendingRun(t *testing.T)
 	claimedTask, claimed, err := ClaimSystemTask(second.ID, SystemTaskTypeLogCleanup, "runner-b", common.GetTimestamp()+60)
 	require.NoError(t, err)
 	require.True(t, claimed)
-	assert.Equal(t, second.TaskID, claimedTask.TaskID)
-	assert.Equal(t, "runner-b", claimedTask.LockedBy)
+	assert.EqualValues(t, second.TaskID, claimedTask.TaskID)
+	assert.EqualValues(t, "runner-b", claimedTask.LockedBy)
 
 	reloadedFirst, err := GetSystemTaskByTaskID(first.TaskID)
 	require.NoError(t, err)
 	require.NotNil(t, reloadedFirst)
-	assert.Equal(t, SystemTaskStatusFailed, reloadedFirst.Status)
-	assert.Equal(t, "task lease expired", reloadedFirst.Error)
+	assert.EqualValues(t, SystemTaskStatusFailed, reloadedFirst.Status)
+	assert.EqualValues(t, "task lease expired", reloadedFirst.Error)
 	assert.Nil(t, reloadedFirst.ActiveKey)
 }
 
@@ -159,13 +159,13 @@ func TestExpireStaleSystemTaskLockFailsOldRunAndAllowsNewRun(t *testing.T) {
 	reloadedFirst, err := GetSystemTaskByTaskID(first.TaskID)
 	require.NoError(t, err)
 	require.NotNil(t, reloadedFirst)
-	assert.Equal(t, SystemTaskStatusFailed, reloadedFirst.Status)
-	assert.Equal(t, "task lease expired", reloadedFirst.Error)
+	assert.EqualValues(t, SystemTaskStatusFailed, reloadedFirst.Status)
+	assert.EqualValues(t, "task lease expired", reloadedFirst.Error)
 	assert.Nil(t, reloadedFirst.ActiveKey)
 
 	var lockCount int64
 	require.NoError(t, DB.Model(&SystemTaskLock{}).Where("task_id = ?", first.TaskID).Count(&lockCount).Error)
-	assert.Equal(t, int64(0), lockCount)
+	assert.EqualValues(t, int64(0), lockCount)
 
 	second, err := CreateSystemTask(SystemTaskTypeLogCleanup, nil, nil)
 	require.NoError(t, err)
@@ -199,8 +199,8 @@ func TestFindEarliestPendingSystemTasks(t *testing.T) {
 	tasks, err := FindEarliestPendingSystemTasks([]string{"type_a", "type_b", "type_c", "missing"})
 	require.NoError(t, err)
 	require.Len(t, tasks, 2)
-	assert.Equal(t, firstA.TaskID, tasks["type_a"].TaskID)
-	assert.Equal(t, firstB.TaskID, tasks["type_b"].TaskID)
+	assert.EqualValues(t, firstA.TaskID, tasks["type_a"].TaskID)
+	assert.EqualValues(t, firstB.TaskID, tasks["type_b"].TaskID)
 	assert.Nil(t, tasks["type_c"])
 	assert.Nil(t, tasks["missing"])
 }
@@ -227,7 +227,7 @@ func TestGetLatestSystemTask(t *testing.T) {
 	latest, err = GetLatestSystemTask(SystemTaskTypeChannelTest)
 	require.NoError(t, err)
 	require.NotNil(t, latest)
-	assert.Equal(t, second.TaskID, latest.TaskID)
+	assert.EqualValues(t, second.TaskID, latest.TaskID)
 }
 
 func TestGetLatestSystemTasks(t *testing.T) {
@@ -252,8 +252,8 @@ func TestGetLatestSystemTasks(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tasks, 2)
 	assert.NotEqual(t, firstA.TaskID, tasks["type_a"].TaskID)
-	assert.Equal(t, secondA.TaskID, tasks["type_a"].TaskID)
-	assert.Equal(t, firstB.TaskID, tasks["type_b"].TaskID)
+	assert.EqualValues(t, secondA.TaskID, tasks["type_a"].TaskID)
+	assert.EqualValues(t, firstB.TaskID, tasks["type_b"].TaskID)
 	assert.Nil(t, tasks["missing"])
 }
 
@@ -273,7 +273,7 @@ func TestRenewSystemTaskLock(t *testing.T) {
 
 	var lock SystemTaskLock
 	require.NoError(t, DB.Where("task_id = ?", task.TaskID).First(&lock).Error)
-	assert.Equal(t, newLockUntil, lock.LockedUntil)
+	assert.EqualValues(t, newLockUntil, lock.LockedUntil)
 
 	// A different runner cannot renew a lease it does not hold.
 	assert.ErrorIs(t, RenewSystemTaskLock(task.TaskID, "runner-b", common.GetTimestamp()+600), ErrSystemTaskLockLost)
@@ -299,12 +299,12 @@ func TestFinishSystemTaskRetainsExecutor(t *testing.T) {
 	reloaded, err := GetSystemTaskByTaskID(task.TaskID)
 	require.NoError(t, err)
 	require.NotNil(t, reloaded)
-	assert.Equal(t, SystemTaskStatusSucceeded, reloaded.Status)
-	assert.Equal(t, runnerID, reloaded.LockedBy, "executor-of-record must be retained for history")
+	assert.EqualValues(t, SystemTaskStatusSucceeded, reloaded.Status)
+	assert.EqualValues(t, runnerID, reloaded.LockedBy, "executor-of-record must be retained for history")
 
 	var lockCount int64
 	require.NoError(t, DB.Model(&SystemTaskLock{}).Where("task_id = ?", task.TaskID).Count(&lockCount).Error)
-	assert.Equal(t, int64(0), lockCount)
+	assert.EqualValues(t, int64(0), lockCount)
 }
 
 func TestSystemTaskUpdatesRequireCurrentLock(t *testing.T) {
@@ -347,6 +347,6 @@ func TestSystemTaskUpdatesRequireUnexpiredLock(t *testing.T) {
 	reloaded, err := GetSystemTaskByTaskID(task.TaskID)
 	require.NoError(t, err)
 	require.NotNil(t, reloaded)
-	assert.Equal(t, SystemTaskStatusRunning, reloaded.Status)
+	assert.EqualValues(t, SystemTaskStatusRunning, reloaded.Status)
 	assert.Empty(t, reloaded.State)
 }

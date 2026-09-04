@@ -80,15 +80,15 @@ func TestJSONColumnScannersAcceptStringAndBytes(t *testing.T) {
 			var info ChannelInfo
 			require.NoError(t, info.Scan(toInput(kind, `{"is_multi_key":true,"multi_key_size":2}`)))
 			assert.True(t, info.IsMultiKey)
-			assert.Equal(t, 2, info.MultiKeySize)
+			assert.EqualValues(t, 2, info.MultiKeySize)
 
 			var props Properties
 			require.NoError(t, props.Scan(toInput(kind, `{"input":"hello"}`)))
-			assert.Equal(t, "hello", props.Input)
+			assert.EqualValues(t, "hello", props.Input)
 
 			var private TaskPrivateData
 			require.NoError(t, private.Scan(toInput(kind, `{"key":"k"}`)))
-			assert.Equal(t, "k", private.Key)
+			assert.EqualValues(t, "k", private.Key)
 		})
 	}
 }

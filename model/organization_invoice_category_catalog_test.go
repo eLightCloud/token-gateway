@@ -58,16 +58,16 @@ func TestOrganizationInvoiceCatalogModelsMapToExpectedCategory(t *testing.T) {
 func TestOrganizationInvoiceCategoryIgnoresCaseAndSurroundingSpaces(t *testing.T) {
 	for _, input := range []string{"Claude-Opus-4.6", "  claude-opus-4.6  ", "CLAUDE-OPUS-4.6"} {
 		got := organizationInvoiceCategoryForModel(input)
-		assert.Equal(t, "claude", got.key, input)
+		assert.EqualValues(t, "claude", got.key, input)
 		assert.False(t, got.fallback, input)
 	}
 	for _, input := range []string{" MiniMax-M2.7 ", "MINIMAX-M2.7"} {
 		got := organizationInvoiceCategoryForModel(input)
-		assert.Equal(t, "minimax", got.key, input)
+		assert.EqualValues(t, "minimax", got.key, input)
 	}
 	for _, input := range []string{" Qwen3.7-Max ", "QWEN3.7-MAX"} {
 		got := organizationInvoiceCategoryForModel(input)
-		assert.Equal(t, "qwen", got.key, input)
+		assert.EqualValues(t, "qwen", got.key, input)
 	}
 }
 
@@ -101,8 +101,8 @@ func TestOrganizationInvoiceCategoryMapsUnambiguousFamilyModels(t *testing.T) {
 func TestOrganizationInvoiceCategoryFallbackIsStableAndSafe(t *testing.T) {
 	left := organizationInvoiceCategoryForModel("custom/model:v1")
 	right := organizationInvoiceCategoryForModel(" CUSTOM/MODEL:V1 ")
-	assert.Equal(t, left.key, right.key)
-	assert.Equal(t, "custom/model:v1", left.name)
+	assert.EqualValues(t, left.key, right.key)
+	assert.EqualValues(t, "custom/model:v1", left.name)
 	assert.True(t, strings.HasPrefix(left.key, organizationInvoiceFallbackCategoryPrefix))
 	assert.Len(t, left.key, len(organizationInvoiceFallbackCategoryPrefix)+64)
 	assert.NotContains(t, left.key, "/")

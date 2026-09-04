@@ -38,14 +38,14 @@ func TestNormalizeClickHouseDSN(t *testing.T) {
 	assert.True(t, strings.HasPrefix(normalized, "https://"))
 
 	// https that already specifies secure is left untouched
-	assert.Equal(t,
+	assert.EqualValues(t,
 		"https://localhost:8443/logs?secure=false",
 		normalizeClickHouseDSN("https://localhost:8443/logs?secure=false"),
 	)
 
 	// non-https schemes are returned verbatim
-	assert.Equal(t, "clickhouse://localhost:9000/logs", normalizeClickHouseDSN("clickhouse://localhost:9000/logs"))
-	assert.Equal(t, "tcp://localhost:9000/logs", normalizeClickHouseDSN("tcp://localhost:9000/logs"))
+	assert.EqualValues(t, "clickhouse://localhost:9000/logs", normalizeClickHouseDSN("clickhouse://localhost:9000/logs"))
+	assert.EqualValues(t, "tcp://localhost:9000/logs", normalizeClickHouseDSN("tcp://localhost:9000/logs"))
 }
 
 func TestChooseDBRejectsClickHouseForMainDatabase(t *testing.T) {
@@ -62,19 +62,19 @@ func TestChooseDBRejectsClickHouseForMainDatabase(t *testing.T) {
 	db, dbType, err := chooseDB("SQL_DSN", false)
 	require.Error(t, err)
 	assert.Nil(t, db)
-	assert.Equal(t, common.DatabaseType(""), dbType)
+	assert.EqualValues(t, common.DatabaseType(""), dbType)
 	assert.Contains(t, err.Error(), "does not support ClickHouse")
 }
 
 func TestClickHouseLogTTLExpression(t *testing.T) {
-	assert.Equal(t, "", clickHouseLogTTLExpression(0))
-	assert.Equal(t, "", clickHouseLogTTLExpression(-5))
-	assert.Equal(t, "toDateTime(created_at) + INTERVAL 30 DAY DELETE", clickHouseLogTTLExpression(30))
+	assert.EqualValues(t, "", clickHouseLogTTLExpression(0))
+	assert.EqualValues(t, "", clickHouseLogTTLExpression(-5))
+	assert.EqualValues(t, "toDateTime(created_at) + INTERVAL 30 DAY DELETE", clickHouseLogTTLExpression(30))
 }
 
 func TestClickHouseLogTTLClause(t *testing.T) {
-	assert.Equal(t, "", clickHouseLogTTLClause(0))
-	assert.Equal(t, "\nTTL toDateTime(created_at) + INTERVAL 7 DAY DELETE", clickHouseLogTTLClause(7))
+	assert.EqualValues(t, "", clickHouseLogTTLClause(0))
+	assert.EqualValues(t, "\nTTL toDateTime(created_at) + INTERVAL 7 DAY DELETE", clickHouseLogTTLClause(7))
 }
 
 func TestClickHouseLogCreateTableSQL(t *testing.T) {
@@ -98,8 +98,8 @@ func TestClickHouseCreateTableHasTTL(t *testing.T) {
 }
 
 func TestClickHouseLogOrder(t *testing.T) {
-	assert.Equal(t, "created_at desc, request_id desc", clickHouseLogOrder(""))
-	assert.Equal(t, "logs.created_at desc, logs.request_id desc", clickHouseLogOrder("logs."))
+	assert.EqualValues(t, "created_at desc, request_id desc", clickHouseLogOrder(""))
+	assert.EqualValues(t, "logs.created_at desc, logs.request_id desc", clickHouseLogOrder("logs."))
 }
 
 func TestBuildLogLikeConditionUsesStandardEscape(t *testing.T) {
@@ -112,8 +112,8 @@ func TestBuildLogLikeConditionUsesStandardEscape(t *testing.T) {
 	condition, pattern, err := buildLogLikeCondition("logs.model_name", "gpt_4%")
 
 	require.NoError(t, err)
-	assert.Equal(t, "logs.model_name LIKE ? ESCAPE '!'", condition)
-	assert.Equal(t, "gpt!_4%", pattern)
+	assert.EqualValues(t, "logs.model_name LIKE ? ESCAPE '!'", condition)
+	assert.EqualValues(t, "gpt!_4%", pattern)
 }
 
 func TestBuildLogLikeConditionUsesClickHouseEscaping(t *testing.T) {
@@ -126,8 +126,8 @@ func TestBuildLogLikeConditionUsesClickHouseEscaping(t *testing.T) {
 	condition, pattern, err := buildLogLikeCondition("logs.model_name", `gpt_4\mini%`)
 
 	require.NoError(t, err)
-	assert.Equal(t, "logs.model_name LIKE ?", condition)
-	assert.Equal(t, `gpt\_4\\mini%`, pattern)
+	assert.EqualValues(t, "logs.model_name LIKE ?", condition)
+	assert.EqualValues(t, `gpt\_4\\mini%`, pattern)
 }
 
 func TestEnsureLogRequestId(t *testing.T) {
@@ -137,7 +137,7 @@ func TestEnsureLogRequestId(t *testing.T) {
 
 	existing := &Log{RequestId: "fixed-request-id"}
 	ensureLogRequestId(existing)
-	assert.Equal(t, "fixed-request-id", existing.RequestId, "existing request id must be preserved")
+	assert.EqualValues(t, "fixed-request-id", existing.RequestId, "existing request id must be preserved")
 
 	assert.NotPanics(t, func() { ensureLogRequestId(nil) })
 }
@@ -146,10 +146,10 @@ func TestAssignDisplayLogIds(t *testing.T) {
 	logs := []*Log{{}, {}, {}}
 
 	assignDisplayLogIds(logs, 0)
-	assert.Equal(t, []int{1, 2, 3}, []int{logs[0].Id, logs[1].Id, logs[2].Id})
+	assert.EqualValues(t, []int{1, 2, 3}, []int{logs[0].Id, logs[1].Id, logs[2].Id})
 
 	assignDisplayLogIds(logs, 20)
-	assert.Equal(t, []int{21, 22, 23}, []int{logs[0].Id, logs[1].Id, logs[2].Id})
+	assert.EqualValues(t, []int{21, 22, 23}, []int{logs[0].Id, logs[1].Id, logs[2].Id})
 
 	assert.NotPanics(t, func() { assignDisplayLogIds(nil, 0) })
 }

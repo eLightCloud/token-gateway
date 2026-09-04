@@ -92,12 +92,12 @@ func TestOrganizationBillingNames(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			assert.Equal(t, testCase.want, MaskOrganizationBillingName(testCase.input))
+			assert.EqualValues(t, testCase.want, MaskOrganizationBillingName(testCase.input))
 		})
 	}
 
-	assert.Equal(t, "alice", OrganizationBillingUsername("alice", 123))
-	assert.Equal(t, "用户 #123", OrganizationBillingUsername("", 123))
+	assert.EqualValues(t, "alice", OrganizationBillingUsername("alice", 123))
+	assert.EqualValues(t, "用户 #123", OrganizationBillingUsername("", 123))
 }
 
 func TestAddOrganizationMemberRejectsSecondActiveOrganization(t *testing.T) {
@@ -169,11 +169,11 @@ func TestOrganizationMembersUseOnlyAdminAndMemberRoles(t *testing.T) {
 
 	member, err := AddOrganizationMember(org.Id, 1, OrganizationRoleAdmin)
 	require.NoError(t, err)
-	assert.Equal(t, OrganizationRoleAdmin, member.Role)
+	assert.EqualValues(t, OrganizationRoleAdmin, member.Role)
 
 	member, err = AddOrganizationMember(org.Id, 2, OrganizationRoleMember)
 	require.NoError(t, err)
-	assert.Equal(t, OrganizationRoleMember, member.Role)
+	assert.EqualValues(t, OrganizationRoleMember, member.Role)
 
 	canManage, err := UserCanManageOrganization(1, org.Id)
 	require.NoError(t, err)
@@ -270,7 +270,7 @@ func TestOrganizationMemberMutationsRetainAdmin(t *testing.T) {
 
 	updated, err := UpdateOrganizationMemberRole(org.Id, 3, OrganizationRoleMember)
 	require.NoError(t, err)
-	assert.Equal(t, OrganizationRoleMember, updated.Role)
+	assert.EqualValues(t, OrganizationRoleMember, updated.Role)
 
 	// 仍有多个 admin 时允许其中一个退出；退出后最后一个 admin 不能再退出或降级。
 	require.NoError(t, RemoveOrganizationMember(org.Id, 2))
@@ -285,7 +285,7 @@ func TestOrganizationMemberMutationsRetainAdmin(t *testing.T) {
 
 	var remainingAdmin OrganizationMember
 	require.NoError(t, DB.Where("organization_id = ? AND user_id = ? AND left_at = 0", org.Id, 1).First(&remainingAdmin).Error)
-	assert.Equal(t, OrganizationRoleAdmin, remainingAdmin.Role)
+	assert.EqualValues(t, OrganizationRoleAdmin, remainingAdmin.Role)
 }
 
 func TestOrganizationBillingSummaryUsesMembershipWindow(t *testing.T) {
@@ -324,12 +324,12 @@ func TestOrganizationBillingSummaryUsesMembershipWindow(t *testing.T) {
 	summary, err := GetOrganizationBillingSummary(100, OrganizationBillingFilters{Types: []int{LogTypeConsume}})
 	require.NoError(t, err)
 
-	assert.Equal(t, 525, summary.TotalQuota)
-	assert.Equal(t, 3, summary.RequestCount)
-	assert.Equal(t, 6, summary.PromptTokens)
-	assert.Equal(t, 8, summary.CompletionTokens)
-	assert.Equal(t, 2, summary.MemberCount)
-	assert.Equal(t, 1, summary.ActiveMemberCount)
+	assert.EqualValues(t, 525, summary.TotalQuota)
+	assert.EqualValues(t, 3, summary.RequestCount)
+	assert.EqualValues(t, 6, summary.PromptTokens)
+	assert.EqualValues(t, 8, summary.CompletionTokens)
+	assert.EqualValues(t, 2, summary.MemberCount)
+	assert.EqualValues(t, 1, summary.ActiveMemberCount)
 }
 
 func TestOrganizationBillingMembersAggregatesAndHydratesUsers(t *testing.T) {
@@ -346,15 +346,15 @@ func TestOrganizationBillingMembersAggregatesAndHydratesUsers(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 2)
 
-	assert.Equal(t, 10, items[0].UserId)
-	assert.Equal(t, "owner", items[0].Username)
-	assert.Equal(t, "o***********y", items[0].DisplayName)
-	assert.Equal(t, 350, items[0].TotalQuota)
-	assert.Equal(t, 2, items[0].RequestCount)
-	assert.Equal(t, 4, items[0].PromptTokens)
-	assert.Equal(t, 6, items[0].CompletionTokens)
-	assert.Equal(t, 11, items[1].UserId)
-	assert.Equal(t, 200, items[1].TotalQuota)
+	assert.EqualValues(t, 10, items[0].UserId)
+	assert.EqualValues(t, "owner", items[0].Username)
+	assert.EqualValues(t, "o***********y", items[0].DisplayName)
+	assert.EqualValues(t, 350, items[0].TotalQuota)
+	assert.EqualValues(t, 2, items[0].RequestCount)
+	assert.EqualValues(t, 4, items[0].PromptTokens)
+	assert.EqualValues(t, 6, items[0].CompletionTokens)
+	assert.EqualValues(t, 11, items[1].UserId)
+	assert.EqualValues(t, 200, items[1].TotalQuota)
 }
 
 func TestOrganizationBillingModelsAggregatesAndAttachesPricingSnapshot(t *testing.T) {
@@ -385,13 +385,13 @@ func TestOrganizationBillingModelsAggregatesAndAttachesPricingSnapshot(t *testin
 	require.NoError(t, err)
 	require.Len(t, items, 2)
 
-	assert.Equal(t, "gpt-4", items[0].ModelName)
-	assert.Equal(t, 300, items[0].TotalQuota)
-	assert.Equal(t, 2, items[0].RequestCount)
+	assert.EqualValues(t, "gpt-4", items[0].ModelName)
+	assert.EqualValues(t, 300, items[0].TotalQuota)
+	assert.EqualValues(t, 2, items[0].RequestCount)
 	require.NotNil(t, items[0].Pricing)
-	assert.Equal(t, 0, items[0].Pricing.QuotaType)
+	assert.EqualValues(t, 0, items[0].Pricing.QuotaType)
 	assert.Greater(t, items[0].Pricing.ModelRatio, 0.0)
-	assert.Equal(t, "gpt-4o-mini", items[1].ModelName)
+	assert.EqualValues(t, "gpt-4o-mini", items[1].ModelName)
 	assert.Nil(t, items[1].Pricing)
 }
 
@@ -412,12 +412,12 @@ func TestOrganizationBillingChannelsAggregatesAndHydratesNames(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 2)
 
-	assert.Equal(t, 7, items[0].ChannelId)
-	assert.Equal(t, "primary", items[0].ChannelName)
-	assert.Equal(t, 300, items[0].TotalQuota)
-	assert.Equal(t, 2, items[0].RequestCount)
-	assert.Equal(t, 8, items[1].ChannelId)
-	assert.Equal(t, "fallback", items[1].ChannelName)
+	assert.EqualValues(t, 7, items[0].ChannelId)
+	assert.EqualValues(t, "primary", items[0].ChannelName)
+	assert.EqualValues(t, 300, items[0].TotalQuota)
+	assert.EqualValues(t, 2, items[0].RequestCount)
+	assert.EqualValues(t, 8, items[1].ChannelId)
+	assert.EqualValues(t, "fallback", items[1].ChannelName)
 }
 
 func TestOrganizationBillingTrendAggregatesByBeijingDay(t *testing.T) {
@@ -436,16 +436,16 @@ func TestOrganizationBillingTrendAggregatesByBeijingDay(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, points, 2)
 
-	assert.Equal(t, "2026-07-08", points[0].Period)
-	assert.Equal(t, 100, points[0].TotalQuota)
-	assert.Equal(t, 1, points[0].RequestCount)
-	assert.Equal(t, 1, points[0].PromptTokens)
+	assert.EqualValues(t, "2026-07-08", points[0].Period)
+	assert.EqualValues(t, 100, points[0].TotalQuota)
+	assert.EqualValues(t, 1, points[0].RequestCount)
+	assert.EqualValues(t, 1, points[0].PromptTokens)
 	assert.Zero(t, points[0].CompletionTokens)
-	assert.Equal(t, "2026-07-09", points[1].Period)
-	assert.Equal(t, 500, points[1].TotalQuota)
-	assert.Equal(t, 2, points[1].RequestCount)
-	assert.Equal(t, 3, points[1].PromptTokens)
-	assert.Equal(t, 6, points[1].CompletionTokens)
+	assert.EqualValues(t, "2026-07-09", points[1].Period)
+	assert.EqualValues(t, 500, points[1].TotalQuota)
+	assert.EqualValues(t, 2, points[1].RequestCount)
+	assert.EqualValues(t, 3, points[1].PromptTokens)
+	assert.EqualValues(t, 6, points[1].CompletionTokens)
 }
 
 func TestOrganizationBillingLogsPaginatesAcrossMembers(t *testing.T) {
@@ -462,18 +462,18 @@ func TestOrganizationBillingLogsPaginatesAcrossMembers(t *testing.T) {
 
 	logs, total, err := GetOrganizationBillingLogs(organizationId, OrganizationBillingFilters{Types: []int{LogTypeConsume}}, 2, 3)
 	require.NoError(t, err)
-	assert.Equal(t, int64(6), total)
+	assert.EqualValues(t, int64(6), total)
 	require.Len(t, logs, 3)
-	assert.Equal(t, 90, logs[0].Quota)
-	assert.Equal(t, 85, logs[1].Quota)
-	assert.Equal(t, 80, logs[2].Quota)
-	assert.Equal(t, "owner", logs[0].Username)
-	assert.Equal(t, "member", logs[1].Username)
-	assert.Equal(t, "owner", logs[2].Username)
+	assert.EqualValues(t, 90, logs[0].Quota)
+	assert.EqualValues(t, 85, logs[1].Quota)
+	assert.EqualValues(t, 80, logs[2].Quota)
+	assert.EqualValues(t, "owner", logs[0].Username)
+	assert.EqualValues(t, "member", logs[1].Username)
+	assert.EqualValues(t, "owner", logs[2].Username)
 
 	var stored Log
 	require.NoError(t, LOG_DB.Where("quota = ?", 90).First(&stored).Error)
-	assert.Equal(t, "owner", stored.Username)
+	assert.EqualValues(t, "owner", stored.Username)
 }
 
 func TestStreamOrganizationBillingLogsReturnsOrderedBoundedBatches(t *testing.T) {
@@ -501,7 +501,7 @@ func TestStreamOrganizationBillingLogsReturnsOrderedBoundedBatches(t *testing.T)
 		},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, [][]int{{100, 95}, {90, 85}}, batches)
+	assert.EqualValues(t, [][]int{{100, 95}, {90, 85}}, batches)
 
 	stop := errors.New("stop export")
 	callbacks := 0
@@ -515,7 +515,7 @@ func TestStreamOrganizationBillingLogsReturnsOrderedBoundedBatches(t *testing.T)
 		},
 	)
 	require.ErrorIs(t, err, stop)
-	assert.Equal(t, 1, callbacks)
+	assert.EqualValues(t, 1, callbacks)
 }
 
 func TestListOrganizationsFiltersByKeywordAndStatus(t *testing.T) {
@@ -533,18 +533,18 @@ func TestListOrganizationsFiltersByKeywordAndStatus(t *testing.T) {
 	items, total, err := ListOrganizations("beta org", &disabledStatus, 0, 10)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	assert.Equal(t, int64(1), total)
-	assert.Equal(t, beta.Id, items[0].Id)
+	assert.EqualValues(t, int64(1), total)
+	assert.EqualValues(t, beta.Id, items[0].Id)
 
 	enabledStatus := OrganizationStatusEnabled
 	items, total, err = ListOrganizations("beta org", &enabledStatus, 0, 10)
 	require.NoError(t, err)
 	assert.Empty(t, items)
-	assert.Equal(t, int64(0), total)
+	assert.EqualValues(t, int64(0), total)
 
 	items, total, err = ListOrganizations(strconv.Itoa(alpha.Id), &enabledStatus, 0, 10)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	assert.Equal(t, int64(1), total)
-	assert.Equal(t, alpha.Id, items[0].Id)
+	assert.EqualValues(t, int64(1), total)
+	assert.EqualValues(t, alpha.Id, items[0].Id)
 }

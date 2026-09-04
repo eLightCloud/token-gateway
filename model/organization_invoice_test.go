@@ -84,20 +84,19 @@ func TestNewOrganizationInvoicePeriodUsesBeijingMonth(t *testing.T) {
 	period, err := NewOrganizationInvoicePeriod("", "", now)
 	require.NoError(t, err)
 
-	assert.Equal(t, "2026-08-01", period.StartDate)
-	assert.Equal(t, "2026-08-31", period.EndDate)
-	assert.Equal(t, OrganizationInvoiceTimezone, period.Timezone)
-	assert.Equal(t, beijingInvoiceTimestamp(t, "2026-08-01 00:00:00"), period.StartTimestamp)
-	assert.Equal(t, beijingInvoiceTimestamp(t, "2026-08-31 23:59:59"), period.EndTimestamp)
+	assert.EqualValues(t, "2026-08-01", period.StartDate)
+	assert.EqualValues(t, "2026-08-31", period.EndDate)
+	assert.EqualValues(t, OrganizationInvoiceTimezone, period.Timezone)
+	assert.EqualValues(t, beijingInvoiceTimestamp(t, "2026-08-01 00:00:00"), period.StartTimestamp)
+	assert.EqualValues(t, beijingInvoiceTimestamp(t, "2026-08-31 23:59:59"), period.EndTimestamp)
 }
 
 func TestOrganizationInvoiceIncludesFundedAccountWithoutUsage(t *testing.T) {
 	setupOrganizationTestState(t)
 	createOrganizationBillingTestFixture(t)
-	period, err := NewOrganizationInvoicePeriod("2026-08-01", "2026-08-31", time.Now())
-	require.NoError(t, err)
-	configureOrganizationInvoiceTestZeroBaseline(t, 100, 202608, 10, 11)
-	creditedAt := beijingInvoiceTimestamp(t, "2026-08-05 10:00:00")
+	period, monthStart := dynamicInvoicePeriod(t)
+	configureOrganizationInvoiceTestZeroBaseline(t, 100, time.Now().Year()*100+int(time.Now().Month()), 10, 11)
+	creditedAt := monthStart.AddDate(0, 0, 4).Add(10 * time.Hour).Unix()
 	require.NoError(t, DB.Create(&TopUp{
 		UserId:          11,
 		Amount:          2,
@@ -120,9 +119,9 @@ func TestOrganizationInvoiceIncludesFundedAccountWithoutUsage(t *testing.T) {
 	}
 	require.NotNil(t, funded)
 	assert.Zero(t, funded.GrossQuota)
-	assert.Equal(t, "2.0000000000", funded.Financials.TotalInflowAmountUSD)
-	assert.Equal(t, "0.0000000000", funded.Financials.TotalDeductionAmountUSD)
-	assert.Equal(t, "reconciled", funded.Financials.ReconciliationStatus)
+	assert.EqualValues(t, "2.0000000000", funded.Financials.TotalInflowAmountUSD)
+	assert.EqualValues(t, "0.0000000000", funded.Financials.TotalDeductionAmountUSD)
+	assert.EqualValues(t, "reconciled", funded.Financials.ReconciliationStatus)
 }
 
 func TestOrganizationInvoiceInputValidation(t *testing.T) {
@@ -135,7 +134,7 @@ func TestOrganizationInvoiceInputValidation(t *testing.T) {
 
 	month, err := ParseOrganizationInvoiceMonth("2026-07")
 	require.NoError(t, err)
-	assert.Equal(t, 202607, month)
+	assert.EqualValues(t, 202607, month)
 	_, err = ParseOrganizationInvoiceMonth("2026-13")
 	require.Error(t, err)
 
@@ -147,7 +146,7 @@ func TestOrganizationInvoiceInputValidation(t *testing.T) {
 	} {
 		actual, parseErr := ParseOrganizationSettlementFactor(input)
 		require.NoError(t, parseErr, input)
-		assert.Equal(t, expected, actual, input)
+		assert.EqualValues(t, expected, actual, input)
 	}
 	for _, input := range []string{"-0.1", "1.00001", "10.0001", "1e0", "+1", ".5", "1.", "NaN", ""} {
 		_, parseErr := ParseOrganizationSettlementFactor(input)
@@ -157,19 +156,19 @@ func TestOrganizationInvoiceInputValidation(t *testing.T) {
 
 func TestOrganizationInvoiceCategoryKeysAreStableAndSafe(t *testing.T) {
 	gpt := organizationInvoiceCategoryForModel("  GPT-5.4 ")
-	assert.Equal(t, "gpt", gpt.key)
-	assert.Equal(t, "GPT", gpt.name)
+	assert.EqualValues(t, "gpt", gpt.key)
+	assert.EqualValues(t, "GPT", gpt.name)
 	assert.False(t, gpt.fallback)
 
 	first := organizationInvoiceCategoryForModel(" Custom/Model:V1 ")
 	second := organizationInvoiceCategoryForModel("custom/model:v1")
-	assert.Equal(t, first.key, second.key)
+	assert.EqualValues(t, first.key, second.key)
 	assert.True(t, first.fallback)
 	assert.True(t, strings.HasPrefix(first.key, organizationInvoiceFallbackCategoryPrefix))
 	assert.Len(t, first.key, len(organizationInvoiceFallbackCategoryPrefix)+64)
 	assert.NotContains(t, first.key, "/")
 	assert.NotContains(t, first.key, ":")
-	assert.Equal(t, "Custom/Model:V1", first.name)
+	assert.EqualValues(t, "Custom/Model:V1", first.name)
 }
 
 func TestOrganizationInvoiceMonthExpressionUsesEpochBoundaries(t *testing.T) {
@@ -180,8 +179,8 @@ func TestOrganizationInvoiceMonthExpressionUsesEpochBoundaries(t *testing.T) {
 	require.Len(t, months, 2)
 
 	expression, args := organizationInvoicePeriodExpression(months)
-	assert.Equal(t, "CASE WHEN created_at >= ? AND created_at <= ? THEN ? WHEN created_at >= ? AND created_at <= ? THEN ? ELSE 0 END", expression)
-	assert.Equal(t, []interface{}{
+	assert.EqualValues(t, "CASE WHEN created_at >= ? AND created_at <= ? THEN ? WHEN created_at >= ? AND created_at <= ? THEN ? ELSE 0 END", expression)
+	assert.EqualValues(t, []interface{}{
 		beijingInvoiceTimestamp(t, "2026-06-15 00:00:00"),
 		beijingInvoiceTimestamp(t, "2026-06-30 23:59:59"),
 		202606,
@@ -224,33 +223,33 @@ func TestGetOrganizationInvoiceBuildsAccountCrossTables(t *testing.T) {
 	invoice, err := GetOrganizationInvoice(organizationId, period)
 	require.NoError(t, err)
 	require.Len(t, invoice.Accounts, 3)
-	assert.Equal(t, 11, invoice.Accounts[0].UserId)
-	assert.Equal(t, "member", invoice.Accounts[0].Username)
-	assert.Equal(t, "m************y", invoice.Accounts[0].DisplayName)
-	assert.Equal(t, int64(7000), invoice.Accounts[0].GrossQuota)
-	assert.Equal(t, 12, invoice.Accounts[2].UserId)
-	assert.Equal(t, "unused", invoice.Accounts[2].Username)
+	assert.EqualValues(t, 11, invoice.Accounts[0].UserId)
+	assert.EqualValues(t, "member", invoice.Accounts[0].Username)
+	assert.EqualValues(t, "m************y", invoice.Accounts[0].DisplayName)
+	assert.EqualValues(t, int64(7000), invoice.Accounts[0].GrossQuota)
+	assert.EqualValues(t, 12, invoice.Accounts[2].UserId)
+	assert.EqualValues(t, "unused", invoice.Accounts[2].Username)
 	assert.Zero(t, invoice.Accounts[2].GrossQuota)
-	assert.Equal(t, "0.0000000000", invoice.Accounts[2].Financials.TotalInflowAmountUSD)
-	assert.Equal(t, int64(10000), invoice.GrossTotalQuota)
+	assert.EqualValues(t, "0.0000000000", invoice.Accounts[2].Financials.TotalInflowAmountUSD)
+	assert.EqualValues(t, int64(10000), invoice.GrossTotalQuota)
 	require.Len(t, invoice.ModelRows, 4)
-	assert.Equal(t, "custom/model:v1", invoice.ModelRows[0].ModelName)
+	assert.EqualValues(t, "custom/model:v1", invoice.ModelRows[0].ModelName)
 
 	categoryByKey := make(map[string]OrganizationInvoiceCategoryRow)
 	for _, row := range invoice.CategoryRows {
 		categoryByKey[row.CategoryKey] = row
 	}
 	require.Contains(t, categoryByKey, "gpt")
-	assert.Equal(t, int64(4000), categoryByKey["gpt"].GrossQuota)
-	assert.Equal(t, "0.5000", categoryByKey["gpt"].Factor)
-	assert.Equal(t, "0.0000", categoryByKey["claude"].Factor)
+	assert.EqualValues(t, int64(4000), categoryByKey["gpt"].GrossQuota)
+	assert.EqualValues(t, "0.5000", categoryByKey["gpt"].Factor)
+	assert.EqualValues(t, "0.0000", categoryByKey["claude"].Factor)
 
 	expectedSettled := decimal.NewFromInt(4000).
 		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
 		Mul(decimal.NewFromFloat(0.5)).
 		Add(decimal.NewFromInt(4000).Div(decimal.NewFromFloat(common.QuotaPerUnit))).
 		StringFixed(10)
-	assert.Equal(t, expectedSettled, invoice.SettledTotalAmountUSD)
+	assert.EqualValues(t, expectedSettled, invoice.SettledTotalAmountUSD)
 
 	require.NoError(t, DB.Create(&OrganizationBillingSettlementRule{
 		OrganizationId: organizationId,
@@ -271,12 +270,12 @@ func TestGetOrganizationInvoiceBuildsAccountCrossTables(t *testing.T) {
 		}
 	}
 	assert.True(t, crossMonthGPT.MultipleFactors)
-	assert.Equal(t, "multiple", crossMonthGPT.Factor)
+	assert.EqualValues(t, "multiple", crossMonthGPT.Factor)
 	require.Len(t, crossMonthGPT.FactorSegments, 2)
-	assert.Equal(t, "2026-06", crossMonthGPT.FactorSegments[0].PeriodMonth)
-	assert.Equal(t, "0.5000", crossMonthGPT.FactorSegments[0].Factor)
-	assert.Equal(t, "2026-07", crossMonthGPT.FactorSegments[1].PeriodMonth)
-	assert.Equal(t, "0.8000", crossMonthGPT.FactorSegments[1].Factor)
+	assert.EqualValues(t, "2026-06", crossMonthGPT.FactorSegments[0].PeriodMonth)
+	assert.EqualValues(t, "0.5000", crossMonthGPT.FactorSegments[0].Factor)
+	assert.EqualValues(t, "2026-07", crossMonthGPT.FactorSegments[1].PeriodMonth)
+	assert.EqualValues(t, "0.8000", crossMonthGPT.FactorSegments[1].Factor)
 }
 
 func TestGetOrganizationInvoiceGroupsNewCategoriesAndAppliesMonthlyRule(t *testing.T) {
@@ -334,22 +333,22 @@ func TestGetOrganizationInvoiceGroupsNewCategoriesAndAppliesMonthlyRule(t *testi
 	categoryByKey := make(map[string]OrganizationInvoiceCategoryRow, len(invoice.CategoryRows))
 	for _, row := range invoice.CategoryRows {
 		categoryByKey[row.CategoryKey] = row
-		assert.Equal(t, "1.0000", row.Factor)
+		assert.EqualValues(t, "1.0000", row.Factor)
 	}
-	assert.Equal(t, int64(1500), categoryByKey["glm"].GrossQuota)
-	assert.Equal(t, []string{"glm-5.1", "glm-5.2"}, categoryByKey["glm"].Models)
-	assert.Equal(t, "GLM（阿里云）", categoryByKey["glm"].CategoryName)
-	assert.Equal(t, int64(800), categoryByKey["qwen"].GrossQuota)
-	assert.Equal(t, "Qwen（阿里云）", categoryByKey["qwen"].CategoryName)
-	assert.Equal(t, int64(600), categoryByKey["vector"].GrossQuota)
-	assert.Equal(t, []string{"text-embedding-3-large", "text-embedding-v4"}, categoryByKey["vector"].Models)
-	assert.Equal(t, "向量", categoryByKey["vector"].CategoryName)
+	assert.EqualValues(t, int64(1500), categoryByKey["glm"].GrossQuota)
+	assert.EqualValues(t, []string{"glm-5.1", "glm-5.2"}, categoryByKey["glm"].Models)
+	assert.EqualValues(t, "GLM（阿里云）", categoryByKey["glm"].CategoryName)
+	assert.EqualValues(t, int64(800), categoryByKey["qwen"].GrossQuota)
+	assert.EqualValues(t, "Qwen（阿里云）", categoryByKey["qwen"].CategoryName)
+	assert.EqualValues(t, int64(600), categoryByKey["vector"].GrossQuota)
+	assert.EqualValues(t, []string{"text-embedding-3-large", "text-embedding-v4"}, categoryByKey["vector"].Models)
+	assert.EqualValues(t, "向量", categoryByKey["vector"].CategoryName)
 
 	options, err := GetOrganizationSettlementRuleOptions(organizationId, 202607)
 	require.NoError(t, err)
 	require.Len(t, options, 3)
 	for _, option := range options {
-		assert.Equal(t, "1.0000", option.Factor)
+		assert.EqualValues(t, "1.0000", option.Factor)
 		assert.True(t, option.Inherited)
 	}
 
@@ -363,12 +362,12 @@ func TestGetOrganizationInvoiceGroupsNewCategoriesAndAppliesMonthlyRule(t *testi
 		if row.CategoryKey != "glm" {
 			continue
 		}
-		assert.Equal(t, "1.0400", row.Factor)
+		assert.EqualValues(t, "1.0400", row.Factor)
 		expectedSettled := decimal.NewFromInt(1500).
 			Div(decimal.NewFromFloat(common.QuotaPerUnit)).
 			Mul(decimal.NewFromFloat(1.04)).
 			StringFixed(10)
-		assert.Equal(t, expectedSettled, row.SettledAmountUSD)
+		assert.EqualValues(t, expectedSettled, row.SettledAmountUSD)
 		return
 	}
 	require.Fail(t, "GLM category missing after settlement rule update")
@@ -423,25 +422,25 @@ func TestUpdateOrganizationSettlementRuleUsesVersionCASAndIdempotence(t *testing
 	created, err := UpdateOrganizationSettlementRule(organizationId, "gpt", 202607, 9000, 0)
 	require.NoError(t, err)
 	assert.True(t, created.Changed)
-	assert.Equal(t, 1, created.Rule.Version)
+	assert.EqualValues(t, 1, created.Rule.Version)
 	var invalidated OrganizationInvoicePeriodSummary
 	require.NoError(t, DB.First(&invalidated, summary.Id).Error)
-	assert.Equal(t, OrganizationInvoiceSummaryStatusInvalidated, invalidated.Status)
+	assert.EqualValues(t, OrganizationInvoiceSummaryStatusInvalidated, invalidated.Status)
 
 	idempotent, err := UpdateOrganizationSettlementRule(organizationId, "gpt", 202607, 9000, 0)
 	require.NoError(t, err)
 	assert.False(t, idempotent.Changed)
-	assert.Equal(t, 1, idempotent.Rule.Version)
+	assert.EqualValues(t, 1, idempotent.Rule.Version)
 
 	_, err = UpdateOrganizationSettlementRule(organizationId, "gpt", 202607, 8000, 0)
 	var conflict *OrganizationSettlementVersionConflictError
 	require.ErrorAs(t, err, &conflict)
-	assert.Equal(t, 1, conflict.Actual)
+	assert.EqualValues(t, 1, conflict.Actual)
 
 	updated, err := UpdateOrganizationSettlementRule(organizationId, "gpt", 202607, 8000, 1)
 	require.NoError(t, err)
 	assert.True(t, updated.Changed)
-	assert.Equal(t, 2, updated.Rule.Version)
+	assert.EqualValues(t, 2, updated.Rule.Version)
 
 	options, err := GetOrganizationSettlementRuleOptions(organizationId, 202608)
 	require.NoError(t, err)
@@ -453,8 +452,8 @@ func TestUpdateOrganizationSettlementRuleUsesVersionCASAndIdempotence(t *testing
 			break
 		}
 	}
-	assert.Equal(t, "0.8000", gptOption.Factor)
-	assert.Equal(t, "2026-07", gptOption.SourceEffectiveMonth)
+	assert.EqualValues(t, "0.8000", gptOption.Factor)
+	assert.EqualValues(t, "2026-07", gptOption.SourceEffectiveMonth)
 	assert.True(t, gptOption.Inherited)
 	assert.Zero(t, gptOption.Version)
 }
@@ -500,16 +499,16 @@ func TestUpdateOrganizationSettlementRuleSerializesConcurrentFirstWrite(t *testi
 		}
 		var conflict *OrganizationSettlementVersionConflictError
 		require.ErrorAs(t, result.err, &conflict)
-		assert.Equal(t, 1, conflict.Actual)
+		assert.EqualValues(t, 1, conflict.Actual)
 		conflicts++
 	}
-	assert.Equal(t, 1, changed)
-	assert.Equal(t, 1, conflicts)
+	assert.EqualValues(t, 1, changed)
+	assert.EqualValues(t, 1, conflicts)
 
 	var stored OrganizationBillingSettlementRule
 	require.NoError(t, DB.
 		Where("organization_id = ? AND category_key = ? AND effective_month = ?", organizationId, "gpt", 202607).
 		First(&stored).Error)
-	assert.Equal(t, 1, stored.Version)
+	assert.EqualValues(t, 1, stored.Version)
 	assert.Contains(t, []int{8000, 9000}, stored.FactorScaled)
 }

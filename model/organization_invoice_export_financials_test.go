@@ -45,10 +45,10 @@ func TestOrganizationInvoiceTopUpCreditedQuotaUsesPersistedOrLegacyProviderSeman
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			quota, structured, valid := organizationInvoiceTopUpCreditedQuota(testCase.topUp)
-			assert.Equal(t, testCase.valid, valid)
-			assert.Equal(t, testCase.structured, structured)
+			assert.EqualValues(t, testCase.valid, valid)
+			assert.EqualValues(t, testCase.structured, structured)
 			if testCase.valid {
-				assert.Equal(t, testCase.want, quota)
+				assert.EqualValues(t, testCase.want, quota)
 			}
 		})
 	}
@@ -60,7 +60,7 @@ func TestOrganizationInvoiceLegacyTopUpCreditedQuotaUsesReviewedUnit(t *testing.
 		Money:           1.25,
 	}, 400_000)
 	require.True(t, valid)
-	assert.Equal(t, int64(500_000), quota)
+	assert.EqualValues(t, int64(500_000), quota)
 }
 
 func TestGetOrganizationInvoiceExportFinancialsFiltersAndAlignsAccounts(t *testing.T) {
@@ -137,18 +137,18 @@ func TestGetOrganizationInvoiceExportFinancialsFiltersAndAlignsAccounts(t *testi
 	require.NoError(t, err)
 	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, scopes, period)
 	require.NoError(t, err)
-	assert.Equal(t, "103.7500000000", financials[10].PaymentTopUpAmountUSD)
-	assert.Equal(t, "7.0000000000", financials[10].AdminIncreaseAmountUSD)
-	assert.Equal(t, "2.0000000000", financials[10].OtherIdentifiedInflowAmountUSD)
-	assert.Equal(t, "0.5000000000", financials[10].AdminDecreaseAmountUSD)
-	assert.Equal(t, "112.7500000000", financials[10].TotalInflowAmountUSD)
-	assert.Equal(t, "0.5000000000", financials[10].AIWalletDeductionAmountUSD)
-	assert.Equal(t, "1.0000000000", financials[10].TotalDeductionAmountUSD)
-	assert.Equal(t, "2.5000000000", financials[10].CurrentBalanceAmountUSD)
-	assert.Equal(t, "incomplete", financials[10].ReconciliationStatus)
-	assert.Equal(t, "4.0000000000", financials[11].TotalInflowAmountUSD)
-	assert.Equal(t, "5.0000000000", financials[11].TotalDeductionAmountUSD)
-	assert.Equal(t, "0.5000000000", financials[11].CurrentBalanceAmountUSD)
+	assert.EqualValues(t, "103.7500000000", financials[10].PaymentTopUpAmountUSD)
+	assert.EqualValues(t, "7.0000000000", financials[10].AdminIncreaseAmountUSD)
+	assert.EqualValues(t, "2.0000000000", financials[10].OtherIdentifiedInflowAmountUSD)
+	assert.EqualValues(t, "0.5000000000", financials[10].AdminDecreaseAmountUSD)
+	assert.EqualValues(t, "112.7500000000", financials[10].TotalInflowAmountUSD)
+	assert.EqualValues(t, "0.5000000000", financials[10].AIWalletDeductionAmountUSD)
+	assert.EqualValues(t, "1.0000000000", financials[10].TotalDeductionAmountUSD)
+	assert.EqualValues(t, "2.5000000000", financials[10].CurrentBalanceAmountUSD)
+	assert.EqualValues(t, "incomplete", financials[10].ReconciliationStatus)
+	assert.EqualValues(t, "4.0000000000", financials[11].TotalInflowAmountUSD)
+	assert.EqualValues(t, "5.0000000000", financials[11].TotalDeductionAmountUSD)
+	assert.EqualValues(t, "0.5000000000", financials[11].CurrentBalanceAmountUSD)
 }
 
 func TestGetOrganizationInvoiceExportFinancialsRejectsMissingAccount(t *testing.T) {
@@ -186,7 +186,7 @@ func TestGetOrganizationInvoiceAccountFinancialsExcludesFactsAtAndAfterMembershi
 	require.NoError(t, err)
 	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 200, scopes, period)
 	require.NoError(t, err)
-	assert.Equal(t, "30.0000000000", financials[20].PaymentTopUpAmountUSD)
+	assert.EqualValues(t, "30.0000000000", financials[20].PaymentTopUpAmountUSD)
 }
 
 func TestOrganizationInvoiceFinancialFactHasSingleCrossOrganizationOwner(t *testing.T) {
@@ -223,8 +223,8 @@ func TestOrganizationInvoiceFinancialFactHasSingleCrossOrganizationOwner(t *test
 	secondFinancials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 302, secondScopes, period)
 	require.NoError(t, err)
 
-	assert.Equal(t, "1.0000000000", firstFinancials[30].PaymentTopUpAmountUSD)
-	assert.Equal(t, "0.0000000000", secondFinancials[30].PaymentTopUpAmountUSD)
+	assert.EqualValues(t, "1.0000000000", firstFinancials[30].PaymentTopUpAmountUSD)
+	assert.EqualValues(t, "0.0000000000", secondFinancials[30].PaymentTopUpAmountUSD)
 }
 
 func TestOrganizationInvoiceIncludesBalanceSubscriptionAsOtherDeduction(t *testing.T) {
@@ -246,8 +246,8 @@ func TestOrganizationInvoiceIncludesBalanceSubscriptionAsOtherDeduction(t *testi
 	require.NoError(t, err)
 	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, scopes, period)
 	require.NoError(t, err)
-	assert.Equal(t, "1.0000000000", financials[10].OtherDeductionAmountUSD)
-	assert.Equal(t, "1.0000000000", financials[10].TotalDeductionAmountUSD)
+	assert.EqualValues(t, "1.0000000000", financials[10].OtherDeductionAmountUSD)
+	assert.EqualValues(t, "1.0000000000", financials[10].TotalDeductionAmountUSD)
 }
 
 func TestOrganizationInvoiceFinancialsReconcileConfiguredZeroBaseline(t *testing.T) {
@@ -283,12 +283,12 @@ func TestOrganizationInvoiceFinancialsReconcileConfiguredZeroBaseline(t *testing
 	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, scopes, period)
 	require.NoError(t, err)
 	account := financials[10]
-	assert.Equal(t, "0.0000000000", account.OpeningBalanceAmountUSD)
-	assert.Equal(t, "13500.0000000000", account.TotalInflowAmountUSD)
-	assert.Equal(t, "3787.4911080000", account.TotalDeductionAmountUSD)
-	assert.Equal(t, "9712.5088920000", account.ClosingBalanceAmountUSD)
-	assert.Equal(t, "0.0000000000", *account.ReconciliationDifferenceAmountUSD)
-	assert.Equal(t, "reconciled", account.ReconciliationStatus)
+	assert.EqualValues(t, "0.0000000000", account.OpeningBalanceAmountUSD)
+	assert.EqualValues(t, "13500.0000000000", account.TotalInflowAmountUSD)
+	assert.EqualValues(t, "3787.4911080000", account.TotalDeductionAmountUSD)
+	assert.EqualValues(t, "9712.5088920000", account.ClosingBalanceAmountUSD)
+	assert.EqualValues(t, "0.0000000000", *account.ReconciliationDifferenceAmountUSD)
+	assert.EqualValues(t, "reconciled", account.ReconciliationStatus)
 }
 
 func TestOrganizationInvoiceOpeningCarriesForwardIncompleteSourceStatus(t *testing.T) {
@@ -322,7 +322,7 @@ func TestOrganizationInvoiceOpeningCarriesForwardIncompleteSourceStatus(t *testi
 		september,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, int64(500_000), opening[10])
+	assert.EqualValues(t, int64(500_000), opening[10])
 	assert.False(t, complete[10])
 }
 
@@ -343,10 +343,10 @@ func TestBackfillOrganizationInvoiceTopUpCreditedQuotasIsScopedAndIdempotent(t *
 
 	updated, err := BackfillOrganizationInvoiceTopUpCreditedQuotas(100, period, 500_000)
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), updated)
+	assert.EqualValues(t, int64(1), updated)
 	topUp := GetTopUpByTradeNo("legacy-topup-credit")
 	require.NotNil(t, topUp)
-	assert.Equal(t, int64(1_000_000), topUp.CreditedQuota)
+	assert.EqualValues(t, int64(1_000_000), topUp.CreditedQuota)
 
 	updated, err = BackfillOrganizationInvoiceTopUpCreditedQuotas(100, period, 500_000)
 	require.NoError(t, err)
@@ -367,5 +367,5 @@ func TestRecordTaskBillingLogPersistsStructuredBillingSource(t *testing.T) {
 	}))
 	var log Log
 	require.NoError(t, LOG_DB.Where("user_id = ? AND type = ?", 40, LogTypeConsume).First(&log).Error)
-	assert.Equal(t, "subscription", log.BillingSource)
+	assert.EqualValues(t, "subscription", log.BillingSource)
 }

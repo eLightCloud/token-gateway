@@ -32,9 +32,16 @@ type nativeRouteBilling struct {
 	settled     bool
 }
 
-func (b *nativeRouteBilling) Settle(int) error {
+// Settle 按实际用量结算，退还多预留的部分（与真实 BillingSession 一致）。
+func (b *nativeRouteBilling) Settle(actual int) error {
 	b.events = append(b.events, "settle")
 	b.settled = true
+	if delta := b.preConsumed - actual; delta != 0 {
+		if err := model.IncreaseUserQuota(b.userID, int64(delta), true); err != nil {
+			return err
+		}
+		b.preConsumed = actual
+	}
 	return nil
 }
 
@@ -54,12 +61,15 @@ func (b *nativeRouteBilling) GetPreConsumedQuota() int {
 	return b.preConsumed
 }
 
+// Reserve 语义与真实 BillingSession 一致：补足预留到目标额度（幂等 top-up）。
 func (b *nativeRouteBilling) Reserve(quota int) error {
 	b.events = append(b.events, "reserve")
-	if err := model.DecreaseUserQuota(b.userID, int64(quota), true); err != nil {
-		return err
+	if quota > b.preConsumed {
+		if err := model.DecreaseUserQuota(b.userID, int64(quota-b.preConsumed), true); err != nil {
+			return err
+		}
+		b.preConsumed = quota
 	}
-	b.preConsumed = quota
 	return nil
 }
 
@@ -75,7 +85,7 @@ func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 	previousRedisEnabled := common.RedisEnabled
 	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}))
+	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.TaskSettlementJournal{}))
 	model.DB = database
 	model.LOG_DB = database
 	common.MemoryCacheEnabled = false
@@ -214,11 +224,16 @@ func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 	require.NoError(t, database.Where("task_id = ?", "task_kling_public").First(&persisted).Error)
 	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), persisted.Status)
 	assert.Equal(t, "100%", persisted.Progress)
+
+	// 差额结算可能以 journal 形式暂存，由 recovery sweep 重放后达成最终一致。
+	// 差额结算以 journal 暂存时，由 recovery sweep 重放达成最终一致。
+	service.SweepPendingTaskSettlements(context.Background())
+	require.NoError(t, database.First(&persisted, persisted.ID).Error)
 	assert.Equal(t, 1, persisted.Quota)
 	assert.Equal(t, int32(1), queryCalls.Load())
 	var settledUser model.User
 	require.NoError(t, database.First(&settledUser, 7).Error)
-	assert.Equal(t, 999_999, settledUser.Quota)
+	assert.EqualValues(t, 999_999, settledUser.Quota)
 
 	queryBinding, found := generation.LookupDeclaredRoute(http.MethodGet, "/kling/v1/videos/text2video/:task_id")
 	require.True(t, found)

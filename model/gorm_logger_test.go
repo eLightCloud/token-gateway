@@ -58,7 +58,7 @@ func TestSanitizeDBErrorStripsDriverMessage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sanitizeDBError(tc.err)
 			require.Error(t, got)
-			assert.Equal(t, tc.want, got.Error())
+			assert.EqualValues(t, tc.want, got.Error())
 			assert.NotContains(t, got.Error(), tc.leaked)
 		})
 	}
@@ -77,7 +77,7 @@ func TestSanitizeDBErrorSQLiteDriver(t *testing.T) {
 
 func TestSanitizeDBErrorKeepsNonDriverErrors(t *testing.T) {
 	err := fmt.Errorf("dial tcp 127.0.0.1:3306: connect: connection refused")
-	assert.Equal(t, err, sanitizeDBError(err))
+	assert.EqualValues(t, err, sanitizeDBError(err))
 }
 
 // 保护契约:经 gorm 真实链路,错误日志同时满足 SQL 参数化、驱动错误脱敏、

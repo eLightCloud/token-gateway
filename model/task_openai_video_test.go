@@ -25,9 +25,9 @@ func TestTaskToOpenAIVideoDoesNotExposeResultURL(t *testing.T) {
 
 	video := task.ToOpenAIVideo()
 
-	assert.Equal(t, "task_public", video.ID)
-	assert.Equal(t, "video", video.Object)
-	assert.Equal(t, "completed", video.Status)
+	assert.EqualValues(t, "task_public", video.ID)
+	assert.EqualValues(t, "video", video.Object)
+	assert.EqualValues(t, "completed", video.Status)
 	assert.Nil(t, video.Metadata)
 
 	encoded, err := common.Marshal(video)
@@ -75,8 +75,8 @@ func TestTaskToOpenAIVideoStatusAndCompletedAt(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			video := tt.task.ToOpenAIVideo()
-			assert.Equal(t, tt.wantStatus, video.Status)
-			assert.Equal(t, tt.wantCompletedAt, video.CompletedAt)
+			assert.EqualValues(t, tt.wantStatus, video.Status)
+			assert.EqualValues(t, tt.wantCompletedAt, video.CompletedAt)
 
 			encoded, err := common.Marshal(video)
 			require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestTaskToOpenAIVideoStatusAndCompletedAt(t *testing.T) {
 			require.NoError(t, common.Unmarshal(encoded, &fields))
 			if tt.wantCompletedAtJSON {
 				require.Contains(t, fields, "completed_at")
-				assert.Equal(t, float64(tt.wantCompletedAt), fields["completed_at"])
+				assert.EqualValues(t, float64(tt.wantCompletedAt), fields["completed_at"])
 			} else {
 				assert.NotContains(t, fields, "completed_at")
 			}

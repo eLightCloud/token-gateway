@@ -35,7 +35,7 @@ func TestTaskPluginVersionActivationAndSourceImmutability(t *testing.T) {
 	active, err := ListActiveTaskPlugins()
 	require.NoError(t, err)
 	require.Len(t, active, 1)
-	assert.Equal(t, "2.0.0", active[0].Version)
+	assert.EqualValues(t, "2.0.0", active[0].Version)
 
 	conflict := TaskPlugin{Key: "mock", APIVersion: 1, Version: "2.0.0", Source: "changed", SourceHash: "different", Enabled: true}
 	err = SaveTaskPlugin(&conflict)
@@ -54,11 +54,11 @@ func TestTaskPluginVersionActivationAndSourceImmutability(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, deleteResult.DeletedActive)
 	require.NotNil(t, deleteResult.Promoted)
-	assert.Equal(t, "1.0.0", deleteResult.Promoted.Version)
+	assert.EqualValues(t, "1.0.0", deleteResult.Promoted.Version)
 	versions, err := ListTaskPluginVersions("mock")
 	require.NoError(t, err)
 	require.Len(t, versions, 1)
-	assert.Equal(t, "1.0.0", versions[0].Version)
+	assert.EqualValues(t, "1.0.0", versions[0].Version)
 	assert.True(t, versions[0].Active)
 }
 
@@ -82,18 +82,18 @@ func TestDeleteActiveTaskPluginPromotesNewestRemainingVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, deleteResult.DeletedActive)
 	require.NotNil(t, deleteResult.Promoted)
-	assert.Equal(t, "2.0.0", deleteResult.Promoted.Version)
+	assert.EqualValues(t, "2.0.0", deleteResult.Promoted.Version)
 	assert.False(t, deleteResult.Promoted.Enabled)
 
 	deleteResult, err = DeleteTaskPluginVersion("promote", "2.0.0")
 	require.NoError(t, err)
 	assert.True(t, deleteResult.DeletedActive)
 	require.NotNil(t, deleteResult.Promoted)
-	assert.Equal(t, "4.0.0", deleteResult.Promoted.Version)
+	assert.EqualValues(t, "4.0.0", deleteResult.Promoted.Version)
 
 	active, err := GetTaskPluginVersion("promote", "")
 	require.NoError(t, err)
-	assert.Equal(t, "4.0.0", active.Version)
+	assert.EqualValues(t, "4.0.0", active.Version)
 }
 
 func TestTaskPluginSyncSnapshotRevisionTracksDesiredRuntimeState(t *testing.T) {
@@ -121,18 +121,18 @@ func TestTaskPluginSyncSnapshotRevisionTracksDesiredRuntimeState(t *testing.T) {
 	require.NoError(t, SaveTaskPlugin(&v2))
 	inactiveAdded, err := GetTaskPluginSyncSnapshot()
 	require.NoError(t, err)
-	assert.Equal(t, v1Snapshot.Revision, inactiveAdded.Revision)
+	assert.EqualValues(t, v1Snapshot.Revision, inactiveAdded.Revision)
 
 	require.NoError(t, DB.Model(&v1).Update("remark", "operator note").Error)
 	remarkChanged, err := GetTaskPluginSyncSnapshot()
 	require.NoError(t, err)
-	assert.Equal(t, v1Snapshot.Revision, remarkChanged.Revision)
+	assert.EqualValues(t, v1Snapshot.Revision, remarkChanged.Revision)
 
 	require.NoError(t, ActivateTaskPlugin("revision-probe", "2.0.0"))
 	v2Snapshot, err := GetTaskPluginSyncSnapshot()
 	require.NoError(t, err)
 	require.Len(t, v2Snapshot.Plugins, 1)
-	assert.Equal(t, "2.0.0", v2Snapshot.Plugins[0].Version)
+	assert.EqualValues(t, "2.0.0", v2Snapshot.Plugins[0].Version)
 	assert.NotEqual(t, v1Snapshot.Revision, v2Snapshot.Revision)
 
 	require.NoError(t, SetTaskPluginEnabled("revision-probe", false))

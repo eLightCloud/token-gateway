@@ -98,11 +98,11 @@ func TestPricingAdvancedCustomUsesConfiguredEndpointTypes(t *testing.T) {
 
 	byModel := pricingEndpointTypesByModel(t)
 
-	assert.Equal(t, []constant.EndpointType{
+	assert.EqualValues(t, []constant.EndpointType{
 		constant.EndpointTypeOpenAI,
 		constant.EndpointTypeOpenAIResponse,
 	}, byModel["gemini-2.5-flash"])
-	assert.Equal(t, []constant.EndpointType{
+	assert.EqualValues(t, []constant.EndpointType{
 		constant.EndpointTypeOpenAI,
 	}, byModel["gpt-4o"])
 }
@@ -130,7 +130,7 @@ func TestPricingModelMetadataEndpointsMergeWithAdvancedCustomInference(t *testin
 
 	byModel := pricingEndpointTypesByModel(t)
 
-	assert.Equal(t, []constant.EndpointType{
+	assert.EqualValues(t, []constant.EndpointType{
 		constant.EndpointTypeOpenAIResponse,
 		constant.EndpointTypeOpenAI,
 	}, byModel["gemini-2.5-flash"])
@@ -159,7 +159,7 @@ func TestPricingModelMetadataEndpointsCanProvideEndpointWithoutChannelInference(
 
 	byModel := pricingEndpointTypesByModel(t)
 
-	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, byModel["metadata-only-model"])
+	assert.EqualValues(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, byModel["metadata-only-model"])
 }
 
 func TestPricingAdvancedCustomMissingConfigFallsBackToChannelType(t *testing.T) {
@@ -170,7 +170,7 @@ func TestPricingAdvancedCustomMissingConfigFallsBackToChannelType(t *testing.T) 
 
 	byModel := pricingEndpointTypesByModel(t)
 
-	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, byModel["gpt-4o"])
+	assert.EqualValues(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, byModel["gpt-4o"])
 }
 
 func TestPricingNativeChannelEndpointTypesUnchanged(t *testing.T) {
@@ -185,9 +185,9 @@ func TestPricingNativeChannelEndpointTypesUnchanged(t *testing.T) {
 
 	byModel := pricingEndpointTypesByModel(t)
 
-	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, byModel["gpt-4o"])
-	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeGemini, constant.EndpointTypeOpenAI}, byModel["gemini-2.5-flash"])
-	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeAnthropic, constant.EndpointTypeOpenAI}, byModel["claude-3-5-sonnet"])
+	assert.EqualValues(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, byModel["gpt-4o"])
+	assert.EqualValues(t, []constant.EndpointType{constant.EndpointTypeGemini, constant.EndpointTypeOpenAI}, byModel["gemini-2.5-flash"])
+	assert.EqualValues(t, []constant.EndpointType{constant.EndpointTypeAnthropic, constant.EndpointTypeOpenAI}, byModel["claude-3-5-sonnet"])
 }
 
 func TestInitChannelCacheInvalidatesPricingCache(t *testing.T) {
@@ -223,7 +223,7 @@ func TestInitChannelCacheInvalidatesPricingCache(t *testing.T) {
 	InitChannelCache()
 
 	updated := pricingEndpointTypesByModel(t)
-	assert.Equal(t, []constant.EndpointType{
+	assert.EqualValues(t, []constant.EndpointType{
 		constant.EndpointTypeOpenAI,
 		constant.EndpointTypeOpenAIResponse,
 	}, updated["gemini-3.5-flash"])
@@ -252,7 +252,7 @@ func TestInitChannelCacheInvalidatesStartupPricingBuiltBeforeChannelCache(t *tes
 	InitChannelCache()
 
 	rebuiltByModel := pricingEndpointTypesFromPricing(GetPricing())
-	assert.Equal(t, []constant.EndpointType{
+	assert.EqualValues(t, []constant.EndpointType{
 		constant.EndpointTypeOpenAI,
 		constant.EndpointTypeOpenAIResponse,
 	}, rebuiltByModel["gemini-3.5-flash"])
@@ -276,7 +276,7 @@ func TestCacheUpdateChannelSyncsAdvancedCustomConfig(t *testing.T) {
 	CacheUpdateChannel(channel)
 
 	require.NotNil(t, channel2advancedCustomConfig[401])
-	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIResponse}, channel2advancedCustomConfig[401].SupportedEndpointTypesForModel("gemini-3.5-flash"))
+	assert.EqualValues(t, []constant.EndpointType{constant.EndpointTypeOpenAIResponse}, channel2advancedCustomConfig[401].SupportedEndpointTypesForModel("gemini-3.5-flash"))
 
 	channel.SetOtherSettings(pricingEndpointAdvancedCustomConfig(dto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",
@@ -285,7 +285,7 @@ func TestCacheUpdateChannelSyncsAdvancedCustomConfig(t *testing.T) {
 	CacheUpdateChannel(channel)
 
 	require.NotNil(t, channel2advancedCustomConfig[401])
-	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, channel2advancedCustomConfig[401].SupportedEndpointTypesForModel("gemini-3.5-flash"))
+	assert.EqualValues(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, channel2advancedCustomConfig[401].SupportedEndpointTypesForModel("gemini-3.5-flash"))
 
 	channel.Type = constant.ChannelTypeOpenAI
 	CacheUpdateChannel(channel)

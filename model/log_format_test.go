@@ -61,7 +61,7 @@ func TestTaskPluginLogVisibilityIsRoleSeparated(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, parsed, "admin_info")
 		assert.NotContains(t, parsed, "root_info")
-		assert.Equal(t, 1.25, parsed["model_price"])
+		assert.EqualValues(t, 1.25, parsed["model_price"])
 	})
 
 	t.Run("admin", func(t *testing.T) {

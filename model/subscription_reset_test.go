@@ -66,11 +66,11 @@ func TestAdminResetUserSubscriptionsByPlanResetsAllActiveMatchesAndAdvancesTime(
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, plan.Id, result.PlanId)
-	assert.Equal(t, 2, result.MatchedCount)
-	assert.Equal(t, 2, result.ResetCount)
-	assert.Equal(t, 1, result.UserCount)
-	assert.Equal(t, []int{101}, result.AffectedUserIds)
+	assert.EqualValues(t, plan.Id, result.PlanId)
+	assert.EqualValues(t, 2, result.MatchedCount)
+	assert.EqualValues(t, 2, result.ResetCount)
+	assert.EqualValues(t, 1, result.UserCount)
+	assert.EqualValues(t, []int{101}, result.AffectedUserIds)
 	assert.True(t, result.AdvanceResetTime)
 
 	for _, id := range []int{9201, 9202} {
@@ -78,7 +78,7 @@ func TestAdminResetUserSubscriptionsByPlanResetsAllActiveMatchesAndAdvancesTime(
 		assert.Zero(t, sub.AmountUsed)
 		assert.GreaterOrEqual(t, sub.LastResetTime, beforeReset)
 		assert.LessOrEqual(t, sub.LastResetTime, afterReset)
-		assert.Equal(t, calcNextResetTime(time.Unix(sub.LastResetTime, 0), plan, sub.EndTime), sub.NextResetTime)
+		assert.EqualValues(t, calcNextResetTime(time.Unix(sub.LastResetTime, 0), plan, sub.EndTime), sub.NextResetTime)
 	}
 	assert.EqualValues(t, 60, getSubscriptionResetSub(t, 9203).AmountUsed)
 	assert.EqualValues(t, 700, getSubscriptionResetSub(t, 9204).AmountUsed)
@@ -111,8 +111,8 @@ func TestAdminResetUserSubscriptionsByPlanKeepsResetTimes(t *testing.T) {
 	assert.False(t, result.AdvanceResetTime)
 	sub := getSubscriptionResetSub(t, 9302)
 	assert.Zero(t, sub.AmountUsed)
-	assert.Equal(t, lastReset, sub.LastResetTime)
-	assert.Equal(t, nextReset, sub.NextResetTime)
+	assert.EqualValues(t, lastReset, sub.LastResetTime)
+	assert.EqualValues(t, nextReset, sub.NextResetTime)
 }
 
 func TestAdminResetUserSubscriptionsByPlanNoActiveMatchReturnsError(t *testing.T) {
@@ -163,10 +163,10 @@ func TestAdminResetPlanSubscriptionsResetsAllActiveUsers(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, 3, result.MatchedCount)
-	assert.Equal(t, 3, result.ResetCount)
-	assert.Equal(t, 2, result.UserCount)
-	assert.Equal(t, []int{401, 402}, result.AffectedUserIds)
+	assert.EqualValues(t, 3, result.MatchedCount)
+	assert.EqualValues(t, 3, result.ResetCount)
+	assert.EqualValues(t, 2, result.UserCount)
+	assert.EqualValues(t, []int{401, 402}, result.AffectedUserIds)
 	for _, id := range []int{9502, 9503, 9504} {
 		sub := getSubscriptionResetSub(t, id)
 		assert.Zero(t, sub.AmountUsed)

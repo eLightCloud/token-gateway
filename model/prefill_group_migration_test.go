@@ -37,7 +37,7 @@ func testPrefillGroupMigrationNonPostgreSQL(t *testing.T, db *gorm.DB) {
 
 	var preserved PrefillGroup
 	require.NoError(t, tableDB.Where("name = ?", "preserved-name").First(&preserved).Error)
-	assert.Equal(t, "preserve me", preserved.Description)
+	assert.EqualValues(t, "preserve me", preserved.Description)
 	assert.True(t, tableDB.Migrator().HasIndex(&PrefillGroup{}, prefillGroupNameIndex))
 }
 
@@ -234,8 +234,8 @@ func TestMigratePrefillGroupUniquenessPostgreSQL(t *testing.T) {
 
 			var preserved PrefillGroup
 			require.NoError(t, tx.First(&preserved, original.Id).Error)
-			assert.Equal(t, original.Name, preserved.Name)
-			assert.Equal(t, original.Description, preserved.Description)
+			assert.EqualValues(t, original.Name, preserved.Name)
+			assert.EqualValues(t, original.Description, preserved.Description)
 
 			var globalConstraintCount int64
 			require.NoError(t, tx.Raw(`

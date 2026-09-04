@@ -169,9 +169,9 @@ func TestFilterCandidateIDs(t *testing.T) {
 			if testCase.wantKept == nil {
 				assert.Nil(t, kept)
 			} else {
-				assert.Equal(t, testCase.wantKept, kept)
+				assert.EqualValues(t, testCase.wantKept, kept)
 			}
-			assert.Equal(t, testCase.wantEmpty, emptiedBy)
+			assert.EqualValues(t, testCase.wantEmpty, emptiedBy)
 		})
 	}
 }
@@ -192,27 +192,27 @@ func TestChannelSatisfiesFilters(t *testing.T) {
 
 	ok, kind := ChannelSatisfiesFilters(nil, "gpt-4", nil)
 	assert.False(t, ok)
-	assert.Equal(t, dto.ChannelFilterKind(""), kind)
+	assert.EqualValues(t, dto.ChannelFilterKind(""), kind)
 
 	ok, kind = ChannelSatisfiesFilters(alpha, "shared", identityFilters("alpha", nil))
 	require.True(t, ok)
-	assert.Equal(t, dto.ChannelFilterKind(""), kind)
+	assert.EqualValues(t, dto.ChannelFilterKind(""), kind)
 
 	ok, kind = ChannelSatisfiesFilters(alpha, "shared", identityFilters("beta", nil))
 	assert.False(t, ok)
-	assert.Equal(t, dto.FilterTaskPluginIdentity, kind)
+	assert.EqualValues(t, dto.FilterTaskPluginIdentity, kind)
 
 	ok, kind = ChannelSatisfiesFilters(ordinary, "gpt-4", []dto.ChannelFilter{{
 		Kind:        dto.FilterRequestPath,
 		RequestPath: "/v1/chat/completions",
 	}})
 	require.True(t, ok)
-	assert.Equal(t, dto.ChannelFilterKind(""), kind)
+	assert.EqualValues(t, dto.ChannelFilterKind(""), kind)
 
 	ok, kind = ChannelSatisfiesFilters(custom, "gpt-4", []dto.ChannelFilter{{
 		Kind:        dto.FilterRequestPath,
 		RequestPath: "/v1/responses",
 	}})
 	assert.False(t, ok)
-	assert.Equal(t, dto.FilterRequestPath, kind)
+	assert.EqualValues(t, dto.FilterRequestPath, kind)
 }

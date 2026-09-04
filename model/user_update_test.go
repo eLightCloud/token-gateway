@@ -79,14 +79,14 @@ func TestUserUpdateDoesNotOverwriteConcurrentAccountingOrTokenChanges(t *testing
 
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
-	assert.Equal(t, "after", got.DisplayName)
-	assert.Equal(t, 600, got.Quota)
-	assert.Equal(t, 420, got.UsedQuota)
-	assert.Equal(t, 4, got.RequestCount)
-	assert.Equal(t, 3, got.AffCount)
-	assert.Equal(t, 300, got.AffQuota)
-	assert.Equal(t, 1700, got.AffHistoryQuota)
-	assert.Equal(t, "rotated-token", got.GetAccessToken())
+	assert.EqualValues(t, "after", got.DisplayName)
+	assert.EqualValues(t, 600, got.Quota)
+	assert.EqualValues(t, 420, got.UsedQuota)
+	assert.EqualValues(t, 4, got.RequestCount)
+	assert.EqualValues(t, 3, got.AffCount)
+	assert.EqualValues(t, 300, got.AffQuota)
+	assert.EqualValues(t, 1700, got.AffHistoryQuota)
+	assert.EqualValues(t, "rotated-token", got.GetAccessToken())
 }
 
 func TestUsageAccountingSupportsSignedDirectAndBatchDeltas(t *testing.T) {
@@ -118,11 +118,11 @@ func TestUsageAccountingSupportsSignedDirectAndBatchDeltas(t *testing.T) {
 
 	var got User
 	require.NoError(t, DB.Select("used_quota", "request_count").First(&got, user.Id).Error)
-	assert.Equal(t, 850, got.UsedQuota)
-	assert.Equal(t, 3, got.RequestCount)
+	assert.EqualValues(t, 850, got.UsedQuota)
+	assert.EqualValues(t, 3, got.RequestCount)
 	var gotChannel Channel
 	require.NoError(t, DB.Select("used_quota").First(&gotChannel, channel.Id).Error)
-	assert.Equal(t, int64(850), gotChannel.UsedQuota)
+	assert.EqualValues(t, int64(850), gotChannel.UsedQuota)
 
 	common.BatchUpdateEnabled = true
 	UpdateUserUsedQuota(user.Id, 400)
@@ -131,17 +131,17 @@ func TestUsageAccountingSupportsSignedDirectAndBatchDeltas(t *testing.T) {
 	UpdateChannelUsedQuota(channel.Id, -100)
 
 	require.NoError(t, DB.Select("used_quota", "request_count").First(&got, user.Id).Error)
-	assert.Equal(t, 850, got.UsedQuota, "batch deltas must remain queued until flush")
-	assert.Equal(t, 3, got.RequestCount)
+	assert.EqualValues(t, 850, got.UsedQuota, "batch deltas must remain queued until flush")
+	assert.EqualValues(t, 3, got.RequestCount)
 	require.NoError(t, DB.Select("used_quota").First(&gotChannel, channel.Id).Error)
-	assert.Equal(t, int64(850), gotChannel.UsedQuota, "batch deltas must remain queued until flush")
+	assert.EqualValues(t, int64(850), gotChannel.UsedQuota, "batch deltas must remain queued until flush")
 
 	batchUpdate()
 	require.NoError(t, DB.Select("used_quota", "request_count").First(&got, user.Id).Error)
-	assert.Equal(t, 1150, got.UsedQuota)
-	assert.Equal(t, 3, got.RequestCount)
+	assert.EqualValues(t, 1150, got.UsedQuota)
+	assert.EqualValues(t, 3, got.RequestCount)
 	require.NoError(t, DB.Select("used_quota").First(&gotChannel, channel.Id).Error)
-	assert.Equal(t, int64(1150), gotChannel.UsedQuota)
+	assert.EqualValues(t, int64(1150), gotChannel.UsedQuota)
 }
 
 func TestUpdateUserAccessTokenOnlyUpdatesAccessToken(t *testing.T) {
@@ -169,11 +169,11 @@ func TestUpdateUserAccessTokenOnlyUpdatesAccessToken(t *testing.T) {
 
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
-	assert.Equal(t, "rotated-token", got.GetAccessToken())
-	assert.Equal(t, "concurrent-update", got.DisplayName)
-	assert.Equal(t, 1500, got.Quota)
-	assert.Equal(t, 300, got.AffQuota)
-	assert.Equal(t, 1200, got.AffHistoryQuota)
+	assert.EqualValues(t, "rotated-token", got.GetAccessToken())
+	assert.EqualValues(t, "concurrent-update", got.DisplayName)
+	assert.EqualValues(t, 1500, got.Quota)
+	assert.EqualValues(t, 300, got.AffQuota)
+	assert.EqualValues(t, 1200, got.AffHistoryQuota)
 }
 
 func TestUpdateUserAccessTokenRejectsSoftDeletedUser(t *testing.T) {
@@ -194,7 +194,7 @@ func TestUpdateUserAccessTokenRejectsSoftDeletedUser(t *testing.T) {
 
 	var got User
 	require.NoError(t, DB.Unscoped().First(&got, user.Id).Error)
-	assert.Equal(t, "old-token", got.GetAccessToken())
+	assert.EqualValues(t, "old-token", got.GetAccessToken())
 }
 
 func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
@@ -221,10 +221,10 @@ func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
-	assert.Equal(t, 750, got.Quota)
-	assert.Equal(t, 270, got.UsedQuota)
-	assert.Equal(t, 4, got.RequestCount)
-	assert.Equal(t, "zh", got.GetSetting().Language)
+	assert.EqualValues(t, 750, got.Quota)
+	assert.EqualValues(t, 270, got.UsedQuota)
+	assert.EqualValues(t, 4, got.RequestCount)
+	assert.EqualValues(t, "zh", got.GetSetting().Language)
 }
 
 func TestEnsureEmailAvailableRejectsExistingEmailCaseInsensitive(t *testing.T) {
@@ -242,7 +242,7 @@ func TestEnsureEmailAvailableRejectsExistingEmailCaseInsensitive(t *testing.T) {
 
 	user, err := GetUniqueUserByEmail("TAKEN@example.com")
 	require.NoError(t, err)
-	assert.Equal(t, "existing", user.Username)
+	assert.EqualValues(t, "existing", user.Username)
 
 	require.NoError(t, EnsureEmailAvailable("taken@example.com", user.Id))
 }
@@ -302,10 +302,10 @@ func TestUpdateUserBindColumnOnlyTouchesTheBindingColumn(t *testing.T) {
 
 	reloaded, err := GetUserById(user.Id, true)
 	require.NoError(t, err)
-	assert.Equal(t, "gh-12345", reloaded.GitHubId)
-	assert.Equal(t, common.RoleAdminUser, reloaded.Role)
-	assert.Equal(t, common.UserStatusEnabled, reloaded.Status)
-	assert.Equal(t, "vip", reloaded.Group)
+	assert.EqualValues(t, "gh-12345", reloaded.GitHubId)
+	assert.EqualValues(t, common.RoleAdminUser, reloaded.Role)
+	assert.EqualValues(t, common.UserStatusEnabled, reloaded.Status)
+	assert.EqualValues(t, "vip", reloaded.Group)
 }
 
 func TestUpdateUserBindColumnPreservesRestrictiveChange(t *testing.T) {
@@ -318,8 +318,8 @@ func TestUpdateUserBindColumnPreservesRestrictiveChange(t *testing.T) {
 
 	reloaded, err := GetUserById(user.Id, true)
 	require.NoError(t, err)
-	assert.Equal(t, "wx-open-id", reloaded.WeChatId)
-	assert.Equal(t, common.UserStatusDisabled, reloaded.Status)
+	assert.EqualValues(t, "wx-open-id", reloaded.WeChatId)
+	assert.EqualValues(t, common.UserStatusDisabled, reloaded.Status)
 }
 
 func TestUpdateUserBindColumnRejectsNonWhitelistedColumns(t *testing.T) {
@@ -378,8 +378,8 @@ func TestResetUserPasswordByEmailRequiresSingleActiveMatch(t *testing.T) {
 	var duplicates []User
 	require.NoError(t, DB.Where("LOWER(email) = ?", "legacy@example.com").Order("username asc").Find(&duplicates).Error)
 	require.Len(t, duplicates, 2)
-	assert.Equal(t, "old-1", duplicates[0].Password)
-	assert.Equal(t, "old-2", duplicates[1].Password)
+	assert.EqualValues(t, "old-1", duplicates[0].Password)
+	assert.EqualValues(t, "old-2", duplicates[1].Password)
 
 	require.NoError(t, DB.Create(&User{
 		Username: "unique",

@@ -53,9 +53,9 @@ func TestMigrateRetiredFrontendOptionsMigratesValidValuesIdempotently(t *testing
 	require.NoError(t, db.Create(&legacy).Error)
 
 	require.NoError(t, MigrateRetiredFrontendOptions())
-	assert.Equal(t, "default", requireOptionValue(t, db, retiredThemeOptionKey))
+	assert.EqualValues(t, "default", requireOptionValue(t, db, retiredThemeOptionKey))
 	assert.JSONEq(t, legacy[1].Value, requireOptionValue(t, db, "console_setting.api_info"))
-	assert.Equal(t, legacy[2].Value, requireOptionValue(t, db, "console_setting.announcements"))
+	assert.EqualValues(t, legacy[2].Value, requireOptionValue(t, db, "console_setting.announcements"))
 	assert.JSONEq(t, `[{"question":"Question","answer":"Answer"}]`, requireOptionValue(t, db, "console_setting.faq"))
 	assert.JSONEq(t, `[{
 		"id":1,"categoryName":"old","url":"https://status.example.com","slug":"status","description":""
@@ -111,11 +111,11 @@ func TestMigrateRetiredFrontendOptionsPreservesMalformedValuesAndContinues(t *te
 	require.NoError(t, db.Create(&legacy).Error)
 
 	require.NoError(t, MigrateRetiredFrontendOptions())
-	assert.Equal(t, `{invalid`, requireOptionValue(t, db, "ApiInfo"))
+	assert.EqualValues(t, `{invalid`, requireOptionValue(t, db, "ApiInfo"))
 	requireOptionMissing(t, db, "console_setting.api_info")
 	requireOptionMissing(t, db, "FAQ")
 	assert.JSONEq(t, legacy[1].Value, requireOptionValue(t, db, "console_setting.faq"))
-	assert.Equal(t, "https://status.example.com", requireOptionValue(t, db, "UptimeKumaUrl"))
+	assert.EqualValues(t, "https://status.example.com", requireOptionValue(t, db, "UptimeKumaUrl"))
 	requireOptionMissing(t, db, "console_setting.uptime_kuma_groups")
 }
 
@@ -125,7 +125,7 @@ func TestMigrateRetiredFrontendOptionsPreservesMixedInvalidFAQ(t *testing.T) {
 	require.NoError(t, db.Create(&Option{Key: "FAQ", Value: legacyFAQ}).Error)
 
 	require.NoError(t, MigrateRetiredFrontendOptions())
-	assert.Equal(t, legacyFAQ, requireOptionValue(t, db, "FAQ"))
+	assert.EqualValues(t, legacyFAQ, requireOptionValue(t, db, "FAQ"))
 	requireOptionMissing(t, db, "console_setting.faq")
 }
 
@@ -141,8 +141,8 @@ func TestMigrateRetiredFrontendOptionsKeepsAuthoritativeTargets(t *testing.T) {
 	require.NoError(t, db.Create(&options).Error)
 
 	require.NoError(t, MigrateRetiredFrontendOptions())
-	assert.Equal(t, options[1].Value, requireOptionValue(t, db, "console_setting.api_info"))
-	assert.Equal(t, options[4].Value, requireOptionValue(t, db, "console_setting.uptime_kuma_groups"))
+	assert.EqualValues(t, options[1].Value, requireOptionValue(t, db, "console_setting.api_info"))
+	assert.EqualValues(t, options[4].Value, requireOptionValue(t, db, "console_setting.uptime_kuma_groups"))
 	for _, key := range []string{"ApiInfo", "UptimeKumaUrl", "UptimeKumaSlug"} {
 		requireOptionMissing(t, db, key)
 	}
@@ -174,7 +174,7 @@ func TestRetiredThemeOptionIsPersistedButNotPublished(t *testing.T) {
 	common.OptionMap = map[string]string{}
 
 	require.NoError(t, UpdateOption(retiredThemeOptionKey, "default"))
-	assert.Equal(t, "default", requireOptionValue(t, db, retiredThemeOptionKey))
+	assert.EqualValues(t, "default", requireOptionValue(t, db, retiredThemeOptionKey))
 	_, published := common.OptionMap[retiredThemeOptionKey]
 	assert.False(t, published)
 }

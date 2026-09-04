@@ -43,8 +43,8 @@ func TestPricingCarriesTaskUsageSchemaAndRefreshesWithPluginGeneration(t *testin
 	initialPricing := pricingByModel(GetPricing())
 	require.Contains(t, initialPricing, "pricing-usage-model")
 	require.Contains(t, initialPricing, "ordinary-model")
-	assert.Equal(t, "second", initialPricing["pricing-usage-model"].BillingUsageSchema["seconds"].Unit)
-	assert.Equal(t, "Estimated duration.", initialPricing["pricing-usage-model"].BillingUsageSchema["seconds"].Description["en"])
+	assert.EqualValues(t, "second", initialPricing["pricing-usage-model"].BillingUsageSchema["seconds"].Unit)
+	assert.EqualValues(t, "Estimated duration.", initialPricing["pricing-usage-model"].BillingUsageSchema["seconds"].Description["en"])
 	assert.Nil(t, initialPricing["ordinary-model"].BillingUsageSchema)
 
 	updatedSource := pricingUsagePluginSource("1.1.0", `{
@@ -57,8 +57,8 @@ func TestPricingCarriesTaskUsageSchemaAndRefreshesWithPluginGeneration(t *testin
 
 	refreshedPricing := pricingByModel(GetPricing())
 	require.Len(t, refreshedPricing["pricing-usage-model"].BillingUsageSchema, 2)
-	assert.Equal(t, "Measured duration.", refreshedPricing["pricing-usage-model"].BillingUsageSchema["seconds"].Description["en"])
-	assert.Equal(t, "count", refreshedPricing["pricing-usage-model"].BillingUsageSchema["clips"].Unit)
+	assert.EqualValues(t, "Measured duration.", refreshedPricing["pricing-usage-model"].BillingUsageSchema["seconds"].Description["en"])
+	assert.EqualValues(t, "count", refreshedPricing["pricing-usage-model"].BillingUsageSchema["clips"].Unit)
 }
 
 func TestPricingAliasCarriesPluginUsageSchemaAndTailExpr(t *testing.T) {
@@ -103,12 +103,12 @@ func TestPricingAliasCarriesPluginUsageSchemaAndTailExpr(t *testing.T) {
 	pricing := pricingByModel(GetPricing())
 	require.Contains(t, pricing, "alias-model")
 	require.Contains(t, pricing, "pricing-usage-model")
-	assert.Equal(t, "second", pricing["alias-model"].BillingUsageSchema["seconds"].Unit)
-	assert.Equal(t, "Estimated duration.", pricing["alias-model"].BillingUsageSchema["seconds"].Description["en"])
-	assert.Equal(t, "tiered_expr", pricing["alias-model"].BillingMode)
-	assert.Equal(t, `u("seconds")`, pricing["alias-model"].BillingExpr)
-	assert.Equal(t, "tiered_expr", pricing["pricing-usage-model"].BillingMode)
-	assert.Equal(t, `u("seconds")`, pricing["pricing-usage-model"].BillingExpr)
+	assert.EqualValues(t, "second", pricing["alias-model"].BillingUsageSchema["seconds"].Unit)
+	assert.EqualValues(t, "Estimated duration.", pricing["alias-model"].BillingUsageSchema["seconds"].Description["en"])
+	assert.EqualValues(t, "tiered_expr", pricing["alias-model"].BillingMode)
+	assert.EqualValues(t, `u("seconds")`, pricing["alias-model"].BillingExpr)
+	assert.EqualValues(t, "tiered_expr", pricing["pricing-usage-model"].BillingMode)
+	assert.EqualValues(t, `u("seconds")`, pricing["pricing-usage-model"].BillingExpr)
 
 	ownMapping := `{"alias-own-expr":"pricing-usage-model"}`
 	own := &Channel{
@@ -126,8 +126,8 @@ func TestPricingAliasCarriesPluginUsageSchemaAndTailExpr(t *testing.T) {
 	InvalidatePricingCache()
 
 	refreshed := pricingByModel(GetPricing())
-	assert.Equal(t, `u("seconds") * 2`, refreshed["alias-own-expr"].BillingExpr)
-	assert.Equal(t, "second", refreshed["alias-own-expr"].BillingUsageSchema["seconds"].Unit)
+	assert.EqualValues(t, `u("seconds") * 2`, refreshed["alias-own-expr"].BillingExpr)
+	assert.EqualValues(t, "second", refreshed["alias-own-expr"].BillingUsageSchema["seconds"].Unit)
 }
 
 func pricingByModel(pricings []Pricing) map[string]Pricing {

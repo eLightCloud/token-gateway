@@ -42,13 +42,13 @@ func TestTokenBillUpstreamPerspectiveUsesConsumptionFactsOnly(t *testing.T) {
 
 	summary, err := GetTokenBillSummary(filters)
 	require.NoError(t, err)
-	assert.Equal(t, TokenBillPerspectiveUpstream, summary.Perspective)
-	assert.Equal(t, int64(150), summary.NetQuota)
-	assert.Equal(t, int64(150), summary.ConsumeQuota)
-	assert.Equal(t, int64(0), summary.RefundQuota)
-	assert.Equal(t, int64(2), summary.RecordCount)
-	assert.Equal(t, int64(15), summary.PromptTokens)
-	assert.Equal(t, int64(20), summary.CompletionTokens)
+	assert.EqualValues(t, TokenBillPerspectiveUpstream, summary.Perspective)
+	assert.EqualValues(t, int64(150), summary.NetQuota)
+	assert.EqualValues(t, int64(150), summary.ConsumeQuota)
+	assert.EqualValues(t, int64(0), summary.RefundQuota)
+	assert.EqualValues(t, int64(2), summary.RecordCount)
+	assert.EqualValues(t, int64(15), summary.PromptTokens)
+	assert.EqualValues(t, int64(20), summary.CompletionTokens)
 }
 
 func TestTokenBillUpstreamPerspectiveKeepsChannelsSeparateWithinCurrentAddress(t *testing.T) {
@@ -63,32 +63,32 @@ func TestTokenBillUpstreamPerspectiveKeepsChannelsSeparateWithinCurrentAddress(t
 	filters.Perspective = TokenBillPerspectiveAPI
 	summary, err := GetTokenBillSummary(filters)
 	require.NoError(t, err)
-	assert.Equal(t, int64(175), summary.NetQuota)
-	assert.Equal(t, int64(3), summary.RecordCount)
+	assert.EqualValues(t, int64(175), summary.NetQuota)
+	assert.EqualValues(t, int64(3), summary.RecordCount)
 
 	groups, err := GetTokenBillGroups(filters, TokenBillDimensionUpstreamChannel, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, groups.Items, 3)
-	assert.Equal(t, int64(3), groups.Total)
-	assert.Equal(t, "https://api.example.com/v1", groups.Items[0].APIAddress)
-	assert.Equal(t, 7, groups.Items[0].ChannelId)
-	assert.Equal(t, int64(100), groups.Items[0].Quota)
-	assert.Equal(t, 0, groups.Items[1].ChannelId)
+	assert.EqualValues(t, int64(3), groups.Total)
+	assert.EqualValues(t, "https://api.example.com/v1", groups.Items[0].APIAddress)
+	assert.EqualValues(t, 7, groups.Items[0].ChannelId)
+	assert.EqualValues(t, int64(100), groups.Items[0].Quota)
+	assert.EqualValues(t, 0, groups.Items[1].ChannelId)
 	assert.Empty(t, groups.Items[1].APIAddress)
-	assert.Equal(t, "https://api.example.com/v1", groups.Items[2].APIAddress)
-	assert.Equal(t, 8, groups.Items[2].ChannelId)
-	assert.Equal(t, int64(25), groups.Items[2].Quota)
+	assert.EqualValues(t, "https://api.example.com/v1", groups.Items[2].APIAddress)
+	assert.EqualValues(t, 8, groups.Items[2].ChannelId)
+	assert.EqualValues(t, int64(25), groups.Items[2].Quota)
 
 	modelGroups, err := GetTokenBillGroups(filters, TokenBillDimensionUpstreamModel, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, modelGroups.Items, 3)
-	assert.Equal(t, int64(3), modelGroups.Total)
-	assert.Equal(t, "https://api.example.com/v1", modelGroups.Items[0].APIAddress)
-	assert.Equal(t, 7, modelGroups.Items[0].ChannelId)
-	assert.Equal(t, "gpt-test", modelGroups.Items[0].ModelName)
-	assert.Equal(t, "https://api.example.com/v1", modelGroups.Items[2].APIAddress)
-	assert.Equal(t, 8, modelGroups.Items[2].ChannelId)
-	assert.Equal(t, "gpt-test", modelGroups.Items[2].ModelName)
+	assert.EqualValues(t, int64(3), modelGroups.Total)
+	assert.EqualValues(t, "https://api.example.com/v1", modelGroups.Items[0].APIAddress)
+	assert.EqualValues(t, 7, modelGroups.Items[0].ChannelId)
+	assert.EqualValues(t, "gpt-test", modelGroups.Items[0].ModelName)
+	assert.EqualValues(t, "https://api.example.com/v1", modelGroups.Items[2].APIAddress)
+	assert.EqualValues(t, 8, modelGroups.Items[2].ChannelId)
+	assert.EqualValues(t, "gpt-test", modelGroups.Items[2].ModelName)
 
 	filters.APIAddress = groups.Items[0].APIAddress
 	filters.APIAddressSet = true
@@ -99,8 +99,8 @@ func TestTokenBillUpstreamPerspectiveKeepsChannelsSeparateWithinCurrentAddress(t
 	page, err := GetTokenBillEntries(filters, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, page.Items, 1)
-	assert.Equal(t, "https://api.example.com/v1", page.Items[0].ChannelAPIAddress)
-	assert.Equal(t, 7, page.Items[0].ChannelId)
+	assert.EqualValues(t, "https://api.example.com/v1", page.Items[0].ChannelAPIAddress)
+	assert.EqualValues(t, 7, page.Items[0].ChannelId)
 
 	filters.APIAddress = TokenBillUnknownAPIAddress
 	filters.ChannelId = 0
@@ -109,7 +109,7 @@ func TestTokenBillUpstreamPerspectiveKeepsChannelsSeparateWithinCurrentAddress(t
 	page, err = GetTokenBillEntries(filters, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, page.Items, 1)
-	assert.Equal(t, "req-other", page.Items[0].RequestId)
+	assert.EqualValues(t, "req-other", page.Items[0].RequestId)
 	assert.Empty(t, page.Items[0].ChannelAPIAddress)
 }
 
@@ -124,7 +124,7 @@ func TestTokenBillUpstreamModelPreservesAddressChannelAndModel(t *testing.T) {
 
 	groups, err := GetTokenBillGroups(filters, TokenBillDimensionUpstreamModel, 1, 20)
 	require.NoError(t, err)
-	assert.Equal(t, int64(3), groups.Total)
+	assert.EqualValues(t, int64(3), groups.Total)
 	assert.Contains(t, groups.Items, TokenBillGroupRow{
 		Key: "7\x1fhttps://api.example.com/v1\x1fgpt-test", Label: "https://api.example.com/v1",
 		ChannelId: 7, ChannelName: "Primary Channel", ModelName: "gpt-test", APIAddress: "https://api.example.com/v1",
@@ -145,7 +145,7 @@ func TestTokenBillUpstreamModelPreservesAddressChannelAndModel(t *testing.T) {
 	page, err := GetTokenBillEntries(filters, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, page.Items, 1)
-	assert.Equal(t, "req-image", page.Items[0].RequestId)
+	assert.EqualValues(t, "req-image", page.Items[0].RequestId)
 }
 
 func TestTokenBillCompositeGroupsPreserveCustomerAndChannelSubjects(t *testing.T) {
@@ -159,7 +159,7 @@ func TestTokenBillCompositeGroupsPreserveCustomerAndChannelSubjects(t *testing.T
 
 	customerModels, err := GetTokenBillGroups(filters, TokenBillDimensionUserModel, 1, 20)
 	require.NoError(t, err)
-	assert.Equal(t, int64(4), customerModels.Total)
+	assert.EqualValues(t, int64(4), customerModels.Total)
 	assert.Contains(t, customerModels.Items, TokenBillGroupRow{
 		Key: "11\x1fgpt-test", Label: "alice", UserId: 11, Username: "alice", ModelName: "gpt-test",
 		RecordCount: 1, PromptTokens: 10, CompletionTokens: 20, Quota: 100,
@@ -171,12 +171,12 @@ func TestTokenBillCompositeGroupsPreserveCustomerAndChannelSubjects(t *testing.T
 
 	customerChannels, err := GetTokenBillGroups(filters, TokenBillDimensionUserChannel, 1, 20)
 	require.NoError(t, err)
-	assert.Equal(t, int64(5), customerChannels.Total)
+	assert.EqualValues(t, int64(5), customerChannels.Total)
 
 	filters.Perspective = TokenBillPerspectiveUpstream
 	channelModels, err := GetTokenBillGroups(filters, TokenBillDimensionChannelModel, 1, 20)
 	require.NoError(t, err)
-	assert.Equal(t, int64(3), channelModels.Total)
+	assert.EqualValues(t, int64(3), channelModels.Total)
 	assert.Contains(t, channelModels.Items, TokenBillGroupRow{
 		Key: "7\x1fgpt-test", Label: "Primary Channel", ChannelId: 7, ChannelName: "Primary Channel", ModelName: "gpt-test",
 		RecordCount: 2, PromptTokens: 10, CompletionTokens: 20, Quota: 140,
@@ -193,26 +193,26 @@ func TestTokenBillGroupsProvideOverviewBeforeDetails(t *testing.T) {
 	customers, err := GetTokenBillGroups(filters, TokenBillDimensionUser, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, customers.Items, 2)
-	assert.Equal(t, int64(2), customers.Total)
-	assert.Equal(t, 11, customers.Items[0].UserId)
-	assert.Equal(t, "alice", customers.Items[0].Label)
-	assert.Equal(t, int64(70), customers.Items[0].Quota)
+	assert.EqualValues(t, int64(2), customers.Total)
+	assert.EqualValues(t, 11, customers.Items[0].UserId)
+	assert.EqualValues(t, "alice", customers.Items[0].Label)
+	assert.EqualValues(t, int64(70), customers.Items[0].Quota)
 
 	filters.Perspective = TokenBillPerspectiveUpstream
 	channels, err := GetTokenBillGroups(filters, TokenBillDimensionChannel, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, channels.Items, 2)
-	assert.Equal(t, int64(2), channels.Total)
-	assert.Equal(t, 7, channels.Items[0].ChannelId)
-	assert.Equal(t, "Primary Channel", channels.Items[0].Label)
-	assert.Equal(t, int64(100), channels.Items[0].Quota)
+	assert.EqualValues(t, int64(2), channels.Total)
+	assert.EqualValues(t, 7, channels.Items[0].ChannelId)
+	assert.EqualValues(t, "Primary Channel", channels.Items[0].Label)
+	assert.EqualValues(t, int64(100), channels.Items[0].Quota)
 
 	models, err := GetTokenBillGroups(filters, TokenBillDimensionChannelModel, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, models.Items, 2)
-	assert.Equal(t, "gpt-test", models.Items[0].ModelName)
-	assert.Equal(t, 7, models.Items[0].ChannelId)
-	assert.Equal(t, int64(100), models.Items[0].Quota)
+	assert.EqualValues(t, "gpt-test", models.Items[0].ModelName)
+	assert.EqualValues(t, 7, models.Items[0].ChannelId)
+	assert.EqualValues(t, int64(100), models.Items[0].Quota)
 }
 
 func TestTokenBillDetailsCanFilterUnattributedGroups(t *testing.T) {
@@ -224,7 +224,7 @@ func TestTokenBillDetailsCanFilterUnattributedGroups(t *testing.T) {
 	page, err := GetTokenBillEntries(filters, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, page.Items, 1)
-	assert.Equal(t, "req-other", page.Items[0].RequestId)
+	assert.EqualValues(t, "req-other", page.Items[0].RequestId)
 
 	filters.ChannelIdSet = false
 	filters.Perspective = TokenBillPerspectiveCustomer
@@ -233,7 +233,7 @@ func TestTokenBillDetailsCanFilterUnattributedGroups(t *testing.T) {
 	page, err = GetTokenBillEntries(filters, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, page.Items, 1)
-	assert.Equal(t, "req-refund", page.Items[0].RequestId)
+	assert.EqualValues(t, "req-refund", page.Items[0].RequestId)
 }
 
 func TestTokenBillSummaryUsesOnlyExistingBillingFacts(t *testing.T) {
@@ -241,12 +241,12 @@ func TestTokenBillSummaryUsesOnlyExistingBillingFacts(t *testing.T) {
 
 	summary, err := GetTokenBillSummary(filters)
 	require.NoError(t, err)
-	assert.Equal(t, int64(120), summary.NetQuota)
-	assert.Equal(t, int64(150), summary.ConsumeQuota)
-	assert.Equal(t, int64(-30), summary.RefundQuota)
-	assert.Equal(t, int64(3), summary.RecordCount)
-	assert.Equal(t, int64(15), summary.PromptTokens)
-	assert.Equal(t, int64(20), summary.CompletionTokens)
+	assert.EqualValues(t, int64(120), summary.NetQuota)
+	assert.EqualValues(t, int64(150), summary.ConsumeQuota)
+	assert.EqualValues(t, int64(-30), summary.RefundQuota)
+	assert.EqualValues(t, int64(3), summary.RecordCount)
+	assert.EqualValues(t, int64(15), summary.PromptTokens)
+	assert.EqualValues(t, int64(20), summary.CompletionTokens)
 	var consumeQuota int64
 	require.NoError(t, LOG_DB.Model(&Log{}).
 		Where("created_at >= ? AND created_at < ?", 100, 200).
@@ -257,12 +257,12 @@ func TestTokenBillSummaryUsesOnlyExistingBillingFacts(t *testing.T) {
 		Where("created_at >= ? AND created_at < ?", 100, 200).
 		Where("type = ?", LogTypeRefund).
 		Select("COALESCE(sum(quota), 0)").Scan(&refundQuota).Error)
-	assert.Equal(t, consumeQuota-refundQuota, summary.NetQuota)
-	assert.Equal(t, []TokenBillFilterOption{
+	assert.EqualValues(t, consumeQuota-refundQuota, summary.NetQuota)
+	assert.EqualValues(t, []TokenBillFilterOption{
 		{Value: "gpt-other", Label: "gpt-other"},
 		{Value: "gpt-test", Label: "gpt-test"},
 	}, summary.FilterOptions.Models)
-	assert.Equal(t, []TokenBillFilterOption{
+	assert.EqualValues(t, []TokenBillFilterOption{
 		{Value: 7, Label: "Primary Channel"},
 	}, summary.FilterOptions.Channels)
 }
@@ -273,18 +273,18 @@ func TestTokenBillOrganizationFilterUsesMembershipTime(t *testing.T) {
 
 	summary, err := GetTokenBillSummary(filters)
 	require.NoError(t, err)
-	assert.Equal(t, int64(70), summary.NetQuota)
-	assert.Equal(t, int64(2), summary.RecordCount)
+	assert.EqualValues(t, int64(70), summary.NetQuota)
+	assert.EqualValues(t, int64(2), summary.RecordCount)
 
 	page, err := GetTokenBillEntries(filters, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, page.Items, 2)
-	assert.Equal(t, int64(2), page.Total)
-	assert.Equal(t, "req-refund", page.Items[0].RequestId)
-	assert.Equal(t, -30, page.Items[0].Quota)
-	assert.Equal(t, "Manual Audit Org", page.Items[0].OrganizationName)
-	assert.Equal(t, "Primary Channel", page.Items[1].ChannelName)
-	assert.Equal(t, "upstream-consume", page.Items[1].UpstreamRequestId)
+	assert.EqualValues(t, int64(2), page.Total)
+	assert.EqualValues(t, "req-refund", page.Items[0].RequestId)
+	assert.EqualValues(t, -30, page.Items[0].Quota)
+	assert.EqualValues(t, "Manual Audit Org", page.Items[0].OrganizationName)
+	assert.EqualValues(t, "Primary Channel", page.Items[1].ChannelName)
+	assert.EqualValues(t, "upstream-consume", page.Items[1].UpstreamRequestId)
 }
 
 func TestTokenBillRequestFilterMatchesLocalOrUpstreamIdentifier(t *testing.T) {
@@ -294,8 +294,8 @@ func TestTokenBillRequestFilterMatchesLocalOrUpstreamIdentifier(t *testing.T) {
 	page, err := GetTokenBillEntries(filters, 1, 20)
 	require.NoError(t, err)
 	require.Len(t, page.Items, 1)
-	assert.Equal(t, "req-refund", page.Items[0].RequestId)
-	assert.Equal(t, "upstream-refund", page.Items[0].UpstreamRequestId)
+	assert.EqualValues(t, "req-refund", page.Items[0].RequestId)
+	assert.EqualValues(t, "upstream-refund", page.Items[0].UpstreamRequestId)
 }
 
 func TestTokenBillEntryPaginationIsStable(t *testing.T) {
@@ -308,8 +308,8 @@ func TestTokenBillEntryPaginationIsStable(t *testing.T) {
 
 	require.Len(t, first.Items, 2)
 	require.Len(t, second.Items, 1)
-	assert.Equal(t, int64(3), first.Total)
-	assert.Equal(t, "req-other", first.Items[0].RequestId)
-	assert.Equal(t, "req-refund", first.Items[1].RequestId)
-	assert.Equal(t, "req-consume", second.Items[0].RequestId)
+	assert.EqualValues(t, int64(3), first.Total)
+	assert.EqualValues(t, "req-other", first.Items[0].RequestId)
+	assert.EqualValues(t, "req-refund", first.Items[1].RequestId)
+	assert.EqualValues(t, "req-consume", second.Items[0].RequestId)
 }

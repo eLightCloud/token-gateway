@@ -227,7 +227,7 @@ func TestUserSessionCreateListAndRevokeOne(t *testing.T) {
 	sessions, err := ListActiveUserSessions(1001, first.SID, now)
 	require.NoError(t, err)
 	require.Len(t, sessions, 2)
-	assert.Equal(t, first.SID, sessions[0].SID)
+	assert.EqualValues(t, first.SID, sessions[0].SID)
 
 	revoked, err := RevokeUserSession(1001, first.SID, "user_revoked")
 	require.NoError(t, err)
@@ -240,7 +240,7 @@ func TestUserSessionCreateListAndRevokeOne(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUserSessionInactive)
 	active, err := GetUserSessionCached(second.SID)
 	require.NoError(t, err)
-	assert.Equal(t, second.SID, active.SID)
+	assert.EqualValues(t, second.SID, active.SID)
 }
 
 func TestRotateUserSessionRefreshRaceAndReuse(t *testing.T) {
@@ -252,9 +252,9 @@ func TestRotateUserSessionRefreshRaceAndReuse(t *testing.T) {
 
 	rotated, err := RotateUserSessionRefresh(1002, session.SID, session.RefreshHash, "next-hash", now+10, 30*time.Second)
 	require.NoError(t, err)
-	assert.Equal(t, "next-hash", rotated.RefreshHash)
-	assert.Equal(t, session.RefreshHash, rotated.PreviousRefreshHash)
-	assert.Equal(t, now+40, rotated.PreviousValidUntil)
+	assert.EqualValues(t, "next-hash", rotated.RefreshHash)
+	assert.EqualValues(t, session.RefreshHash, rotated.PreviousRefreshHash)
+	assert.EqualValues(t, now+40, rotated.PreviousValidUntil)
 
 	_, err = RotateUserSessionRefresh(1002, session.SID, session.RefreshHash, "unused-hash", now+20, 30*time.Second)
 	assert.ErrorIs(t, err, ErrUserSessionRefreshRace)
@@ -262,14 +262,14 @@ func TestRotateUserSessionRefreshRaceAndReuse(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUserSessionRefreshInvalid)
 	stored, getErr := GetUserSessionBySID(session.SID)
 	require.NoError(t, getErr)
-	assert.Equal(t, UserSessionStatusActive, stored.Status)
+	assert.EqualValues(t, UserSessionStatusActive, stored.Status)
 
 	_, err = RotateUserSessionRefresh(1002, session.SID, session.RefreshHash, "unused-hash", now+41, 30*time.Second)
 	assert.ErrorIs(t, err, ErrUserSessionRefreshReuse)
 	stored, getErr = GetUserSessionBySID(session.SID)
 	require.NoError(t, getErr)
-	assert.Equal(t, UserSessionStatusRevoked, stored.Status)
-	assert.Equal(t, "refresh_reuse", stored.RevokedReason)
+	assert.EqualValues(t, UserSessionStatusRevoked, stored.Status)
+	assert.EqualValues(t, "refresh_reuse", stored.RevokedReason)
 }
 
 func TestUserSessionPreviousRefreshHashNormalizesLegacyPadding(t *testing.T) {
@@ -293,7 +293,7 @@ func TestUserSessionPreviousRefreshHashNormalizesLegacyPadding(t *testing.T) {
 	require.NoError(t, DB.Create(valid).Error)
 	loadedValid, err := GetUserSessionBySID(valid.SID)
 	require.NoError(t, err)
-	assert.Equal(t, digest, loadedValid.PreviousRefreshHash)
+	assert.EqualValues(t, digest, loadedValid.PreviousRefreshHash)
 
 	require.NoError(t, DB.Model(&UserSession{}).Where("sid = ?", valid.SID).
 		Updates(map[string]any{
@@ -353,19 +353,19 @@ func TestRevokeOtherUserSessionsKeepsCurrent(t *testing.T) {
 
 	count, err := RevokeOtherUserSessions(1003, "current-session", "revoke_others")
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), count)
+	assert.EqualValues(t, int64(2), count)
 
 	current, err := GetUserSessionCached("current-session")
 	require.NoError(t, err)
-	assert.Equal(t, UserSessionStatusActive, current.Status)
+	assert.EqualValues(t, UserSessionStatusActive, current.Status)
 	_, err = GetUserSessionCached("other-one")
 	assert.True(t, errors.Is(err, ErrUserSessionInactive))
 	stale, err := GetUserSessionBySID("other-one")
 	require.NoError(t, err)
-	assert.Equal(t, UserSessionStatusRevoked, stale.Status, "revocation must include active sessions from stale auth versions")
+	assert.EqualValues(t, UserSessionStatusRevoked, stale.Status, "revocation must include active sessions from stale auth versions")
 	different, err := GetUserSessionCached("different-user")
 	require.NoError(t, err)
-	assert.Equal(t, 1004, different.UserID)
+	assert.EqualValues(t, 1004, different.UserID)
 }
 
 func TestRevokeUserSessionByRefreshHashRequiresSecret(t *testing.T) {
@@ -380,7 +380,7 @@ func TestRevokeUserSessionByRefreshHashRequiresSecret(t *testing.T) {
 	assert.False(t, revoked)
 	active, err := GetUserSessionCached(session.SID)
 	require.NoError(t, err)
-	assert.Equal(t, UserSessionStatusActive, active.Status)
+	assert.EqualValues(t, UserSessionStatusActive, active.Status)
 
 	revoked, err = RevokeUserSessionByRefreshHash(session.SID, session.RefreshHash, "logout")
 	require.NoError(t, err)
@@ -414,14 +414,14 @@ func TestUserSessionGrowthCountsUseBroadActiveAndStrictIssuancePredicates(t *tes
 
 	activeCount, err := CountActiveUserSessions(1006, now)
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), activeCount, "active count includes stale auth versions but excludes expired and revoked rows")
+	assert.EqualValues(t, int64(2), activeCount, "active count includes stale auth versions but excludes expired and revoked rows")
 
 	issuedCount, err := CountUserSessionsCreatedSince(1006, now-3600)
 	require.NoError(t, err)
-	assert.Equal(t, int64(4), issuedCount, "issuance count includes every status and uses a strict cutoff")
+	assert.EqualValues(t, int64(4), issuedCount, "issuance count includes every status and uses a strict cutoff")
 	globalCount, err := CountUserSessionsCreatedSince(0, now-3600)
 	require.NoError(t, err)
-	assert.Equal(t, issuedCount, globalCount)
+	assert.EqualValues(t, issuedCount, globalCount)
 }
 
 func TestListActiveUserSessionsKeepsCurrentAndBoundsOtherSessions(t *testing.T) {
@@ -445,9 +445,9 @@ func TestListActiveUserSessionsKeepsCurrentAndBoundsOtherSessions(t *testing.T) 
 	sessions, err := ListActiveUserSessions(1007, current.SID, now)
 	require.NoError(t, err)
 	require.Len(t, sessions, 100)
-	assert.Equal(t, current.SID, sessions[0].SID)
+	assert.EqualValues(t, current.SID, sessions[0].SID)
 	for _, session := range sessions {
-		assert.Equal(t, int64(7), session.UserAuthVersion)
+		assert.EqualValues(t, int64(7), session.UserAuthVersion)
 		assert.NotEqual(t, stale.SID, session.SID)
 	}
 
@@ -486,13 +486,13 @@ func TestRevokeUserSessionsReturnsCumulativeProgressAndSupportsRetry(t *testing.
 
 	affected, err := RevokeAllUserSessions(1008, "batch-test")
 	assert.ErrorIs(t, err, forcedErr)
-	assert.Equal(t, int64(userSessionRevokeBatchSize), affected)
+	assert.EqualValues(t, int64(userSessionRevokeBatchSize), affected)
 	require.NoError(t, DB.Callback().Update().Remove(callbackName))
 	callbackRegistered = false
 
 	retried, err := RevokeAllUserSessions(1008, "batch-test-retry")
 	require.NoError(t, err)
-	assert.Equal(t, int64(1), retried)
+	assert.EqualValues(t, int64(1), retried)
 	var activeCount int64
 	require.NoError(t, DB.Model(&UserSession{}).Where("user_id = ? AND status = ?", 1008, UserSessionStatusActive).Count(&activeCount).Error)
 	assert.Zero(t, activeCount)
@@ -559,7 +559,7 @@ func TestDeleteExpiredUserSessionsLoopsInChunksAndRechecksPredicate(t *testing.T
 
 	require.NoError(t, DeleteExpiredUserSessions(now))
 	require.NoError(t, DeleteOldRevokedUserSessions(now))
-	assert.Equal(t, 4, deleteCalls, "expired and retained-revoked scans each delete in bounded chunks")
+	assert.EqualValues(t, 4, deleteCalls, "expired and retained-revoked scans each delete in bounded chunks")
 	var remaining []UserSession
 	require.NoError(t, DB.Order("sid").Find(&remaining).Error)
 	require.Len(t, remaining, 6)
@@ -596,10 +596,10 @@ func TestUserBaseIncludesAuthorizationFields(t *testing.T) {
 		AuthVersion: 7,
 	}
 	base := user.ToBaseUser()
-	assert.Equal(t, user.Role, base.Role)
-	assert.Equal(t, user.AuthVersion, base.AuthVersion)
-	assert.Equal(t, userCacheSchemaVersion, base.CacheSchema)
-	assert.Equal(t, user.Quota, base.Quota)
+	assert.EqualValues(t, user.Role, base.Role)
+	assert.EqualValues(t, user.AuthVersion, base.AuthVersion)
+	assert.EqualValues(t, userCacheSchemaVersion, base.CacheSchema)
+	assert.EqualValues(t, user.Quota, base.Quota)
 }
 
 func TestUserUpdateBumpsAuthVersionOnlyForAuthorizationChanges(t *testing.T) {
@@ -613,19 +613,19 @@ func TestUserUpdateBumpsAuthVersionOnlyForAuthorizationChanges(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(user).Error)
 	t.Cleanup(func() { _ = DB.Unscoped().Delete(&User{}, user.Id).Error })
-	assert.Equal(t, int64(1), user.AuthVersion)
+	assert.EqualValues(t, int64(1), user.AuthVersion)
 
 	user.DisplayName = "profile-only"
 	require.NoError(t, user.Update(false))
-	assert.Equal(t, int64(1), user.AuthVersion)
+	assert.EqualValues(t, int64(1), user.AuthVersion)
 
 	user.Group = "vip"
 	require.NoError(t, user.Update(false))
-	assert.Equal(t, int64(2), user.AuthVersion)
+	assert.EqualValues(t, int64(2), user.AuthVersion)
 
 	user.Role = common.RoleAdminUser
 	require.NoError(t, user.Update(false))
-	assert.Equal(t, int64(3), user.AuthVersion)
+	assert.EqualValues(t, int64(3), user.AuthVersion)
 }
 
 func TestPasswordResetBumpsAuthVersionAndRevokesSessions(t *testing.T) {
@@ -647,9 +647,9 @@ func TestPasswordResetBumpsAuthVersionAndRevokesSessions(t *testing.T) {
 	require.NoError(t, ResetUserPasswordByEmail(user.Email, "new-password"))
 	var stored User
 	require.NoError(t, DB.First(&stored, user.Id).Error)
-	assert.Equal(t, int64(2), stored.AuthVersion)
+	assert.EqualValues(t, int64(2), stored.AuthVersion)
 	storedSession, err := GetUserSessionBySID(session.SID)
 	require.NoError(t, err)
-	assert.Equal(t, UserSessionStatusRevoked, storedSession.Status)
-	assert.Equal(t, "password_reset", storedSession.RevokedReason)
+	assert.EqualValues(t, UserSessionStatusRevoked, storedSession.Status)
+	assert.EqualValues(t, "password_reset", storedSession.RevokedReason)
 }

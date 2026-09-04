@@ -32,8 +32,8 @@ func TestExternalIdentityClaimEnforcesSingleOwnerAtomically(t *testing.T) {
 	var claims []ExternalIdentityClaim
 	require.NoError(t, DB.Find(&claims).Error)
 	require.Len(t, claims, 1)
-	assert.Equal(t, first.Id, claims[0].UserId)
-	assert.Equal(t, "telegram-123", claims[0].Subject)
+	assert.EqualValues(t, first.Id, claims[0].UserId)
+	assert.EqualValues(t, "telegram-123", claims[0].Subject)
 
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
 		return ReleaseExternalIdentityWithTx(tx, ExternalIdentityProviderTelegram, first.Id)
@@ -71,7 +71,7 @@ func TestInitializeExternalIdentityClaimsIsIdempotent(t *testing.T) {
 	var claim ExternalIdentityClaim
 	require.NoError(t, DB.Where("provider = ? AND subject = ?", ExternalIdentityProviderTelegram, user.TelegramId).
 		First(&claim).Error)
-	assert.Equal(t, user.Id, claim.UserId)
+	assert.EqualValues(t, user.Id, claim.UserId)
 }
 
 func TestInitializeExternalIdentityClaimsRejectsAmbiguousLegacyBindings(t *testing.T) {

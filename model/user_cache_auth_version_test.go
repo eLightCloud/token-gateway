@@ -66,7 +66,7 @@ func TestUserAuthFenceRollbackExpiresAndRecovers(t *testing.T) {
 	assert.False(t, server.Exists(getUserAuthFenceKey(user.Id)))
 	committed, err := common.RDB.Get(t.Context(), getUserAuthVersionKey(user.Id)).Result()
 	require.NoError(t, err)
-	assert.Equal(t, "1", committed)
+	assert.EqualValues(t, "1", committed)
 
 	cached, err := GetUserCache(user.Id)
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestUserAuthFieldUpdateRejectsVersionMismatch(t *testing.T) {
 	assert.ErrorIs(t, err, ErrUserAuthCachePending)
 	group, err := common.RDB.HGet(t.Context(), getUserCacheKey(userID), "Group").Result()
 	require.NoError(t, err)
-	assert.Equal(t, "current", group)
+	assert.EqualValues(t, "current", group)
 }
 
 func TestRefreshUserGroupCacheRepairsDelayedSameVersionWrite(t *testing.T) {
@@ -140,14 +140,14 @@ func TestRefreshUserGroupCacheRepairsDelayedSameVersionWrite(t *testing.T) {
 	require.NoError(t, RefreshUserGroupCache(user.Id))
 	cached, err := cacheGetUserBase(user.Id)
 	require.NoError(t, err)
-	assert.Equal(t, "pro", cached.Group)
+	assert.EqualValues(t, "pro", cached.Group)
 	assert.EqualValues(t, 1, cached.AuthVersion)
 
 	close(releaseDelayedRefresh)
 	require.NoError(t, <-delayedResult)
 	cached, err = cacheGetUserBase(user.Id)
 	require.NoError(t, err)
-	assert.Equal(t, "pro", cached.Group)
+	assert.EqualValues(t, "pro", cached.Group)
 	assert.EqualValues(t, 1, cached.AuthVersion)
 }
 
@@ -175,7 +175,7 @@ func TestCommittedUserAuthVersionPermanentlyRejectsDelayedCacheFill(t *testing.T
 	assert.False(t, server.Exists(getUserAuthFenceKey(user.Id)))
 	committed, err := common.RDB.Get(t.Context(), getUserAuthVersionKey(user.Id)).Result()
 	require.NoError(t, err)
-	assert.Equal(t, "2", committed)
+	assert.EqualValues(t, "2", committed)
 
 	server.FastForward(time.Duration(userAuthFenceTTLSeconds()+1) * time.Second)
 	require.NoError(t, common.RedisDelKey(getUserCacheKey(user.Id)))
@@ -183,7 +183,7 @@ func TestCommittedUserAuthVersionPermanentlyRejectsDelayedCacheFill(t *testing.T
 	assert.True(t, errors.Is(err, ErrUserAuthCachePending))
 	committed, err = common.RDB.Get(t.Context(), getUserAuthVersionKey(user.Id)).Result()
 	require.NoError(t, err)
-	assert.Equal(t, "2", committed)
+	assert.EqualValues(t, "2", committed)
 }
 
 func TestUserAuthVersionFenceAndCommittedFloorAreMonotonic(t *testing.T) {
@@ -195,7 +195,7 @@ func TestUserAuthVersionFenceAndCommittedFloorAreMonotonic(t *testing.T) {
 	require.NoError(t, SetUserAuthVersionFence(userID, 3))
 	pending, err := common.RDB.Get(t.Context(), getUserAuthFenceKey(userID)).Result()
 	require.NoError(t, err)
-	assert.Equal(t, "5", pending)
+	assert.EqualValues(t, "5", pending)
 	floor, err := getUserAuthVersionFloor(userID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 5, floor)
@@ -205,7 +205,7 @@ func TestUserAuthVersionFenceAndCommittedFloorAreMonotonic(t *testing.T) {
 	require.NoError(t, publishCommittedUserAuthVersion(userID, 3))
 	pending, err = common.RDB.Get(t.Context(), getUserAuthFenceKey(userID)).Result()
 	require.NoError(t, err)
-	assert.Equal(t, "5", pending)
+	assert.EqualValues(t, "5", pending)
 	floor, err = getUserAuthVersionFloor(userID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 5, floor)
@@ -214,10 +214,10 @@ func TestUserAuthVersionFenceAndCommittedFloorAreMonotonic(t *testing.T) {
 	assert.False(t, server.Exists(getUserAuthFenceKey(userID)))
 	committed, err := common.RDB.Get(t.Context(), getUserAuthVersionKey(userID)).Result()
 	require.NoError(t, err)
-	assert.Equal(t, "5", committed)
+	assert.EqualValues(t, "5", committed)
 
 	require.NoError(t, publishCommittedUserAuthVersion(userID, 4))
 	committed, err = common.RDB.Get(t.Context(), getUserAuthVersionKey(userID)).Result()
 	require.NoError(t, err)
-	assert.Equal(t, "5", committed)
+	assert.EqualValues(t, "5", committed)
 }
