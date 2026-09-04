@@ -54,7 +54,12 @@ func TestGetOrganizationInvoiceBuildsMissingSummaryInBackgroundAndIncludesNoUsag
 		JoinedAt:       1,
 		BillingStartAt: 1,
 	}).Error)
-	period, err := model.NewOrganizationInvoicePeriod("2026-08-01", "2026-08-31", time.Now())
+	now := time.Now()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.Local)
+	period, err := model.NewOrganizationInvoicePeriod(
+		monthStart.Format("2006-01-02"),
+		monthStart.AddDate(0, 1, -1).Format("2006-01-02"),
+		time.Now())
 	require.NoError(t, err)
 	require.NoError(t, model.LOG_DB.Create(&[]model.Log{
 		{
@@ -105,7 +110,7 @@ func TestGetOrganizationInvoiceBuildsMissingSummaryInBackgroundAndIncludesNoUsag
 	assert.Equal(t, "reconciled", invoice.Accounts[0].Financials.ReconciliationStatus)
 	baseline, err := model.GetOrganizationInvoiceBaseline(organizationId)
 	require.NoError(t, err)
-	assert.Equal(t, 202608, baseline.StartMonth)
+	assert.Equal(t, now.Year()*100+int(now.Month()), baseline.StartMonth)
 	var accountBaseline model.OrganizationInvoiceAccountBaseline
 	require.NoError(t, model.DB.Where("organization_id = ? AND user_id = ?", organizationId, userId).First(&accountBaseline).Error)
 	assert.Equal(t, int64(1_250_000), accountBaseline.OpeningQuota)
@@ -140,7 +145,12 @@ func TestGetOrganizationInvoiceDoesNotPublishIncompleteSummary(t *testing.T) {
 		JoinedAt:       1,
 		BillingStartAt: 1,
 	}).Error)
-	period, err := model.NewOrganizationInvoicePeriod("2026-08-01", "2026-08-31", time.Now())
+	now := time.Now()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.Local)
+	period, err := model.NewOrganizationInvoicePeriod(
+		monthStart.Format("2006-01-02"),
+		monthStart.AddDate(0, 1, -1).Format("2006-01-02"),
+		time.Now())
 	require.NoError(t, err)
 
 	invoice, err := GetOrganizationInvoice(organizationId, period, false)

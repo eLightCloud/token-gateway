@@ -11,6 +11,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// dynamicInvoicePeriod 返回"当前自然月"账期：finalized=false 恒成立，走对账分支。
+// 硬编码历史月份会随时间推移触发 finalized=true（时间炸弹），测试随月份失效。
+func dynamicInvoicePeriod(t *testing.T) (OrganizationInvoicePeriod, time.Time) {
+	t.Helper()
+	now := time.Now().In(organizationInvoiceLocation)
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, organizationInvoiceLocation)
+	period, err := NewOrganizationInvoicePeriod(monthStart.Format("2006-01-02"), monthStart.AddDate(0, 1, -1).Format("2006-01-02"), time.Now())
+	if err != nil {
+		t.Fatalf("build dynamic invoice period: %v", err)
+	}
+	return period, monthStart
+}
+
 func TestOrganizationInvoiceTopUpCreditedQuotaUsesPersistedOrLegacyProviderSemantics(t *testing.T) {
 	testCases := []struct {
 		name       string
@@ -56,9 +69,8 @@ func TestGetOrganizationInvoiceExportFinancialsFiltersAndAlignsAccounts(t *testi
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", 10).Update("quota", 1_250_000).Error)
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", 11).Update("quota", 250_000).Error)
 
-	period, err := NewOrganizationInvoicePeriod("2026-07-01", "2026-07-31", time.Now())
-	require.NoError(t, err)
-	inPeriod := beijingInvoiceTimestamp(t, "2026-07-15 12:00:00")
+	period, monthStart := dynamicInvoicePeriod(t)
+	inPeriod := monthStart.AddDate(0, 0, 14).Add(12 * time.Hour).Unix()
 	atPeriodEnd := period.EndTimestamp
 	afterPeriod := period.EndTimestamp + 1
 	require.NoError(t, DB.Create(&[]TopUp{
@@ -97,7 +109,7 @@ func TestGetOrganizationInvoiceExportFinancialsFiltersAndAlignsAccounts(t *testi
 	}).Error)
 	require.NoError(t, DB.Create(&Checkin{
 		UserId:       10,
-		CheckinDate:  "2026-07-15",
+		CheckinDate:  monthStart.AddDate(0, 0, 14).Format("2006-01-02"),
 		QuotaAwarded: 250_000,
 		CreatedAt:    inPeriod,
 	}).Error)
@@ -141,10 +153,9 @@ func TestGetOrganizationInvoiceExportFinancialsFiltersAndAlignsAccounts(t *testi
 
 func TestGetOrganizationInvoiceExportFinancialsRejectsMissingAccount(t *testing.T) {
 	setupOrganizationTestState(t)
-	period, err := NewOrganizationInvoicePeriod("2026-07-01", "2026-07-31", time.Now())
-	require.NoError(t, err)
+	period, _ := dynamicInvoicePeriod(t)
 
-	_, err = getOrganizationInvoiceAccountFinancials(context.Background(), 100, []organizationInvoiceAccountScope{{
+	_, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, []organizationInvoiceAccountScope{{
 		userId: 999,
 	}}, period)
 	require.Error(t, err)
@@ -153,9 +164,10 @@ func TestGetOrganizationInvoiceExportFinancialsRejectsMissingAccount(t *testing.
 func TestGetOrganizationInvoiceAccountFinancialsExcludesFactsAtAndAfterMembershipEnd(t *testing.T) {
 	setupOrganizationTestState(t)
 	insertOrganizationTestUser(t, 20, "mid-month")
+	period, monthStart := dynamicInvoicePeriod(t)
 	require.NoError(t, DB.Create(&Organization{Id: 200, Name: "window org", Status: OrganizationStatusEnabled}).Error)
-	joinTime := beijingInvoiceTimestamp(t, "2026-07-10 00:00:00")
-	leaveTime := beijingInvoiceTimestamp(t, "2026-07-20 00:00:00")
+	joinTime := monthStart.AddDate(0, 0, 9).Unix()
+	leaveTime := monthStart.AddDate(0, 0, 19).Unix()
 	require.NoError(t, DB.Create(&OrganizationMember{
 		OrganizationId: 200,
 		UserId:         20,
@@ -164,8 +176,6 @@ func TestGetOrganizationInvoiceAccountFinancialsExcludesFactsAtAndAfterMembershi
 		BillingStartAt: joinTime,
 		LeftAt:         leaveTime,
 	}).Error)
-	period, err := NewOrganizationInvoicePeriod("2026-07-01", "2026-07-31", time.Now())
-	require.NoError(t, err)
 	require.NoError(t, DB.Create(&[]TopUp{
 		{UserId: 20, Money: 10, CreditedQuota: 5_000_000, TradeNo: "before-membership", PaymentProvider: PaymentProviderStripe, CompleteTime: joinTime - 1, Status: common.TopUpStatusSuccess},
 		{UserId: 20, Money: 20, CreditedQuota: 10_000_000, TradeNo: "during-membership", PaymentProvider: PaymentProviderStripe, CompleteTime: joinTime, Status: common.TopUpStatusSuccess},
@@ -182,19 +192,19 @@ func TestGetOrganizationInvoiceAccountFinancialsExcludesFactsAtAndAfterMembershi
 func TestOrganizationInvoiceFinancialFactHasSingleCrossOrganizationOwner(t *testing.T) {
 	setupOrganizationTestState(t)
 	insertOrganizationTestUser(t, 30, "transferred-user")
+	period, monthStart := dynamicInvoicePeriod(t)
+	_ = period
 	require.NoError(t, DB.Create(&[]Organization{
 		{Id: 301, Name: "first org", Status: OrganizationStatusEnabled},
 		{Id: 302, Name: "second org", Status: OrganizationStatusEnabled},
 	}).Error)
-	firstJoin := beijingInvoiceTimestamp(t, "2026-07-01 00:00:00")
-	transferAt := beijingInvoiceTimestamp(t, "2026-07-20 00:00:00")
+	firstJoin := monthStart.Unix()
+	transferAt := monthStart.AddDate(0, 0, 19).Unix()
 	require.NoError(t, DB.Create(&[]OrganizationMember{
 		{OrganizationId: 301, UserId: 30, Role: OrganizationRoleMember, JoinedAt: firstJoin, BillingStartAt: firstJoin, LeftAt: transferAt},
 		{OrganizationId: 302, UserId: 30, Role: OrganizationRoleMember, JoinedAt: transferAt, BillingStartAt: transferAt},
 	}).Error)
-	period, err := NewOrganizationInvoicePeriod("2026-07-01", "2026-07-31", time.Now())
-	require.NoError(t, err)
-	creditedAt := beijingInvoiceTimestamp(t, "2026-07-15 10:00:00")
+	creditedAt := monthStart.AddDate(0, 0, 14).Add(10 * time.Hour).Unix()
 	require.NoError(t, DB.Create(&TopUp{
 		UserId:          30,
 		CreditedQuota:   500_000,
@@ -220,9 +230,8 @@ func TestOrganizationInvoiceFinancialFactHasSingleCrossOrganizationOwner(t *test
 func TestOrganizationInvoiceIncludesBalanceSubscriptionAsOtherDeduction(t *testing.T) {
 	setupOrganizationTestState(t)
 	createOrganizationBillingTestFixture(t)
-	period, err := NewOrganizationInvoicePeriod("2026-07-01", "2026-07-31", time.Now())
-	require.NoError(t, err)
-	completedAt := beijingInvoiceTimestamp(t, "2026-07-15 10:00:00")
+	period, monthStart := dynamicInvoicePeriod(t)
+	completedAt := monthStart.AddDate(0, 0, 14).Add(10 * time.Hour).Unix()
 	require.NoError(t, DB.Create(&SubscriptionOrder{
 		UserId:          10,
 		Money:           1,
@@ -244,11 +253,13 @@ func TestOrganizationInvoiceIncludesBalanceSubscriptionAsOtherDeduction(t *testi
 func TestOrganizationInvoiceFinancialsReconcileConfiguredZeroBaseline(t *testing.T) {
 	setupOrganizationTestState(t)
 	createOrganizationBillingTestFixture(t)
-	period, err := NewOrganizationInvoicePeriod("2026-08-01", "2026-08-31", time.Now())
+	now := time.Now().In(organizationInvoiceLocation)
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, organizationInvoiceLocation)
+	period, err := NewOrganizationInvoicePeriod(monthStart.Format("2006-01-02"), monthStart.AddDate(0, 1, -1).Format("2006-01-02"), time.Now())
 	require.NoError(t, err)
-	configureOrganizationInvoiceTestZeroBaseline(t, 100, 202608, 10, 11)
-	adjustmentAt := beijingInvoiceTimestamp(t, "2026-08-02 10:00:00")
-	consumeAt := beijingInvoiceTimestamp(t, "2026-08-10 10:00:00")
+	configureOrganizationInvoiceTestZeroBaseline(t, 100, now.Year()*100+int(now.Month()), 10, 11)
+	adjustmentAt := monthStart.AddDate(0, 0, 1).Add(10 * time.Hour).Unix()
+	consumeAt := monthStart.AddDate(0, 0, 9).Add(10 * time.Hour).Unix()
 	require.NoError(t, DB.Create(&UserQuotaAdjustmentLegacyFact{
 		SourceLogId:    9100,
 		UserId:         10,
