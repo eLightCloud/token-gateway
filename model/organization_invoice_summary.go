@@ -274,6 +274,13 @@ func InvalidateOrganizationInvoiceSummaries(organizationId int, effectiveMonth i
 	return invalidateOrganizationInvoiceSummariesFrom(DB, organizationId, start.Unix(), "invalidated by accounting fact or rule change")
 }
 
+// organizationInvoiceMonthStartContaining 返回 t 所在组织账单月的第一秒。成员关系变更
+// （加入/移除/账单起点调整）从该月起改变账务口径，其后的所有缓存汇总都必须失效重建。
+func organizationInvoiceMonthStartContaining(t int64) int64 {
+	day := time.Unix(t, 0).In(organizationInvoiceLocation)
+	return time.Date(day.Year(), day.Month(), 1, 0, 0, 0, 0, organizationInvoiceLocation).Unix()
+}
+
 func invalidateOrganizationInvoiceSummariesFrom(
 	tx *gorm.DB,
 	organizationId int,
