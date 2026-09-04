@@ -265,6 +265,7 @@ func TestSweepPendingRefundsCoversMidjourneyPollingDeadCorner(t *testing.T) {
 	task := &model.Midjourney{
 		UserId: userID, MjId: "mj_dead_corner", Action: "IMAGINE", ChannelId: 1,
 		Status: "FAILURE", Progress: "100%", Quota: preConsumed, Group: "default",
+		TokenId:     tokenID,
 		PrivateData: model.TaskPrivateData{BillingSource: BillingSourceWallet, TokenId: tokenID},
 	}
 	require.NoError(t, model.DB.Create(task).Error)

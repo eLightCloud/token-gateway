@@ -755,7 +755,7 @@ func TestCASGuardedRefund_Win(t *testing.T) {
 	// CAS wins: task in DB should now be FAILURE
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
-	assert.Equal(t, model.TaskStatusFailure, reloaded.Status)
+	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
 	assert.Zero(t, reloaded.Quota)
 
 	// Refund should have happened
@@ -821,7 +821,7 @@ func TestCASGuardedSettle_Win(t *testing.T) {
 	// CAS wins: task should be SUCCESS
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
-	assert.Equal(t, model.TaskStatusSuccess, reloaded.Status)
+	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
 
 	// Settlement should refund the over-charge (5000 - 3000 = 2000 back to user)
 	assert.EqualValues(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))

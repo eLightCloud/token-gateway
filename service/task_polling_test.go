@@ -366,7 +366,7 @@ func TestUpdateBatchTasksRefundsFailedTieredTask(t *testing.T) {
 
 	var persisted model.Task
 	require.NoError(t, model.DB.First(&persisted, task.ID).Error)
-	assert.Equal(t, model.TaskStatusFailure, persisted.Status)
+	assert.EqualValues(t, model.TaskStatusFailure, persisted.Status)
 	assert.Zero(t, persisted.Quota)
 	assert.EqualValues(t, initialQuota+preConsumedQuota, getUserQuota(t, userID))
 	assert.EqualValues(t, tokenRemain+preConsumedQuota, getTokenRemainQuota(t, tokenID))
@@ -644,7 +644,7 @@ func TestUpdateSunoTasksStalePollsRefundExactlyOnce(t *testing.T) {
 
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
-	assert.Equal(t, model.TaskStatusFailure, reloaded.Status)
+	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
 	assert.Zero(t, reloaded.Quota)
 	assert.EqualValues(t, initialUserQuota+taskQuota, getUserQuota(t, userID))
 	assert.EqualValues(t, initialTokenQuota+taskQuota, getTokenRemainQuota(t, tokenID))
@@ -712,8 +712,8 @@ func TestSweepTimedOutTasksHonorsRefundRolloutBoundary(t *testing.T) {
 	var reloadedModern model.Task
 	require.NoError(t, model.DB.First(&reloadedLegacy, legacyTask.ID).Error)
 	require.NoError(t, model.DB.First(&reloadedModern, modernTask.ID).Error)
-	assert.Equal(t, model.TaskStatusFailure, reloadedLegacy.Status)
-	assert.Equal(t, model.TaskStatusFailure, reloadedModern.Status)
+	assert.EqualValues(t, model.TaskStatusFailure, reloadedLegacy.Status)
+	assert.EqualValues(t, model.TaskStatusFailure, reloadedModern.Status)
 	assert.Zero(t, reloadedLegacy.Quota)
 	assert.Zero(t, reloadedModern.Quota)
 	assert.Contains(t, reloadedLegacy.FailReason, "旧系统遗留任务")

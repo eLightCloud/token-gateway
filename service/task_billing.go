@@ -317,7 +317,8 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		var hasRatioSetting bool
 		modelRatio, hasRatioSetting, _ = ratio_setting.GetModelRatio(modelName)
 		if !hasRatioSetting {
-			return true
+			// 无费率可结算：返回 false 让调用方对失败任务全额退款。
+			return false
 		}
 		group := task.Group
 		if group == "" {
@@ -335,7 +336,8 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		}
 	}
 	if modelRatio <= 0 || finalGroupRatio <= 0 {
-		return true
+		// 无法得出有效实际额度：视为未结算，失败任务交由调用方退款。
+		return false
 	}
 
 	// 计算 OtherRatios 乘积（视频折扣、时长等）
