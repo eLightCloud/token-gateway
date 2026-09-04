@@ -184,6 +184,41 @@ func (o *LogOther) MarshalJSON() ([]byte, error) {
 	return common.Marshal(o.toMap())
 }
 
+// UnmarshalJSON 与 MarshalJSON 配对：从 JSON 还原分区字段，
+// 供 durable billing journal 的 LogPayload 往返使用。
+func (o *LogOther) UnmarshalJSON(data []byte) error {
+	var raw map[string]any
+	if err := common.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if o == nil {
+		return nil
+	}
+	o.public = make(map[string]any)
+	o.adminInfo = nil
+	o.rootInfo = nil
+	o.auditInfo = nil
+	for key, value := range raw {
+		switch key {
+		case logOtherAdminInfoKey:
+			if m, ok := value.(map[string]any); ok {
+				o.adminInfo = m
+			}
+		case logOtherRootInfoKey:
+			if m, ok := value.(map[string]any); ok {
+				o.rootInfo = m
+			}
+		case logOtherAuditInfoKey:
+			if m, ok := value.(map[string]any); ok {
+				o.auditInfo = m
+			}
+		default:
+			o.public[key] = value
+		}
+	}
+	return nil
+}
+
 func normalizeLegacyRejectReason(values map[string]json.RawMessage) bool {
 	rejectReason, ok := values["reject_reason"]
 	if !ok {

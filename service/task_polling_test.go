@@ -144,20 +144,20 @@ func TestRedactVideoResponseBodyPreservesPollingPayloadShape(t *testing.T) {
 
 	var stored map[string]any
 	require.NoError(t, common.Unmarshal(redactVideoResponseBody(body), &stored))
-	assert.Equal(t, true, stored["done"])
-	assert.Equal(t, "operations/provider-task", stored["name"])
+	assert.EqualValues(t, true, stored["done"])
+	assert.EqualValues(t, "operations/provider-task", stored["name"])
 	response, ok := stored["response"].(map[string]any)
 	require.True(t, ok)
 	assert.NotContains(t, response, "bytesBase64Encoded")
-	assert.Equal(t, strings.Repeat("a", 256)+"...", response["video"])
+	assert.EqualValues(t, strings.Repeat("a", 256)+"...", response["video"])
 	videos, ok := response["videos"].([]any)
 	require.True(t, ok)
 	require.Len(t, videos, 1)
 	video, ok := videos[0].(map[string]any)
 	require.True(t, ok)
 	assert.NotContains(t, video, "bytesBase64Encoded")
-	assert.Equal(t, "video/mp4", video["mimeType"])
-	assert.Equal(t, "https://media.example/video.mp4", video["uri"])
+	assert.EqualValues(t, "video/mp4", video["mimeType"])
+	assert.EqualValues(t, "https://media.example/video.mp4", video["uri"])
 }
 
 func seedTaskPollingChannel(t *testing.T, id int, disableSleep bool) {
@@ -222,7 +222,7 @@ func TestUpdateVideoTasksDefaultSleepWaitsBetweenTasks(t *testing.T) {
 	})
 
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Equal(t, 1, adaptor.fetchCount())
+	assert.EqualValues(t, 1, adaptor.fetchCount())
 }
 
 func TestDispatchPlatformUpdateUsesFetchMode(t *testing.T) {
@@ -237,16 +237,16 @@ func TestDispatchPlatformUpdateUsesFetchMode(t *testing.T) {
 	previousFactory := GetTaskAdaptorFunc
 	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return batch }
 	DispatchPlatformUpdate(context.Background(), "batch-plugin", taskChannels, tasks)
-	assert.Equal(t, 1, batch.batchCalls)
-	assert.Equal(t, 0, batch.fetchCount())
+	assert.EqualValues(t, 1, batch.batchCalls)
+	assert.EqualValues(t, 0, batch.fetchCount())
 	var persisted model.Task
 	require.NoError(t, model.DB.First(&persisted, task.ID).Error)
-	assert.Equal(t, "https://example.com/result", persisted.GetResultURL())
+	assert.EqualValues(t, "https://example.com/result", persisted.GetResultURL())
 
 	perTask := &taskPollingFetchAdaptor{}
 	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return perTask }
 	DispatchPlatformUpdate(context.Background(), "per-task-plugin", taskChannels, tasks)
-	assert.Equal(t, 1, perTask.fetchCount())
+	assert.EqualValues(t, 1, perTask.fetchCount())
 
 	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return nil }
 	assert.NotPanics(t, func() { DispatchPlatformUpdate(context.Background(), "missing-plugin", taskChannels, tasks) })
@@ -311,24 +311,24 @@ func TestUpdateBatchTasksSettlesTieredUsageForTerminalStates(t *testing.T) {
 
 			var persisted model.Task
 			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
-			assert.Equal(t, testCase.status, persisted.Status)
-			assert.Equal(t, testCase.actualQuota, persisted.Quota)
+			assert.EqualValues(t, testCase.status, persisted.Status)
+			assert.EqualValues(t, testCase.actualQuota, persisted.Quota)
 			var persistedData map[string]any
 			require.NoError(t, common.Unmarshal(persisted.Data, &persistedData))
-			assert.Equal(t, "must-be-preserved", persistedData["provider_payload"])
+			assert.EqualValues(t, "must-be-preserved", persistedData["provider_payload"])
 			assert.EqualValues(t, initialQuota+(preConsumedQuota-testCase.actualQuota), getUserQuota(t, userID))
 			assert.EqualValues(t, tokenRemain+(preConsumedQuota-testCase.actualQuota), getTokenRemainQuota(t, tokenID))
-			assert.Equal(t, int64(1), countLogs(t))
+			assert.EqualValues(t, int64(1), countLogs(t))
 			if testCase.status == model.TaskStatusFailure {
 				log := getLastLog(t)
 				require.NotNil(t, log)
-				assert.Equal(t, model.LogTypeRefund, log.Type)
+				assert.EqualValues(t, model.LogTypeRefund, log.Type)
 			}
 
 			// A duplicate terminal response must not settle the same task twice.
 			require.NoError(t, UpdateBatchTasks(context.Background(), adaptor, map[int][]string{channelID: taskIDs}, taskMap))
 			assert.EqualValues(t, initialQuota+(preConsumedQuota-testCase.actualQuota), getUserQuota(t, userID))
-			assert.Equal(t, int64(1), countLogs(t))
+			assert.EqualValues(t, int64(1), countLogs(t))
 		})
 	}
 }
@@ -379,15 +379,15 @@ func TestUpdateBatchTasksRefundsFailedTieredTask(t *testing.T) {
 
 	log := getLastLog(t)
 	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
-	assert.Equal(t, preConsumedQuota, log.Quota)
+	assert.EqualValues(t, model.LogTypeRefund, log.Type)
+	assert.EqualValues(t, preConsumedQuota, log.Quota)
 	var other map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
-	assert.Equal(t, "tiered_expr", other["billing_mode"])
-	assert.Equal(t, "actual", other["matched_tier"])
+	assert.EqualValues(t, "tiered_expr", other["billing_mode"])
+	assert.EqualValues(t, "actual", other["matched_tier"])
 	facts, ok := other["usage_facts"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, map[string]any{"units": float64(5)}, facts)
+	assert.EqualValues(t, map[string]any{"units": float64(5)}, facts)
 }
 
 func TestUpdateBatchTasksRefundsFailedTaskWithoutUsageSettlement(t *testing.T) {
@@ -417,7 +417,7 @@ func TestUpdateBatchTasksRefundsFailedTaskWithoutUsageSettlement(t *testing.T) {
 	assert.EqualValues(t, tokenRemain+preConsumedQuota, getTokenRemainQuota(t, tokenID))
 	log := getLastLog(t)
 	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.EqualValues(t, model.LogTypeRefund, log.Type)
 }
 
 func TestUpdateVideoTasksCanSkipPollingSleepPerChannel(t *testing.T) {
@@ -447,7 +447,7 @@ func TestUpdateVideoTasksCanSkipPollingSleepPerChannel(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, 2, adaptor.fetchCount())
+	assert.EqualValues(t, 2, adaptor.fetchCount())
 }
 
 func TestUpdateVideoTasksDefaultSleepDoesNotBlockOtherChannels(t *testing.T) {
@@ -654,7 +654,7 @@ func TestUpdateSunoTasksStalePollsRefundExactlyOnce(t *testing.T) {
 	assert.Zero(t, reloaded.Quota)
 	assert.EqualValues(t, initialUserQuota+taskQuota, getUserQuota(t, userID))
 	assert.EqualValues(t, initialTokenQuota+taskQuota, getTokenRemainQuota(t, tokenID))
-	assert.Equal(t, int64(1), countLogs(t))
+	assert.EqualValues(t, int64(1), countLogs(t))
 }
 
 func TestRunTaskPollingOnceDoesNotRefundHistoricalFailedTask(t *testing.T) {
@@ -682,7 +682,7 @@ func TestRunTaskPollingOnceDoesNotRefundHistoricalFailedTask(t *testing.T) {
 	assert.Zero(t, summary.UnfinishedTasks)
 	assert.EqualValues(t, initialQuota, getUserQuota(t, userID))
 	assert.EqualValues(t, taskQuota, getTaskQuota(t, task.ID))
-	assert.Equal(t, int64(0), countLogs(t))
+	assert.EqualValues(t, int64(0), countLogs(t))
 }
 
 func TestSweepTimedOutTasksHonorsRefundRolloutBoundary(t *testing.T) {
@@ -725,7 +725,7 @@ func TestSweepTimedOutTasksHonorsRefundRolloutBoundary(t *testing.T) {
 	assert.Contains(t, reloadedLegacy.FailReason, "旧系统遗留任务")
 	assert.Contains(t, reloadedModern.FailReason, "任务超时")
 	assert.EqualValues(t, initialQuota+modernTaskQuota, getUserQuota(t, userID))
-	assert.Equal(t, int64(1), countLogs(t))
+	assert.EqualValues(t, int64(1), countLogs(t))
 }
 
 type scriptedPollingAdaptor struct {
@@ -899,7 +899,7 @@ func TestUpdateVideoSingleTaskPollClassification(t *testing.T) {
 			var persisted model.Task
 			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
 			assert.EqualValues(t, testCase.wantStatus, persisted.Status)
-			assert.Equal(t, testCase.wantFailures, persisted.PrivateData.PollFailures)
+			assert.EqualValues(t, testCase.wantFailures, persisted.PrivateData.PollFailures)
 			if testCase.wantUnchanged {
 				assert.Empty(t, persisted.FailReason)
 			}
@@ -910,15 +910,15 @@ func TestUpdateVideoSingleTaskPollClassification(t *testing.T) {
 				assert.JSONEq(t, testCase.wantState, string(persisted.PrivateData.PluginState))
 			}
 			if testCase.wantRefund {
-				assert.Equal(t, initialQuota+preConsumed, getUserQuota(t, userID))
-				assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
+				assert.EqualValues(t, initialQuota+preConsumed, getUserQuota(t, userID))
+				assert.EqualValues(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
 				assert.Zero(t, persisted.Quota)
 				log := getLastLog(t)
 				require.NotNil(t, log)
-				assert.Equal(t, model.LogTypeRefund, log.Type)
+				assert.EqualValues(t, model.LogTypeRefund, log.Type)
 			} else {
-				assert.Equal(t, initialQuota, getUserQuota(t, userID))
-				assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+				assert.EqualValues(t, initialQuota, getUserQuota(t, userID))
+				assert.EqualValues(t, tokenRemain, getTokenRemainQuota(t, tokenID))
 			}
 		})
 	}
@@ -984,15 +984,15 @@ func TestUpdateBatchTasksPollClassification(t *testing.T) {
 			var persisted model.Task
 			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
 			assert.EqualValues(t, testCase.wantStatus, persisted.Status)
-			assert.Equal(t, testCase.wantFailures, persisted.PrivateData.PollFailures)
+			assert.EqualValues(t, testCase.wantFailures, persisted.PrivateData.PollFailures)
 			if testCase.wantReason != "" {
 				assert.Contains(t, persisted.FailReason, testCase.wantReason)
 			}
 			if testCase.wantRefund {
-				assert.Equal(t, initialQuota+preConsumed, getUserQuota(t, userID))
+				assert.EqualValues(t, initialQuota+preConsumed, getUserQuota(t, userID))
 				assert.Zero(t, persisted.Quota)
 			} else {
-				assert.Equal(t, initialQuota, getUserQuota(t, userID))
+				assert.EqualValues(t, initialQuota, getUserQuota(t, userID))
 			}
 		})
 	}
