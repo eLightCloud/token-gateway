@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 
 	"encoding/json"
-	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"math"
 	"net/http"
 	"os"
@@ -15,6 +14,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -256,6 +257,250 @@ func TestTaskBillingOtherFiltersHistoricalOtherRatios(t *testing.T) {
 	assert.NotContains(t, other, "negative")
 	assert.NotContains(t, other, "nan")
 	assert.NotContains(t, other, "inf")
+	assert.NotContains(t, other, "billing_mode")
+	assert.NotContains(t, other, "expr_b64")
+	assert.NotContains(t, other, "matched_tier")
+	assert.NotContains(t, other, "usage_facts")
+}
+
+func TestTaskBillingOtherIncludesTieredSnapshotAndKeepsUsageFactsNested(t *testing.T) {
+	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
+	expression := `tier("720P", u("seconds") * 5)`
+	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
+		ExprString:    expression,
+		EstimatedTier: "720P",
+		UsageFacts: map[string]any{
+			"resolution": "720P",
+			"seconds":    5,
+		},
+	}
+
+	other := taskBillingOther(task).Snapshot()
+
+	assert.Equal(t, "tiered_expr", other["billing_mode"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte(expression)), other["expr_b64"])
+	assert.Equal(t, "720P", other["matched_tier"])
+	facts, ok := other["usage_facts"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{
+		"resolution": "720P",
+		"seconds":    5,
+	}, facts)
+	assert.NotContains(t, other, "resolution")
+	assert.NotContains(t, other, "seconds")
+}
+
+func TestTaskBillingOtherOmitsEmptyUsageFacts(t *testing.T) {
+	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
+	expression := `tier("base", 1)`
+	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
+		ExprString:    expression,
+		EstimatedTier: "base",
+		UsageFacts:    map[string]any{},
+	}
+
+	other := taskBillingOther(task).Snapshot()
+
+	assert.Equal(t, "tiered_expr", other["billing_mode"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte(expression)), other["expr_b64"])
+	assert.Equal(t, "base", other["matched_tier"])
+	assert.NotContains(t, other, "usage_facts")
+}
+
+func callLogTaskConsumption(t *testing.T, info *relaycommon.RelayInfo, task *model.Task) *model.Log {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	ctx.Set("token_name", "test_token")
+	LogTaskConsumption(ctx, info, task)
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	return log
+}
+
+func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 40, 40
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+
+	expression := `tier("720P", u("seconds") * 5)`
+	task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		TokenId:         0,
+		OriginModelName: "wan2.5-i2v-preview",
+		UsingGroup:      "default",
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: "GENERATE"},
+		PriceData: types.PriceData{
+			ModelPrice:     0.02,
+			Quota:          100,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			ExprString:    expression,
+			EstimatedTier: "720P",
+			UsageFacts: map[string]any{
+				"resolution": "720P",
+				"seconds":    5,
+			},
+		},
+	}
+
+	log := callLogTaskConsumption(t, info, task)
+
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, "tiered_expr", other["billing_mode"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte(expression)), other["expr_b64"])
+	assert.Equal(t, "720P", other["matched_tier"])
+	facts, ok := other["usage_facts"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "720P", facts["resolution"])
+	assert.Equal(t, float64(5), facts["seconds"])
+	assert.NotContains(t, other, "resolution")
+	assert.NotContains(t, other, "seconds")
+	assert.Contains(t, log.Content, "计算参数：")
+	assert.Contains(t, log.Content, "resolution: 720P")
+	assert.Contains(t, log.Content, "seconds: 5")
+}
+
+func TestLogTaskConsumptionWithoutSnapshotKeepsRatioMode(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 41, 41
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+
+	priceData := types.PriceData{
+		ModelPrice:     0.02,
+		Quota:          100,
+		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+	}
+	priceData.AddOtherRatio("size", 2)
+	task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		TokenId:         0,
+		OriginModelName: "test-model",
+		UsingGroup:      "default",
+		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: "GENERATE"},
+		PriceData:       priceData,
+	}
+
+	log := callLogTaskConsumption(t, info, task)
+
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, true, other["is_task"])
+	assert.Equal(t, "/v1/videos", other["request_path"])
+	assert.NotContains(t, other, "billing_mode")
+	assert.NotContains(t, other, "expr_b64")
+	assert.NotContains(t, other, "matched_tier")
+	assert.NotContains(t, other, "usage_facts")
+	assert.Contains(t, log.Content, "计算参数：")
+	assert.Contains(t, log.Content, "size: 2.00")
+}
+
+// Task logs distinguish jobs the client polls from requests whose HTTP call
+// returned the deliverable itself, and flag results the gateway did not keep.
+func TestLogTaskConsumptionMarksInlineResultsAndDiscardedArtifacts(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		status             model.TaskStatus
+		discarded          bool
+		pinnedProtocol     string
+		wantSync, wantKept bool
+	}{
+		{"asynchronous job", model.TaskStatusNotStart, false, "", false, true},
+		{"immediate result on a discarding route", model.TaskStatusSuccess, true, "", true, false},
+		{"openai image request waits for an asynchronous upstream task", model.TaskStatusNotStart, false, jsplugin.ProtocolOpenAIImage, true, true},
+		{"immediate failure", model.TaskStatusFailure, false, "", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userID, channelID = 43, 43
+			seedUser(t, userID, 10_000)
+			seedChannel(t, channelID)
+			task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
+			task.Status = tc.status
+			task.PrivateData.ResultDiscarded = tc.discarded
+			info := &relaycommon.RelayInfo{
+				UserId: userID, OriginModelName: "qwen-image-plus", UsingGroup: "default",
+				ChannelMeta:   &relaycommon.ChannelMeta{ChannelId: channelID},
+				TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "text_to_image"},
+				PriceData:     types.PriceData{ModelPrice: 0.03, Quota: 100, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+			}
+			gin.SetMode(gin.TestMode)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+			ctx.Set("token_name", "test_token")
+			if tc.pinnedProtocol != "" {
+				ctx.Set(jsplugin.ContextKeyPinnedEndpoint, jsplugin.PinnedEndpoint{Protocol: tc.pinnedProtocol})
+			}
+			LogTaskConsumption(ctx, info, task)
+			log := getLastLog(t)
+			require.NotNil(t, log)
+			var other map[string]any
+			require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+			assert.Equal(t, true, other["is_task"])
+			if tc.wantSync {
+				assert.Equal(t, true, other["task_sync"])
+			} else {
+				assert.NotContains(t, other, "task_sync")
+			}
+			if tc.wantKept {
+				assert.NotContains(t, other, "result_discarded")
+			} else {
+				assert.Equal(t, true, other["result_discarded"])
+			}
+		})
+	}
+}
+
+func TestTaskBillingOtherSeparatesPluginAndRootDiagnostics(t *testing.T) {
+	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
+	task.TaskID = "task_public"
+	task.PrivateData.UpstreamTaskID = "upstream-private"
+	task.PrivateData.NodeName = "node-a"
+	task.PrivateData.Execution = &model.TaskExecutionSnapshot{
+		TaskPlugin: &model.TaskPluginSnapshot{
+			Key:     "document-parser",
+			Name:    "Document Parser",
+			Version: "1.2.3",
+			Author: &model.TaskPluginAuthorSnapshot{
+				Name: "Community Author",
+				URL:  "https://plugins.example/author",
+			},
+			APIVersion: 1,
+			Generation: 42,
+		},
+	}
+
+	other := taskBillingOther(task).Snapshot()
+
+	assert.Equal(t, "task_public", other["task_id"])
+	adminInfo, ok := other["admin_info"].(map[string]any)
+	require.True(t, ok)
+	pluginInfo, ok := adminInfo["task_plugin"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "document-parser", pluginInfo["key"])
+	assert.Equal(t, "1.2.3", pluginInfo["version"])
+	assert.Equal(t, map[string]any{
+		"name": "Community Author",
+		"url":  "https://plugins.example/author",
+	}, pluginInfo["author"])
+
+	rootInfo, ok := other["root_info"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "upstream-private", rootInfo["upstream_task_id"])
+	assert.Equal(t, "node-a", rootInfo["node_name"])
+	runtimeInfo, ok := rootInfo["task_plugin"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, uint64(42), runtimeInfo["generation"])
+	assert.NotContains(t, runtimeInfo, "author")
 }
 
 func TestTaskBillingContextPriceDataFiltersMultiplier(t *testing.T) {
@@ -1295,91 +1540,6 @@ func getUserUsageAccounting(t *testing.T, id int) (int64, int64) {
 	return user.UsedQuota, int64(user.RequestCount)
 }
 
-func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {
-	truncate(t)
-	const userID, channelID = 40, 40
-	seedUser(t, userID, 10_000)
-	seedChannel(t, channelID)
-
-	expression := `tier("720P", u("seconds") * 5)`
-	task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
-	info := &relaycommon.RelayInfo{
-		UserId:          userID,
-		TokenId:         0,
-		OriginModelName: "wan2.5-i2v-preview",
-		UsingGroup:      "default",
-		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
-		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: "GENERATE"},
-		PriceData: types.PriceData{
-			ModelPrice:     0.02,
-			Quota:          100,
-			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
-		},
-		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			ExprString:    expression,
-			EstimatedTier: "720P",
-			UsageFacts: map[string]any{
-				"resolution": "720P",
-				"seconds":    5,
-			},
-		},
-	}
-
-	log := callLogTaskConsumption(t, info, task)
-
-	var other map[string]any
-	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
-	assert.EqualValues(t, "tiered_expr", other["billing_mode"])
-	assert.EqualValues(t, base64.StdEncoding.EncodeToString([]byte(expression)), other["expr_b64"])
-	assert.EqualValues(t, "720P", other["matched_tier"])
-	facts, ok := other["usage_facts"].(map[string]any)
-	require.True(t, ok)
-	assert.EqualValues(t, "720P", facts["resolution"])
-	assert.EqualValues(t, float64(5), facts["seconds"])
-	assert.NotContains(t, other, "resolution")
-	assert.NotContains(t, other, "seconds")
-	assert.Contains(t, log.Content, "计算参数：")
-	assert.Contains(t, log.Content, "resolution: 720P")
-	assert.Contains(t, log.Content, "seconds: 5")
-}
-
-func TestLogTaskConsumptionWithoutSnapshotKeepsRatioMode(t *testing.T) {
-	truncate(t)
-	const userID, channelID = 41, 41
-	seedUser(t, userID, 10_000)
-	seedChannel(t, channelID)
-
-	priceData := types.PriceData{
-		ModelPrice:     0.02,
-		Quota:          100,
-		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
-	}
-	priceData.AddOtherRatio("size", 2)
-	task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
-	info := &relaycommon.RelayInfo{
-		UserId:          userID,
-		TokenId:         0,
-		OriginModelName: "test-model",
-		UsingGroup:      "default",
-		ChannelMeta:     &relaycommon.ChannelMeta{ChannelId: channelID},
-		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: "GENERATE"},
-		PriceData:       priceData,
-	}
-
-	log := callLogTaskConsumption(t, info, task)
-
-	var other map[string]any
-	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
-	assert.EqualValues(t, true, other["is_task"])
-	assert.EqualValues(t, "/v1/videos", other["request_path"])
-	assert.NotContains(t, other, "billing_mode")
-	assert.NotContains(t, other, "expr_b64")
-	assert.NotContains(t, other, "matched_tier")
-	assert.NotContains(t, other, "usage_facts")
-	assert.Contains(t, log.Content, "计算参数：")
-	assert.Contains(t, log.Content, "size: 2.00")
-}
-
 func TestRecalculate_RejectsNegativeActualQuota(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
@@ -1723,103 +1883,4 @@ func TestSettle_TokenRecalcFallsBackToCompletionTokens(t *testing.T) {
 			assert.EqualValues(t, testCase.wantQuota, task.Quota)
 		})
 	}
-}
-
-func TestTaskBillingOtherIncludesTieredSnapshotAndKeepsUsageFactsNested(t *testing.T) {
-	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
-	expression := `tier("720P", u("seconds") * 5)`
-	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
-		ExprString:    expression,
-		EstimatedTier: "720P",
-		UsageFacts: map[string]any{
-			"resolution": "720P",
-			"seconds":    5,
-		},
-	}
-
-	other := taskBillingOther(task).Snapshot()
-
-	assert.EqualValues(t, "tiered_expr", other["billing_mode"])
-	assert.EqualValues(t, base64.StdEncoding.EncodeToString([]byte(expression)), other["expr_b64"])
-	assert.EqualValues(t, "720P", other["matched_tier"])
-	facts, ok := other["usage_facts"].(map[string]any)
-	require.True(t, ok)
-	assert.EqualValues(t, map[string]any{
-		"resolution": "720P",
-		"seconds":    5,
-	}, facts)
-	assert.NotContains(t, other, "resolution")
-	assert.NotContains(t, other, "seconds")
-}
-
-func TestTaskBillingOtherOmitsEmptyUsageFacts(t *testing.T) {
-	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
-	expression := `tier("base", 1)`
-	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
-		ExprString:    expression,
-		EstimatedTier: "base",
-		UsageFacts:    map[string]any{},
-	}
-
-	other := taskBillingOther(task).Snapshot()
-
-	assert.EqualValues(t, "tiered_expr", other["billing_mode"])
-	assert.EqualValues(t, base64.StdEncoding.EncodeToString([]byte(expression)), other["expr_b64"])
-	assert.EqualValues(t, "base", other["matched_tier"])
-	assert.NotContains(t, other, "usage_facts")
-}
-
-func TestTaskBillingOtherSeparatesPluginAndRootDiagnostics(t *testing.T) {
-	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
-	task.TaskID = "task_public"
-	task.PrivateData.UpstreamTaskID = "upstream-private"
-	task.PrivateData.NodeName = "node-a"
-	task.PrivateData.Execution = &model.TaskExecutionSnapshot{
-		TaskPlugin: &model.TaskPluginSnapshot{
-			Key:     "document-parser",
-			Name:    "Document Parser",
-			Version: "1.2.3",
-			Author: &model.TaskPluginAuthorSnapshot{
-				Name: "Community Author",
-				URL:  "https://plugins.example/author",
-			},
-			APIVersion: 1,
-			Generation: 42,
-		},
-	}
-
-	other := taskBillingOther(task).Snapshot()
-
-	assert.EqualValues(t, "task_public", other["task_id"])
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
-	require.True(t, ok)
-	pluginInfo, ok := adminInfo["task_plugin"].(map[string]interface{})
-	require.True(t, ok)
-	assert.EqualValues(t, "document-parser", pluginInfo["key"])
-	assert.EqualValues(t, "1.2.3", pluginInfo["version"])
-	assert.EqualValues(t, map[string]interface{}{
-		"name": "Community Author",
-		"url":  "https://plugins.example/author",
-	}, pluginInfo["author"])
-
-	rootInfo, ok := other["root_info"].(map[string]interface{})
-	require.True(t, ok)
-	assert.EqualValues(t, "upstream-private", rootInfo["upstream_task_id"])
-	assert.EqualValues(t, "node-a", rootInfo["node_name"])
-	runtimeInfo, ok := rootInfo["task_plugin"].(map[string]interface{})
-	require.True(t, ok)
-	assert.EqualValues(t, uint64(42), runtimeInfo["generation"])
-	assert.NotContains(t, runtimeInfo, "author")
-}
-
-func callLogTaskConsumption(t *testing.T, info *relaycommon.RelayInfo, task *model.Task) *model.Log {
-	t.Helper()
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
-	ctx.Set("token_name", "test_token")
-	LogTaskConsumption(ctx, info, task)
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	return log
 }

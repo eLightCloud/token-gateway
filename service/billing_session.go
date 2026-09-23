@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -12,7 +13,9 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -209,7 +212,12 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.settled || s.refunded || s.trusted || targetQuota <= s.preConsumedQuota {
+	imageRequest := false
+	if s.relayInfo != nil {
+		_, imageRequest = s.relayInfo.Request.(*dto.ImageRequest)
+		imageRequest = imageRequest || s.relayInfo.ImageRequestCount > 0
+	}
+	if s.settled || s.refunded || s.trusted && !imageRequest || targetQuota <= s.preConsumedQuota {
 		return nil
 	}
 
@@ -219,16 +227,20 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	}
 
 	if err := model.ReserveBillingBalances(model.BillingBalanceReserveParams{
-		UserId:         s.relayInfo.UserId,
-		Amount:         int64(delta),
-		BillingSource:  s.funding.Source(),
-		SubscriptionId: s.relayInfo.SubscriptionId,
-		TokenId:        s.relayInfo.TokenId,
-		ApplyToken:     !s.relayInfo.IsPlayground,
-		TokenUnlimited: s.relayInfo.TokenUnlimited,
+		RequireAvailableQuota: imageRequest,
+		UserId:                s.relayInfo.UserId,
+		Amount:                int64(delta),
+		BillingSource:         s.funding.Source(),
+		SubscriptionId:        s.relayInfo.SubscriptionId,
+		TokenId:               s.relayInfo.TokenId,
+		ApplyToken:            !s.relayInfo.IsPlayground,
+		TokenUnlimited:        s.relayInfo.TokenUnlimited,
 	}); err != nil {
 		if errors.Is(err, model.ErrBillingTokenQuotaInsufficient) {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
+		if errors.Is(err, model.ErrBillingWalletQuotaInsufficient) {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		if s.funding.Source() == BillingSourceSubscription {
 			return types.NewErrorWithStatusCode(
@@ -245,6 +257,9 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	s.preConsumedQuota += delta
 	s.tokenConsumed += delta
 	s.extraReserved += delta
+	if imageRequest {
+		s.trusted = false
+	}
 	s.syncRelayInfo()
 	return nil
 }
@@ -318,17 +333,16 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 		return false
 	}
 
-	trustQuota := common.GetTrustQuota()
-	if trustQuota <= 0 {
+	trustQuota := operation_setting.GetQuotaSetting().TrustQuotaUSD * common.QuotaPerUnit
+	if trustQuota <= 0 || math.IsNaN(trustQuota) || math.IsInf(trustQuota, 0) {
 		return false
 	}
 
 	// 检查令牌是否充足
 	tokenTrusted := s.relayInfo.TokenUnlimited
 	if !tokenTrusted {
-		tokenQuota, _ := c.Get("token_quota")
-		tokenQuotaValue, _ := tokenQuota.(int64)
-		tokenTrusted = tokenQuotaValue > int64(trustQuota)
+		tokenQuota := common.GetContextKeyInt64(c, "token_quota")
+		tokenTrusted = float64(tokenQuota) > trustQuota
 	}
 	if !tokenTrusted {
 		return false
@@ -336,7 +350,7 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 
 	switch s.funding.Source() {
 	case BillingSourceWallet:
-		return s.relayInfo.UserQuota > int64(trustQuota)
+		return float64(s.relayInfo.UserQuota) > trustQuota
 	case BillingSourceSubscription:
 		// 订阅不能启用信任旁路。原因：
 		// 1. PreConsumeUserSubscription 要求 amount>0 来创建预扣记录并锁定订阅

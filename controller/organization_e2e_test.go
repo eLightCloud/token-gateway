@@ -146,6 +146,7 @@ func setupOrganizationE2E(t *testing.T) (organizationE2EFixture, *gin.Engine) {
 		&model.Model{},
 		&model.Vendor{},
 		&model.Log{},
+		&model.AuditLog{},
 	))
 
 	seedOrganizationE2EFixture(t, db, fixture)
@@ -762,7 +763,7 @@ func TestOrganizationE2EBillingStartBackfill(t *testing.T) {
 
 	// 回填为每次更新写入一条操作审计日志（type=manage），但消费类原始日志条数不变。
 	var manageAudits int64
-	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeManage).Count(&manageAudits).Error)
+	require.NoError(t, model.LOG_DB.Model(&model.AuditLog{}).Where("category = ?", model.AuditCategoryOperation).Count(&manageAudits).Error)
 	assert.Equal(t, int64(2), manageAudits, "two billing-start updates produce two audit logs")
 	consumeFixtureCount := 0
 	for _, lg := range fixture.Logs {
@@ -854,7 +855,7 @@ func TestOrganizationE2EBillingStartIdempotentAndCAS(t *testing.T) {
 	require.True(t, firstApply.Success, firstApply.Message)
 
 	var audits int64
-	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeManage).Count(&audits).Error)
+	require.NoError(t, model.LOG_DB.Model(&model.AuditLog{}).Where("category = ?", model.AuditCategoryOperation).Count(&audits).Error)
 	require.Equal(t, int64(1), audits, "first apply writes exactly one audit log")
 
 	// 幂等：相同 candidate 再次应用，expected 为回填后的生效起点（== candidate）。
@@ -862,7 +863,7 @@ func TestOrganizationE2EBillingStartIdempotentAndCAS(t *testing.T) {
 	require.Equal(t, int64(1782820000), idempotentPreview.CurrentBillingStart)
 	idempotentApply := applyOrganizationBillingStartRaw(t, router, fixture, 1001, 1001, 1782820000, idempotentPreview.CurrentBillingStart)
 	require.True(t, idempotentApply.Success, idempotentApply.Message)
-	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeManage).Count(&audits).Error)
+	require.NoError(t, model.LOG_DB.Model(&model.AuditLog{}).Where("category = ?", model.AuditCategoryOperation).Count(&audits).Error)
 	assert.Equal(t, int64(1), audits, "idempotent re-apply must not write a new audit log")
 
 	// CAS 失败：用陈旧的 expected 应用必须被拒绝。
@@ -876,7 +877,7 @@ func TestOrganizationE2EBillingStartIdempotentAndCAS(t *testing.T) {
 	assert.Contains(t, shrink.Message, "current billing start")
 
 	// 成功变更与失败尝试（CAS、截断）都写入审计，便于追溯高风险操作。
-	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeManage).Count(&audits).Error)
+	require.NoError(t, model.LOG_DB.Model(&model.AuditLog{}).Where("category = ?", model.AuditCategoryOperation).Count(&audits).Error)
 	assert.Equal(t, int64(3), audits, "one success + two failed attempts are all audited")
 }
 
@@ -1298,13 +1299,15 @@ func TestOrganizationE2EInvoiceInvalidFactorWritesFailureAudit(t *testing.T) {
 	assert.False(t, body.Success)
 	assert.Contains(t, body.Message, "decimal number")
 
-	var audits []model.Log
+	var audits []model.AuditLog
 	require.NoError(t, model.LOG_DB.
-		Where("type = ?", model.LogTypeManage).
+		Where("category = ?", model.AuditCategoryOperation).
 		Order("id asc").
 		Find(&audits).Error)
 	require.Len(t, audits, 1)
 	assert.Contains(t, audits[0].Content, "Failed to update org")
-	assert.Contains(t, audits[0].Other, `"action":"organization.settlement_rule_update_failed"`)
-	assert.Contains(t, audits[0].Other, `"factor":"-0.0001"`)
+	assert.Equal(t, "organization.settlement_rule_update_failed", audits[0].Action)
+	factor, err := common.Marshal(audits[0].Other.Op.Params["factor"])
+	require.NoError(t, err)
+	assert.JSONEq(t, `"-0.0001"`, string(factor))
 }

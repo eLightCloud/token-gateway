@@ -66,13 +66,14 @@ func PreConsumeBillingBalances(params BillingBalancePreConsumeParams) (*Subscrip
 }
 
 type BillingBalanceReserveParams struct {
-	UserId         int
-	Amount         int64
-	BillingSource  string
-	SubscriptionId int
-	TokenId        int
-	ApplyToken     bool
-	TokenUnlimited bool
+	RequireAvailableQuota bool
+	UserId                int
+	Amount                int64
+	BillingSource         string
+	SubscriptionId        int
+	TokenId               int
+	ApplyToken            bool
+	TokenUnlimited        bool
 }
 
 // ReserveBillingBalances extends an existing pre-consume atomically. Wallet
@@ -89,7 +90,15 @@ func ReserveBillingBalances(params BillingBalanceReserveParams) error {
 				return err
 			}
 		case "wallet":
-			if err := adjustUserWalletInTx(tx, params.UserId, -params.Amount); err != nil {
+			if params.RequireAvailableQuota {
+				result := tx.Model(&User{}).Where("id = ? AND quota >= ?", params.UserId, params.Amount).Update("quota", gorm.Expr("quota - ?", params.Amount))
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return ErrBillingWalletQuotaInsufficient
+				}
+			} else if err := adjustUserWalletInTx(tx, params.UserId, -params.Amount); err != nil {
 				return err
 			}
 		default:

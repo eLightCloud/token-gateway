@@ -18,7 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { describe, test } from 'node:test'
+import { resolve } from 'node:path'
+import { describe, test } from 'vitest'
 
 import type { TFunction } from 'i18next'
 
@@ -77,7 +78,7 @@ describe('organization invoice category labels', () => {
   test('uses the confirmed Simplified Chinese business labels', () => {
     const locale = JSON.parse(
       readFileSync(
-        new URL('../../../i18n/locales/zh.json', import.meta.url),
+        resolve('src/i18n/locales/zh.json'),
         'utf8'
       )
     ) as { translation: Record<string, string> }

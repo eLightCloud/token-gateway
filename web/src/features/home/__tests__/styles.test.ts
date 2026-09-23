@@ -18,18 +18,19 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { describe, test } from 'node:test'
+import { resolve } from 'node:path'
+import { describe, test } from 'vitest'
 
 const mainSource = readFileSync(
-  new URL('../../../main.tsx', import.meta.url),
+  resolve('src/main.tsx'),
   'utf8'
 )
 const localStyles = readFileSync(
-  new URL('../../../styles/local.css', import.meta.url),
+  resolve('src/styles/local.css'),
   'utf8'
 )
 const homeStyles = readFileSync(
-  new URL('../../../styles/lighting-home.css', import.meta.url),
+  resolve('src/styles/lighting-home.css'),
   'utf8'
 )
 

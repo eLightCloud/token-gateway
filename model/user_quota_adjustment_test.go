@@ -10,6 +10,7 @@ import (
 
 func TestApplyAdminUserQuotaAdjustmentPersistsExactWalletDeltas(t *testing.T) {
 	setupOrganizationTestState(t)
+	require.NoError(t, DB.Create(&User{Id: 1, Username: "quota-operator", AffCode: "operator", Role: common.RoleRootUser}).Error)
 	require.NoError(t, DB.Create(&User{
 		Id:       20,
 		Username: "adjusted-user",
@@ -49,6 +50,7 @@ func TestApplyAdminUserQuotaAdjustmentPersistsExactWalletDeltas(t *testing.T) {
 
 func TestApplyAdminUserQuotaAdjustmentRejectsOverflowWithoutPartialWrite(t *testing.T) {
 	setupOrganizationTestState(t)
+	require.NoError(t, DB.Create(&User{Id: 1, Username: "quota-operator", AffCode: "operator", Role: common.RoleRootUser}).Error)
 	require.NoError(t, DB.Create(&User{
 		Id:       21,
 		Username: "quota-limit-user",

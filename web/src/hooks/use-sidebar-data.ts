@@ -21,6 +21,7 @@ import {
   Activity,
   Building2,
   Box,
+  ClipboardList,
   CreditCard,
   FileSpreadsheet,
   FileText,
@@ -34,6 +35,7 @@ import {
   ReceiptText,
   ServerCog,
   Settings,
+  ShieldCheck,
   Ticket,
   User,
   Users,
@@ -140,6 +142,11 @@ export function useSidebarData(): SidebarData {
             icon: FileText,
           },
           {
+            title: t('Audit Logs'),
+            url: '/usage-logs/audit',
+            icon: ClipboardList,
+          },
+          {
             title: t('Task Logs'),
             url: '/usage-logs/task',
             activeUrls: ['/usage-logs/drawing'],
@@ -161,6 +168,11 @@ export function useSidebarData(): SidebarData {
             title: t('Profile'),
             url: '/profile',
             icon: User,
+          },
+          {
+            title: t('Security & Access'),
+            url: '/security',
+            icon: ShieldCheck,
           },
         ],
       },
@@ -218,6 +230,8 @@ export function useSidebarData(): SidebarData {
             title: t('Token bill'),
             url: '/reconciliation',
             icon: ReceiptText,
+          },
+          {
             title: t('Task Plugins'),
             url: '/task-plugins',
             icon: PlugZap,
