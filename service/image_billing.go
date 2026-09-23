@@ -71,6 +71,10 @@ func PrepareImageBillingForRequest(c *gin.Context, info *relaycommon.RelayInfo, 
 		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
 	info.PriceData.QuotaToPreConsume = quota
+	quota, err = OrganizationDiscountReserveTarget(info.PriceData)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
 	if quota == 0 && info.Billing == nil {
 		return nil
 	}

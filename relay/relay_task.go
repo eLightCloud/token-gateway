@@ -25,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 )
 
 type TaskSubmitResult struct {
@@ -248,6 +249,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 4. 价格计算：基础模型价格
 	info.OriginModelName = modelName
+	previousPriceData := info.PriceData
 	var priceData types.PriceData
 	var err error
 	pluginKey := c.GetString("task_plugin_key")
@@ -330,12 +332,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		noteTaskQuotaClamp(info, clamp)
 	}
 
-	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
-	if info.Billing == nil && !info.PriceData.FreeModel {
-		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
-			return nil, service.TaskErrorFromAPIError(apiErr)
-		}
+	if err := service.PrepareTaskOrganizationDiscount(info, previousPriceData); err != nil {
+		return nil, service.TaskErrorWrapperLocal(err, "organization_discount_load_failed", http.StatusInternalServerError)
+	}
+	if apiErr := service.PrepareTaskBillingForAttempt(c, info); apiErr != nil {
+		return nil, service.TaskErrorFromAPIError(apiErr)
 	}
 
 	// 8. 构建请求体
@@ -380,7 +381,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			if err != nil {
 				logger.LogWarn(c, fmt.Sprintf("task immediate usage settlement failed; retaining reserved quota: %v", err))
 			} else {
-				finalQuota = settlement.ActualQuotaAfterGroup
+				var discountClamp *common.QuotaClamp
+				finalQuota, discountClamp = common.QuotaFromDecimalChecked(decimal.NewFromInt(int64(settlement.ActualQuotaAfterGroup)).Mul(decimal.NewFromFloat(info.PriceData.DiscountSnapshot.EffectiveRatio())))
+				noteTaskQuotaClamp(info, discountClamp)
 				snap.UsageFacts = facts
 				snap.EstimatedTier = settlement.MatchedTier
 				noteTaskQuotaClamp(info, settlement.Clamp)
@@ -388,7 +391,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	} else {
 		if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, parsed.TaskData); len(adjustedRatios) > 0 {
-			if _, adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
+			if preConsumeQuota, adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
+				info.PriceData.QuotaToPreConsume = preConsumeQuota
 				// 基于调整后的 ratios 重新计算 quota
 				finalQuota = adjustedQuota
 				info.PriceData.ReplaceOtherRatios(adjustedRatios)

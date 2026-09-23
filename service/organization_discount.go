@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
@@ -93,7 +92,7 @@ func PrepareOrganizationDiscountReservation(relayInfo *relaycommon.RelayInfo) *r
 	if ratio <= 1 {
 		return nil
 	}
-	targetQuota, err := common.QuotaFromFloatStrict(float64(relayInfo.PriceData.QuotaToPreConsume) * ratio)
+	targetQuota, err := OrganizationDiscountReserveTarget(relayInfo.PriceData)
 	if err != nil {
 		return relaytypes.NewErrorWithStatusCode(
 			err,

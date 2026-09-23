@@ -57,11 +57,10 @@ func PrepareRequestBilling(c *gin.Context, info *relaycommon.RelayInfo) *types.N
 
 	priceData, err := helper.ModelPriceHelper(c, info, tokens, meta)
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, service.ErrOrganizationDiscountLoadFailed) {
-			status = http.StatusInternalServerError
-		}
-		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(status))
+		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
+	}
+	if err := service.LoadRequestOrganizationDiscount(info); err != nil {
+		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusInternalServerError), types.ErrOptionWithSkipRetry())
 	}
 	if priceData.FreeModel {
 		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", info.OriginModelName))

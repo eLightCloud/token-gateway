@@ -21,6 +21,7 @@ import (
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/samber/lo"
+	"github.com/shopspring/decimal"
 )
 
 // TaskPollingAdaptor 定义轮询所需的最小适配器接口，避免 service -> relay 的循环依赖
@@ -686,7 +687,12 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 		}
 		bc.TieredSnapshot.UsageFacts = usageFacts
 		bc.TieredSnapshot.EstimatedTier = result.MatchedTier
-		RecalculateTaskQuota(ctx, task, result.ActualQuotaAfterGroup, "任务用量表达式结算", result.Clamp)
+		actualQuota := result.ActualQuotaAfterGroup
+		var discountClamp *common.QuotaClamp
+		if bc.Discount != nil {
+			actualQuota, discountClamp = common.QuotaFromDecimalChecked(decimal.NewFromInt(int64(actualQuota)).Mul(decimal.NewFromFloat(bc.Discount.Ratio)))
+		}
+		RecalculateTaskQuota(ctx, task, actualQuota, "任务用量表达式结算", result.Clamp, discountClamp)
 		return true
 	}
 	// 按次计费的成功任务保持预扣；失败任务由调用方全额退款。

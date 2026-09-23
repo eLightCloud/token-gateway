@@ -512,7 +512,12 @@ func openTaskDialectDatabase(t *testing.T, models ...any) (*gorm.DB, common.Data
 }
 
 func TestImmediateTaskSettlementDatabase(t *testing.T) {
-	db, dialect := openTaskDialectDatabase(t, &model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}, &model.TaskSettlementJournal{}, &model.SystemTask{}, &model.SystemTaskLock{})
+	dialect := common.DatabaseType(os.Getenv("TEST_TASK_DB_DIALECT"))
+	if dialect == "" {
+		dialect = common.DatabaseTypeSQLite
+	}
+	db, _ := newAuditTestDatabase(t, string(dialect), os.Getenv("TEST_"+strings.ToUpper(string(dialect))+"_DSN"))
+	require.NoError(t, db.AutoMigrate(&model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}, &model.TaskSettlementJournal{}, &model.SystemTask{}, &model.SystemTaskLock{}))
 	oldDB, oldLogDB := model.DB, model.LOG_DB
 	oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
 	oldRedis, oldMemory, oldBatch, oldConsume, oldExport := common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled, common.DataExportEnabled
@@ -539,12 +544,14 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 	plugin, err := pluginruntime.CompilePlugin(source, pluginruntime.Options{})
 	require.NoError(t, err)
 	for index, tc := range []struct {
-		name, status string
-		actual       any
-		count        float64
+		name, status   string
+		actual         any
+		count          float64
+		discountScaled int
 	}{
-		{"partial", "SUCCESS", 2, 2}, {"zero", "SUCCESS", 0, 0}, {"larger", "SUCCESS", 6, 6},
-		{"invalid usage", "SUCCESS", -1, 4}, {"expression failure", "SUCCESS", 7, 4}, {"negative result", "SUCCESS", 8, 4}, {"missing usage", "SUCCESS", nil, 4}, {"failed", "FAILURE", 9, 0},
+		{"partial", "SUCCESS", 2, 2, 0}, {"zero", "SUCCESS", 0, 0, 0}, {"larger", "SUCCESS", 6, 6, 0},
+		{"invalid usage", "SUCCESS", -1, 4, 0}, {"expression failure", "SUCCESS", 7, 4, 0}, {"negative result", "SUCCESS", 8, 4, 0}, {"missing usage", "SUCCESS", nil, 4, 0}, {"failed", "FAILURE", 9, 0, 0},
+		{"discount", "SUCCESS", 2, 2, 800000}, {"markup", "SUCCESS", 6, 6, 1500000}, {"discount failed", "FAILURE", 9, 0, 800000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -565,6 +572,10 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			require.NoError(t, db.Create(&user).Error)
 			ch := model.Channel{Name: "test provider", Type: constant.ChannelTypeTaskPlugin}
 			require.NoError(t, db.Create(&ch).Error)
+			var discountSnapshot *model.OrganizationDiscountSnapshot
+			if tc.discountScaled > 0 {
+				discountSnapshot = seedRelayOrganizationDiscount(t, db, user.Id, ch.Id, tc.discountScaled)
+			}
 			c := taskSubmissionTestContext()
 			c.Set("group", "default")
 			c.Set("username", user.Username)
@@ -587,11 +598,18 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			require.Nil(t, taskErr)
 			require.NotNil(t, outcome)
 			want := common.QuotaRound(tc.count * 0.01 * common.QuotaPerUnit)
+			if tc.discountScaled > 0 {
+				want = want * tc.discountScaled / 1000000
+			}
 			assert.EqualValues(t, want, outcome.Result.Quota)
 			assert.EqualValues(t, want, info.PriceData.Quota)
 			var stored model.Task
 			require.NoError(t, db.Where("task_id = ?", info.PublicTaskID).First(&stored).Error)
 			assert.EqualValues(t, want, stored.Quota)
+			if discountSnapshot != nil {
+				require.NotNil(t, stored.PrivateData.BillingContext.Discount)
+				assert.Equal(t, &model.TaskBillingDiscount{SnapshotID: discountSnapshot.Id, ChannelId: ch.Id, Ratio: float64(tc.discountScaled) / 1000000}, stored.PrivateData.BillingContext.Discount)
+			}
 			assert.Equal(t, model.TaskStatus(tc.status), stored.Status)
 			assert.Positive(t, stored.FinishTime)
 			assert.Equal(t, float64(4), info.TieredBillingSnapshot.EstimatedQuotaBeforeGroup/(0.01*common.QuotaPerUnit))
@@ -608,6 +626,11 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			assert.EqualValues(t, want, logs[0].Quota)
 			var other map[string]any
 			require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
+			if discountSnapshot != nil {
+				discount := other["admin_info"].(map[string]any)["organization_discount"].(map[string]any)
+				assert.EqualValues(t, discountSnapshot.Id, discount["snapshot_id"])
+				assert.Equal(t, float64(tc.discountScaled)/1000000, discount["ratio"])
+			}
 			if tc.status == "SUCCESS" {
 				assert.Equal(t, tc.count, other["usage_facts"].(map[string]any)["units"])
 			}

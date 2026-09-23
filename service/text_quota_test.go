@@ -111,7 +111,8 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		audio, stream, refund, insufficient, tool bool
 		realtime, reserveInsufficient             bool
 		wallet, outboundImages                    int
-		groupRatio                                float64
+		groupRatio, organizationRatio             float64
+		reservationWant                           int
 		want                                      int
 		unit                                      billingexpr.BillingUnit
 		requestedImages, actualImages             int
@@ -138,6 +139,9 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		{name: "image quantity zero price stays free", expression: `tier("image", fixed(0)) * image_count`, requestedImages: 3, actualImages: 2, unit: billingexpr.BillingUnitRequest},
 		{name: "image quantity failure refunds reservation", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 3, refund: true},
 		{name: "image quantity exceeds one-image wallet before submission", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 4, wallet: 20000, insufficient: true},
+		{name: "image override reserves organization markup", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, actualImages: 4, organizationRatio: 1.5, want: 120000, unit: billingexpr.BillingUnitRequest},
+		{name: "image override discount retains full price admission", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, actualImages: 4, organizationRatio: 0.8, want: 64000, reservationWant: 80000, unit: billingexpr.BillingUnitRequest},
+		{name: "image override markup cannot exceed wallet", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, organizationRatio: 1.5, wallet: 100000, reserveInsufficient: true, refund: true},
 		{name: "image override reserves extra quantity", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, want: 80000, unit: billingexpr.BillingUnitRequest},
 		{name: "image override cannot exceed remaining wallet", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, wallet: 40000, reserveInsufficient: true, refund: true},
 	} {
@@ -176,6 +180,9 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 			snapshot := &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: tc.expression, ExprHash: billingexpr.ExprHashString(tc.expression), QuotaPerUnit: common.QuotaPerUnit, GroupRatio: group, EstimatedTier: trace.MatchedTier, EstimatedBillingUnit: trace.BillingUnit, EstimatedFixedPrice: trace.FixedPrice, EstimatedQuotaAfterGroup: reservation}
 			snapshot.EstimatedImageCount = trace.ImageCount
 			info := &relaycommon.RelayInfo{UserId: user.Id, TokenId: token.Id, TokenKey: token.Key, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id}, OriginModelName: "fixed-test", UsingGroup: "default", UserGroup: "default", UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ForcePreConsume: true, StartTime: time.Now(), IsStream: tc.stream, RelayFormat: types.RelayFormatOpenAI, PriceData: hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: group}}, TieredBillingSnapshot: snapshot, BillingRequestInput: request}
+			if tc.organizationRatio > 0 {
+				info.PriceData.DiscountSnapshot = &hosttypes.OrganizationDiscountSnapshot{AppliedRatio: tc.organizationRatio}
+			}
 			info.SetEstimatePromptTokens(tc.estimate)
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
@@ -200,7 +207,11 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 						assert.Equal(t, reservation, info.Billing.GetPreConsumedQuota())
 					} else {
 						require.Nil(t, reserveErr)
-						assert.Equal(t, tc.want, info.Billing.GetPreConsumedQuota())
+						wantReservation := tc.want
+						if tc.reservationWant > 0 {
+							wantReservation = tc.reservationWant
+						}
+						assert.Equal(t, wantReservation, info.Billing.GetPreConsumedQuota())
 					}
 				}
 				if tc.refund {
