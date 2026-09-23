@@ -18,6 +18,8 @@ last-reviewed: 2026-08-14
 
 客户从创建 API Key 到使用 OpenAI 兼容 SDK 完成调用的步骤见 [客户 API 接入指南](./客户API接入指南.md)。
 
+渠道媒体转发出站 NGINX 的入口合同、参考配置和验收清单见 [NGINX媒体转发入口配置](./NGINX媒体转发入口配置.md)。
+
 ## 不放什么
 - 本地开发命令 -> 30-engineering/命令清单.md
 - 产品路线 -> 50-planning/
