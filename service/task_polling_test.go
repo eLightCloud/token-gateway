@@ -1041,3 +1041,96 @@ func TestUpdateBatchTasksPollClassification(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskUsageReconciliationSurvivesRestartAndJournalReplay(t *testing.T) {
+	for _, mode := range []string{"expression", "tokens", "per-call"} {
+		t.Run(mode, func(t *testing.T) {
+			truncate(t)
+			const userID, channelID = 941, 942
+			seedUser(t, userID, 10000)
+			seedTaskPollingChannel(t, channelID, true)
+			task := makeTask(userID, channelID, 5000, 0, BillingSourceWallet, 0)
+			task.TaskID = "usage-recovery-" + mode
+			task.Platform = "doubao"
+			task.PrivateData.UpstreamTaskID = "upstream-recovery"
+			bc := task.PrivateData.BillingContext
+			switch mode {
+			case "expression":
+				expression := `tier("actual", u("tokens"))`
+				bc.TieredSnapshot = &billingexpr.BillingSnapshot{ExprString: expression, ExprHash: billingexpr.ExprHashString(expression), GroupRatio: 1, QuotaPerUnit: 1000, ExprVersion: 1, TaskUsageBilling: true, UsageFacts: map[string]any{"tokens": 5}}
+			case "tokens":
+				bc.ModelRatio = 1000
+			case "per-call":
+				bc.PerCallBilling = true
+			}
+			require.NoError(t, model.DB.Create(task).Error)
+			adaptor := &scriptedPollingAdaptor{parse: &relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess), UsageFacts: map[string]any{UsagePendingFact: true}}}
+			ch, err := model.GetChannelById(channelID, true)
+			require.NoError(t, err)
+			require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{task.GetUpstreamTaskID(): task}))
+			var persisted model.Task
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			require.True(t, persisted.UsagePending)
+			require.NotNil(t, persisted.PrivateData.UsageReconciliation)
+			assert.EqualValues(t, model.TaskStatusSuccess, persisted.Status)
+			assert.EqualValues(t, 5000, persisted.Quota)
+			assert.EqualValues(t, 10000, getUserQuota(t, userID), "no estimated final charge")
+			require.True(t, model.HasPendingTaskUsage())
+
+			oldFactory := GetTaskAdaptorFunc
+			GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+			t.Cleanup(func() { GetTaskAdaptorFunc = oldFactory })
+			// Retrying a vanished upstream task must not turn a successful generation
+			// into a failure/refund. No timing dependence: explicitly make it due.
+			persisted.PrivateData.UsageReconciliation.NextAttemptAt = 0
+			require.NoError(t, model.PersistTaskUsage(&persisted, false))
+			adaptor.statusCode = http.StatusNotFound
+			RunTaskUsageReconciliationOnce(context.Background())
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			assert.True(t, persisted.UsagePending)
+			assert.EqualValues(t, model.TaskStatusSuccess, persisted.Status)
+			assert.EqualValues(t, 10000, getUserQuota(t, userID))
+
+			persisted.PrivateData.UsageReconciliation.NextAttemptAt = 0
+			require.NoError(t, model.PersistTaskUsage(&persisted, false))
+			adaptor.statusCode = http.StatusOK
+			adaptor.parse.UsageFacts = map[string]any{UsagePendingFact: false, "tokens": 3}
+			adaptor.body = []byte(`{"status":"succeeded","usage":{"completion_tokens":3}}`)
+			RunTaskUsageReconciliationOnce(context.Background())
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			assert.False(t, persisted.UsagePending)
+			assert.Positive(t, persisted.PrivateData.UsageReconciliation.SettledAt)
+			assert.EqualValues(t, 3, persisted.PrivateData.UsageReconciliation.Facts["tokens"])
+			finalQuota, finalBalance := 3000, 12000
+			if mode == "per-call" {
+				finalQuota, finalBalance = 5000, 10000
+			}
+			assert.EqualValues(t, finalQuota, persisted.Quota)
+			assert.EqualValues(t, finalBalance, getUserQuota(t, userID))
+			if mode == "expression" {
+				assert.EqualValues(t, 3, persisted.PrivateData.BillingContext.TieredSnapshot.UsageFacts["tokens"])
+				// Simulate a crash after the journal committed but before the durable
+				// queue acknowledgement. The immutable reservation survives on disk.
+				require.NoError(t, model.DB.Model(&persisted).Update("usage_pending", true).Error)
+				persisted.UsagePending = true
+				persisted.PrivateData.UsageReconciliation.NextAttemptAt = 0
+				require.NoError(t, model.PersistTaskUsage(&persisted, false))
+			}
+			RunTaskUsageReconciliationOnce(context.Background())
+			assert.EqualValues(t, finalBalance, getUserQuota(t, userID), "replay cannot move money twice")
+			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+			assert.False(t, persisted.UsagePending)
+			assert.EqualValues(t, finalQuota, persisted.Quota)
+			var journals int64
+			require.NoError(t, model.DB.Model(&model.TaskSettlementJournal{}).Where("entity_id = ?", task.ID).Count(&journals).Error)
+			assert.Zero(t, journals, "completed journals are acknowledged")
+			var logs int64
+			require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeRefund).Count(&logs).Error)
+			wantLogs := int64(1)
+			if mode == "per-call" {
+				wantLogs = 0
+			}
+			assert.EqualValues(t, wantLogs, logs)
+		})
+	}
+}

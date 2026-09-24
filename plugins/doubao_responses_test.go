@@ -268,8 +268,10 @@ func TestDoubaoSeedanceUsageFacts(t *testing.T) {
 		{[]string{pro10, "doubao-seedance-1-0-lite-t2v", "doubao-seedance-1-0-lite-i2v"}, []string{"480p", "720p", "1080p"}, []string{"resolution", "tokens"}},
 		{[]string{pro15}, []string{"480p", "720p", "1080p"}, []string{"generate_audio", "resolution", "tokens"}},
 		{[]string{v20}, []string{"480p", "720p", "1080p", "4k"}, []string{"resolution", "tokens", "video_input"}},
-		{[]string{fast20, mini20}, []string{"480p", "720p"}, []string{"resolution", "tokens", "video_input"}},
+		{[]string{fast20, mini20}, []string{"480p", "720p", "1080p"}, []string{"resolution", "tokens", "video_input"}},
 		{[]string{v25}, []string{"480p", "720p", "1080p"}, []string{"resolution", "tokens", "video_input"}},
+		{[]string{"dreamina-seedance-2-0-260128"}, []string{"720p", "1080p", "4k"}, []string{"resolution", "tokens", "video_input"}},
+		{[]string{"dreamina-seedance-2-0-fast-260128", "dreamina-seedance-2-0-mini-260615", "dreamina-seedance-2-5-260628"}, []string{"720p", "1080p"}, []string{"resolution", "tokens", "video_input"}},
 	}
 	profiled := make([]string, 0, len(plugin.Meta.Models))
 	for _, family := range families {
@@ -360,9 +362,9 @@ func TestDoubaoSeedanceUsageFacts(t *testing.T) {
 			resolution string
 			want       map[string]any
 		}{
-			{mini20, "1080p", map[string]any{"tokens": float64(90000)}},
-			{v25, "4k", map[string]any{"tokens": float64(90000)}},
-			{v20, "4k", map[string]any{"tokens": float64(90000), "resolution": "4k"}},
+			{mini20, "1080p", map[string]any{"usage_pending": false, "tokens": float64(90000)}},
+			{v25, "4k", map[string]any{"usage_pending": false, "tokens": float64(90000)}},
+			{v20, "4k", map[string]any{"usage_pending": false, "tokens": float64(90000), "resolution": "4k"}},
 		} {
 			queryContext := map[string]any{"model": tc.model, "upstreamModel": tc.model, "action": "text_to_video"}
 			body := map[string]any{

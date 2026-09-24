@@ -732,3 +732,51 @@ func TestChannelOtherSettingsValidateToolLossPolicy(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tool_loss_policy")
 }
+
+func TestChannelSettingsValidateVideoUpstream(t *testing.T) {
+	tests := []struct {
+		name          string
+		setting       ChannelSettings
+		expectedError string
+	}{
+		{"defaults", ChannelSettings{}, ""},
+		{"ark", ChannelSettings{VideoUpstreamProtocol: "ark"}, ""},
+		{"openai_video standard", ChannelSettings{VideoUpstreamProtocol: "openai_video"}, ""},
+		{"openai_video zapgogo", ChannelSettings{VideoUpstreamProtocol: "openai_video", VideoUpstreamProfile: "seedance_zapgogo"}, ""},
+		{"openai_video codeyy", ChannelSettings{VideoUpstreamProtocol: "openai_video", VideoUpstreamProfile: "seedance_codeyy"}, ""},
+		{"case and space normalized", ChannelSettings{VideoUpstreamProtocol: " OpenAI_Video ", VideoUpstreamProfile: " Standard "}, ""},
+		{"unknown protocol", ChannelSettings{VideoUpstreamProtocol: "gemini"}, "invalid video_upstream_protocol"},
+		{"unknown profile", ChannelSettings{VideoUpstreamProtocol: "openai_video", VideoUpstreamProfile: "vendor_x"}, "invalid video_upstream_profile"},
+		{"profile on ark rejected", ChannelSettings{VideoUpstreamProtocol: "ark", VideoUpstreamProfile: "seedance_zapgogo"}, "requires video_upstream_protocol openai_video"},
+		{"profile without protocol rejected", ChannelSettings{VideoUpstreamProfile: "seedance_codeyy"}, "requires video_upstream_protocol openai_video"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := testCase.setting.ValidateVideoUpstream()
+			if testCase.expectedError == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, testCase.expectedError)
+		})
+	}
+}
+
+func TestChannelSettingsResolvedVideoUpstream(t *testing.T) {
+	protocol, profile := ChannelSettings{}.ResolvedVideoUpstream()
+	assert.Equal(t, VideoUpstreamProtocolArk, protocol)
+	assert.Equal(t, VideoUpstreamProfileStandard, profile)
+
+	protocol, profile = ChannelSettings{VideoUpstreamProtocol: "openai_video"}.ResolvedVideoUpstream()
+	assert.Equal(t, VideoUpstreamProtocolOpenAIVideo, protocol)
+	assert.Equal(t, VideoUpstreamProfileStandard, profile)
+
+	protocol, profile = ChannelSettings{VideoUpstreamProtocol: "openai_video", VideoUpstreamProfile: "seedance_zapgogo"}.ResolvedVideoUpstream()
+	assert.Equal(t, VideoUpstreamProtocolOpenAIVideo, protocol)
+	assert.Equal(t, VideoUpstreamProfileZapgogo, profile)
+
+	// An invalid combination resolves to the ark default; saving is gated by
+	// ValidateVideoUpstream.
+	protocol, _ = ChannelSettings{VideoUpstreamProfile: "seedance_zapgogo"}.ResolvedVideoUpstream()
+	assert.Equal(t, VideoUpstreamProtocolArk, protocol)
+}

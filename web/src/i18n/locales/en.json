@@ -7097,6 +7097,14 @@
     "Zhipu AI": "Zhipu AI",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Video Upstream Protocol": "Video Upstream Protocol",
+    "Video Upstream Profile": "Video Upstream Profile",
+    "Ark native (ModelArk)": "Ark native (ModelArk)",
+    "OpenAI Videos compatible": "OpenAI Videos compatible",
+    "Standard Videos": "Standard Videos",
+    "Southbound wire format for video generation. Existing tasks keep the protocol pinned at submission.": "Southbound wire format for video generation. Existing tasks keep the protocol pinned at submission.",
+    "Vendor extension contract on top of the OpenAI Videos protocol.": "Vendor extension contract on top of the OpenAI Videos protocol.",
+    "Vendor extension profiles apply only to the OpenAI Videos protocol.": "Vendor extension profiles apply only to the OpenAI Videos protocol."
   }
 }

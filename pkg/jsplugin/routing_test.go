@@ -895,6 +895,41 @@ func TestDeclarativeRouteValidationProtectsNamespacesAndCanonicalSyntax(t *testi
 			route:         Route{Method: "POST", Path: "/vendor/query", Type: RouteTypeDynamic, Decode: "decode", Render: "show", TaskIDParam: "task_id"},
 			expectedError: "must not declare taskIdParam",
 		},
+		{
+			name:          "list missing presenter",
+			route:         Route{Method: "GET", Path: "/vendor/jobs", Type: RouteTypeList},
+			expectedError: "must declare render",
+		},
+		{
+			name:          "list declares decoder",
+			route:         Route{Method: "GET", Path: "/vendor/jobs", Type: RouteTypeList, Decode: "decode", Render: "listed"},
+			expectedError: "must not declare decode",
+		},
+		{
+			name:          "list declares task id parameter",
+			route:         Route{Method: "GET", Path: "/vendor/jobs", Type: RouteTypeList, Render: "listed", TaskIDParam: "task_id"},
+			expectedError: "must not declare decode or taskIdParam",
+		},
+		{
+			name:          "list declares models",
+			route:         Route{Method: "GET", Path: "/vendor/jobs", Type: RouteTypeList, Render: "listed", Models: []string{"model"}},
+			expectedError: "must not declare models",
+		},
+		{
+			name:          "delete missing task id parameter",
+			route:         Route{Method: "DELETE", Path: "/vendor/jobs", Type: RouteTypeDelete},
+			expectedError: "must contain :task_id",
+		},
+		{
+			name:          "delete declares decoder",
+			route:         Route{Method: "DELETE", Path: "/vendor/jobs/:task_id", Type: RouteTypeDelete, Decode: "decode"},
+			expectedError: "must not declare decode",
+		},
+		{
+			name:          "delete declares models",
+			route:         Route{Method: "DELETE", Path: "/vendor/jobs/:task_id", Type: RouteTypeDelete, Models: []string{"model"}},
+			expectedError: "must not declare models",
+		},
 	}
 
 	for _, testCase := range tests {
@@ -903,6 +938,20 @@ func TestDeclarativeRouteValidationProtectsNamespacesAndCanonicalSyntax(t *testi
 			require.ErrorContains(t, ValidateV1Meta(meta), testCase.expectedError)
 		})
 	}
+}
+
+func TestListAndDeleteRouteTypesValidate(t *testing.T) {
+	meta := Meta{
+		APIVersion: 1, Key: "validation", Name: "Validation", Version: "1.0.0",
+		Author: AuthorMeta{Name: "Test"}, Models: []string{"model"}, FetchMode: "per_task",
+		Routes: []Route{
+			{Method: "GET", Path: "/vendor/jobs", Type: RouteTypeList, Render: "listed"},
+			{Method: "DELETE", Path: "/vendor/jobs/:task_id", Type: RouteTypeDelete},
+		},
+	}
+	require.NoError(t, ValidateV1Meta(meta))
+	require.NoError(t, validateRoute(&meta.Routes[1]))
+	require.Equal(t, "task_id", meta.Routes[1].TaskIDParam, "delete routes default to the task_id parameter")
 }
 
 func TestRemovedEndpointsAndProtocolHooksAreValidatedAtCompileTime(t *testing.T) {

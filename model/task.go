@@ -69,6 +69,8 @@ type Task struct {
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
+
+	UsagePending bool `json:"usage_pending,omitempty" gorm:"index"`
 }
 
 func (t *Task) SetData(data any) {
@@ -109,6 +111,8 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
+	UsageReconciliation *TaskUsageReconciliation `json:"usage_reconciliation,omitempty"`
+
 	Key            string `json:"key,omitempty"`
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）

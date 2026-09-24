@@ -91,6 +91,12 @@ export interface ChannelSettings {
   system_prompt_override?: boolean
   http_protocol?: 'auto' | 'http1' | string
   http2_connection_shards?: number
+  video_upstream_protocol?: 'ark' | 'openai_video' | string
+  video_upstream_profile?:
+    | 'standard'
+    | 'seedance_codeyy'
+    | 'seedance_zapgogo'
+    | string
 }
 
 export interface ChannelOtherSettings {

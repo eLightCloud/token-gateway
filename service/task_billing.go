@@ -300,7 +300,6 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		Other:     other,
 		NodeName:  task.PrivateData.NodeName,
 	}
-	fmt.Println("ZZ recalc: task.ID=", task.ID, "quota=", task.Quota, "actual=", actualQuota)
 	journal := &model.TaskSettlementJournal{
 		RequestId:           fmt.Sprintf("task-recalculate:%d", task.ID),
 		Operation:           model.TaskSettlementOperationRecalculate,
@@ -548,6 +547,16 @@ func appendTaskLogInfo(task *model.Task, other *model.LogOther) {
 	}
 }
 
+// UsagePendingFact is reserved for the completion hook of a video task that
+// reached a terminal success without a usable upstream usage body. The plugin
+// returns this marker instead of estimate facts so the settlement layer can
+// tell an actual usage apart from the submission estimate. EvaluateTaskCompletionUsage
+// refuses to settle while the marker is present and keeps the reservation: the
+// estimate must never masquerade as the reconciled actual usage, and the task
+// stays in the pending-reconciliation state until real usage facts arrive
+// through the existing idempotent settlement entry.
+const UsagePendingFact = "usage_pending"
+
 // EvaluateTaskCompletionUsage evaluates actual facts against the frozen task
 // expression. It neither mutates the snapshot nor moves funds: synchronous
 // submission and polling have different persistence and settlement barriers.
@@ -558,6 +567,9 @@ func EvaluateTaskCompletionUsage(snap *billingexpr.BillingSnapshot, facts map[st
 	usage := make(map[string]any, len(snap.UsageFacts)+len(facts))
 	maps.Copy(usage, snap.UsageFacts)
 	maps.Copy(usage, facts)
+	if pending, _ := usage[UsagePendingFact].(bool); pending {
+		return billingexpr.TieredResult{}, usage, fmt.Errorf("usage facts are pending upstream reconciliation; retaining the reservation")
+	}
 	result, err := billingexpr.ComputeTieredQuotaWithRequest(snap, billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: usage})
 	if err == nil && (result.ActualQuotaBeforeGroup < 0 || math.IsNaN(result.ActualQuotaBeforeGroup)) {
 		err = fmt.Errorf("task completion expression produced an invalid cost")

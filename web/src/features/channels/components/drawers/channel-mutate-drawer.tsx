@@ -246,6 +246,7 @@ import {
   ChannelEditorLoadingState,
   ChannelModelsSection,
 } from './sections'
+import { VideoUpstreamFields } from './video-upstream-fields'
 
 type ChannelMutateDrawerProps = {
   open: boolean
@@ -4690,6 +4691,13 @@ export function ChannelMutateDrawer({
                 {proxyFields}
                 {httpProtocolFields}
                 {httpShardsFields}
+                <VideoUpstreamFields
+                  form={form}
+                  locked={sensitiveLocked}
+                  channelType={currentType}
+                  pluginKey={currentTaskPluginKey}
+                  extensionKeys={formValues.task_extend_plugin_keys}
+                />
               </fieldset>
             </div>
             {upstreamModelDetectionFields}

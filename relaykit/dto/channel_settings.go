@@ -26,6 +26,18 @@ type ChannelSettings struct {
 	// the executing plugin. TaskPluginKey remains the single type-61 binding
 	// and stays valid on a New API channel as well.
 	TaskExtendPluginKeys []string `json:"task_extend_plugin_keys,omitempty"`
+	// VideoUpstreamProtocol selects the southbound protocol a task plugin uses
+	// for video generation on this channel. Empty and "ark" mean the vendor's
+	// native (ModelArk) wire format; "openai_video" means a standard
+	// OpenAI-compatible /v1/videos upstream. Unknown non-empty values are
+	// rejected at save time. The executing plugin pins the resolved value on
+	// each task so later channel edits never reinterpret existing tasks.
+	VideoUpstreamProtocol string `json:"video_upstream_protocol,omitempty"`
+	// VideoUpstreamProfile selects the vendor extension contract on top of the
+	// openai_video protocol. Empty and "standard" mean the standard Videos
+	// contract; "seedance_codeyy" and "seedance_zapgogo" are the two documented
+	// extensions. Profiles are rejected on ark channels.
+	VideoUpstreamProfile string `json:"video_upstream_profile,omitempty"`
 	// HTTPProtocol controls outbound HTTP version negotiation for this channel.
 	// Accepted values: "", "auto" (default), "http1".
 	HTTPProtocol string `json:"http_protocol,omitempty"`

@@ -39,6 +39,9 @@ func init() {
 
 // Source returns the embedded factory source for a task plugin key.
 func Source(key string) (string, error) {
+	if key == "doubao" {
+		return localDoubaoSource, nil
+	}
 	source, err := taskPlugins.ReadFile("tasks/" + key + "/plugin.js")
 	if err != nil {
 		return "", err

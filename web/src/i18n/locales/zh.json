@@ -7097,6 +7097,14 @@
     "Zhipu AI": "智谱 AI",
     "Zhipu GLM": "智谱GLM",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Video Upstream Protocol": "视频上游协议",
+    "Video Upstream Profile": "视频上游扩展合同",
+    "Ark native (ModelArk)": "方舟原生（ModelArk）",
+    "OpenAI Videos compatible": "OpenAI Videos 兼容",
+    "Standard Videos": "标准 Videos",
+    "Southbound wire format for video generation. Existing tasks keep the protocol pinned at submission.": "视频生成的南向线格式。存量任务保持提交时固定的协议。",
+    "Vendor extension contract on top of the OpenAI Videos protocol.": "OpenAI Videos 协议之上的供应商扩展合同。",
+    "Vendor extension profiles apply only to the OpenAI Videos protocol.": "供应商扩展合同仅适用于 OpenAI Videos 协议。"
   }
 }

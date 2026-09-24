@@ -29,6 +29,14 @@ func BuildTaskPluginView(task *model.Task) (dto.TaskView, error) {
 		}
 		view.Data = replacePrivateTaskID(view.Data, task.PrivateData.UpstreamTaskID, task.TaskID)
 	}
+	if len(task.PrivateData.PluginState) > 0 {
+		if err := common.Unmarshal(task.PrivateData.PluginState, &view.State); err != nil {
+			return dto.TaskView{}, err
+		}
+	}
+	if task.PrivateData.Execution != nil && task.PrivateData.Execution.TaskPlugin != nil {
+		view.ProducerVersion = task.PrivateData.Execution.TaskPlugin.Version
+	}
 	return view, nil
 }
 

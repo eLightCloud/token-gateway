@@ -90,7 +90,10 @@ func PrepareTaskPluginRoute() gin.HandlerFunc {
 		}
 		bodyObject, _ := requestContext.Body.(map[string]any)
 		bodyKind, _ := bodyObject["kind"].(string)
-		if pinned.Route.Type == pluginruntime.RouteTypeQuery && bodyKind != string(pluginruntime.BodyNone) || pinned.Route.Type != pluginruntime.RouteTypeQuery && bodyKind != string(pluginruntime.BodyJSON) {
+		persistenceSide := pinned.Route.Type == pluginruntime.RouteTypeQuery ||
+			pinned.Route.Type == pluginruntime.RouteTypeList ||
+			pinned.Route.Type == pluginruntime.RouteTypeDelete
+		if persistenceSide && bodyKind != string(pluginruntime.BodyNone) || !persistenceSide && bodyKind != string(pluginruntime.BodyJSON) {
 			logger.LogWarn(
 				c,
 				"task_plugin subsystem=route event=prepare_rejected generation=%d plugin=%q stage=request_decode reason=body_kind_mismatch body_kind=%q",
@@ -99,7 +102,7 @@ func PrepareTaskPluginRoute() gin.HandlerFunc {
 				bodyKind,
 			)
 			detail := "this route requires a JSON body"
-			if pinned.Route.Type == pluginruntime.RouteTypeQuery {
+			if persistenceSide {
 				detail = "unsupported request body for this operation"
 			}
 			abortTaskPluginRouteErrorDetail(c, http.StatusUnsupportedMediaType, detail)
@@ -115,6 +118,28 @@ func PrepareTaskPluginRoute() gin.HandlerFunc {
 				pinned.Route.Render,
 			)
 			renderTaskPluginQuery(c, pinned, requestContext, []string{taskID}, pinned.Route.Render, false)
+			return
+		}
+		if pinned.Route.Type == pluginruntime.RouteTypeList {
+			logger.LogDebug(
+				c,
+				"task_plugin subsystem=route event=resolved generation=%d plugin=%q kind=list renderer=%q distribute=false",
+				generation,
+				pinned.Plugin.Meta.Key,
+				pinned.Route.Render,
+			)
+			renderTaskPluginList(c, pinned, requestContext)
+			return
+		}
+		if pinned.Route.Type == pluginruntime.RouteTypeDelete {
+			taskID := requestContext.Params[pinned.Route.TaskIDParam]
+			logger.LogDebug(
+				c,
+				"task_plugin subsystem=route event=resolved generation=%d plugin=%q kind=delete distribute=false",
+				generation,
+				pinned.Plugin.Meta.Key,
+			)
+			runTaskPluginDelete(c, pinned, taskID)
 			return
 		}
 
@@ -1196,6 +1221,7 @@ func renderTaskPluginQuery(
 		views = append(views, viewValue)
 	}
 
+	applyTaskDeliveryHeaders(c, tasks)
 	var rendererInput any = views
 	if !multiple {
 		rendererInput = views[0]

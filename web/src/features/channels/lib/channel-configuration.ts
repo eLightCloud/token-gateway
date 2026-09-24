@@ -84,6 +84,8 @@ const CONFIGURATION_BLOCKS = {
       'proxy',
       'http_protocol',
       'http2_connection_shards',
+      'video_upstream_protocol',
+      'video_upstream_profile',
       'disable_task_polling_sleep',
     ],
   },
@@ -175,6 +177,10 @@ export function getChannelConfigurationState(
       values.proxy?.trim() ||
       (values.http_protocol && values.http_protocol !== 'auto') ||
       (values.http2_connection_shards ?? 1) > 1 ||
+      (values.video_upstream_protocol &&
+        values.video_upstream_protocol !== 'ark') ||
+      (values.video_upstream_profile &&
+        values.video_upstream_profile !== 'standard') ||
       values.disable_task_polling_sleep
     ),
     upstreamModelDetection:

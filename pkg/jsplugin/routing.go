@@ -20,6 +20,17 @@ const (
 	RouteTypeSubmit  RouteType = "submit"
 	RouteTypeQuery   RouteType = "query"
 	RouteTypeDynamic RouteType = "dynamic"
+	// RouteTypeList serves a vendor's collection (list) operation from the
+	// gateway's own persisted tasks. There is no upstream call and no decode:
+	// the host pages, filters and scopes the user's tasks, then hands them to
+	// the renderer named by `render`.
+	RouteTypeList RouteType = "list"
+	// RouteTypeDelete serves a vendor cancel/delete operation on one task. The
+	// host resolves the task, runs the driver's buildDeleteRequest hook against
+	// the upstream, and applies the local transition only after the upstream
+	// accepts. A plugin whose pinned contract cannot cancel or delete fails
+	// the hook with a capability error.
+	RouteTypeDelete RouteType = "delete"
 )
 
 type Route struct {
@@ -777,6 +788,35 @@ func validateRoute(route *Route) error {
 		if route.Decode == "" || route.Render == "" || route.TaskIDParam != "" {
 			return fmt.Errorf("dynamic route %s %s must declare decode and render and must not declare taskIdParam", route.Method, route.Path)
 		}
+	case RouteTypeList:
+		if route.Decode != "" || strings.TrimSpace(route.Render) == "" || route.TaskIDParam != "" {
+			return fmt.Errorf("list route %s %s must declare render and must not declare decode or taskIdParam", route.Method, route.Path)
+		}
+		if route.Action != "" {
+			return fmt.Errorf("list route %s %s must not declare action", route.Method, route.Path)
+		}
+		if route.RetainResult != nil {
+			return fmt.Errorf("list route %s %s must not declare retainResult", route.Method, route.Path)
+		}
+	case RouteTypeDelete:
+		if route.Decode != "" {
+			return fmt.Errorf("delete route %s %s must not declare decode", route.Method, route.Path)
+		}
+		if route.Action != "" {
+			return fmt.Errorf("delete route %s %s must not declare action", route.Method, route.Path)
+		}
+		if route.RetainResult != nil {
+			return fmt.Errorf("delete route %s %s must not declare retainResult", route.Method, route.Path)
+		}
+		if route.TaskIDParam == "" {
+			route.TaskIDParam = "task_id"
+		}
+		if !pathNamePattern.MatchString(route.TaskIDParam) {
+			return fmt.Errorf("delete route %s %s has invalid taskIdParam %q", route.Method, route.Path, route.TaskIDParam)
+		}
+		if !pathHasParameter(route.Path, route.TaskIDParam) {
+			return fmt.Errorf("delete route %s %s must contain :%s", route.Method, route.Path, route.TaskIDParam)
+		}
 	default:
 		return fmt.Errorf("plugin route %s %s has unsupported type %q", route.Method, route.Path, route.Type)
 	}
@@ -790,8 +830,8 @@ func validateRoute(route *Route) error {
 		return fmt.Errorf("plugin route %s %s action must not have surrounding whitespace", route.Method, route.Path)
 	}
 	if len(route.Models) > 0 {
-		if route.Type == RouteTypeQuery {
-			return fmt.Errorf("query route %s %s must not declare models", route.Method, route.Path)
+		if route.Type == RouteTypeQuery || route.Type == RouteTypeList || route.Type == RouteTypeDelete {
+			return fmt.Errorf("%s route %s %s must not declare models", route.Type, route.Method, route.Path)
 		}
 		if err := validateModelScope(route.Models, fmt.Sprintf("route %s %s", route.Method, route.Path)); err != nil {
 			return err

@@ -94,6 +94,23 @@ export function normalizeHttpProtocol(
   return HTTP_PROTOCOL_AUTO
 }
 
+export const VIDEO_UPSTREAM_PROFILES = [
+  'standard',
+  'seedance_codeyy',
+  'seedance_zapgogo',
+] as const
+export type VideoUpstreamProfile = (typeof VIDEO_UPSTREAM_PROFILES)[number]
+
+export function normalizeVideoUpstreamProfile(
+  value: string | undefined | null
+): VideoUpstreamProfile {
+  return VIDEO_UPSTREAM_PROFILES.includes(
+    (value ?? '') as VideoUpstreamProfile
+  )
+    ? (value as VideoUpstreamProfile)
+    : 'standard'
+}
+
 export function normalizeHttp2ConnectionShards(
   value: number | undefined | null
 ): number {
@@ -268,6 +285,10 @@ export const channelFormSchema = z
       .refine(isOptionalProxyURL, ERROR_MESSAGES.INVALID_PROXY),
     http_protocol: z.enum(['auto', 'http1']).optional(),
     http2_connection_shards: z.number().int().optional(),
+    video_upstream_protocol: z.enum(['ark', 'openai_video']).optional(),
+    video_upstream_profile: z
+      .enum(['standard', 'seedance_codeyy', 'seedance_zapgogo'])
+      .optional(),
     pass_through_body_enabled: z.boolean().optional(),
     responses_websocket_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
@@ -401,6 +422,16 @@ export const channelFormSchema = z
       )
     }
 
+    if (
+      (data.video_upstream_profile ?? 'standard') !== 'standard' &&
+      data.video_upstream_protocol !== 'openai_video'
+    ) {
+      addRequiredIssue(
+        ctx,
+        'video_upstream_profile',
+        ERROR_MESSAGES.VIDEO_PROFILE_REQUIRES_OPENAI_VIDEO
+      )
+    }
     const protocol = normalizeHttpProtocol(data.http_protocol)
     const shards = data.http2_connection_shards ?? 1
     if (shards < 1 || shards > MAX_HTTP2_CONNECTION_SHARDS) {
@@ -459,6 +490,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   proxy: '',
   http_protocol: HTTP_PROTOCOL_AUTO,
   http2_connection_shards: 1,
+  video_upstream_protocol: 'ark',
+  video_upstream_profile: 'standard',
   pass_through_body_enabled: false,
   responses_websocket_enabled: false,
   system_prompt: '',
@@ -503,6 +536,11 @@ export function transformChannelToFormDefaults(
     proxy: '',
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
     http2_connection_shards: 1,
+    video_upstream_protocol: 'ark' as 'ark' | 'openai_video',
+    video_upstream_profile: 'standard' as
+      | 'standard'
+      | 'seedance_codeyy'
+      | 'seedance_zapgogo',
     pass_through_body_enabled: false,
     responses_websocket_enabled: false,
     system_prompt: '',
@@ -524,6 +562,13 @@ export function transformChannelToFormDefaults(
         proxy: parsed.proxy || '',
         http_protocol: protocol,
         http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
+        video_upstream_protocol:
+          parsed.video_upstream_protocol === 'openai_video'
+            ? 'openai_video'
+            : 'ark',
+        video_upstream_profile: normalizeVideoUpstreamProfile(
+          parsed.video_upstream_profile
+        ),
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         responses_websocket_enabled:
           parsed.responses_websocket_enabled === true,
@@ -676,6 +721,20 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     settingObj.http_protocol = HTTP_PROTOCOL_HTTP1
   } else if (shards > 1) {
     settingObj.http2_connection_shards = shards
+  }
+
+  const videoProtocol =
+    formData.video_upstream_protocol === 'openai_video'
+      ? 'openai_video'
+      : undefined
+  if (videoProtocol) {
+    settingObj.video_upstream_protocol = videoProtocol
+    const videoProfile = normalizeVideoUpstreamProfile(
+      formData.video_upstream_profile
+    )
+    if (videoProfile !== 'standard') {
+      settingObj.video_upstream_profile = videoProfile
+    }
   }
 
   return JSON.stringify(settingObj)

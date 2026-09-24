@@ -1046,6 +1046,9 @@ func (a *TaskAdaptor) queryContext(task *model.Task, key, baseURL, proxy string)
 			}
 			ctx["state"] = state
 		}
+		if task.PrivateData.Execution != nil && task.PrivateData.Execution.TaskPlugin != nil {
+			ctx["producerVersion"] = task.PrivateData.Execution.TaskPlugin.Version
+		}
 		if task.PrivateData.Key != "" {
 			key = task.PrivateData.Key
 		}
@@ -1372,6 +1375,9 @@ func (a *TaskAdaptor) submitContext(c *gin.Context, info *relaycommon.RelayInfo)
 	if err := a.applyUpstreamCredentials(ctx, info.ChannelType, info.ApiKey, info.ChannelSetting.Proxy); err != nil {
 		ctx["authError"] = err.Error()
 	}
+	// Pin the executing channel protocol at submission; polling uses task state.
+	protocol, profile := info.ChannelSetting.ResolvedVideoUpstream()
+	ctx["videoUpstream"] = map[string]any{"protocol": protocol, "profile": profile}
 	return ctx
 }
 
