@@ -204,6 +204,7 @@ func SetApiRouter(router *gin.Engine) {
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{
+			SetVantageIntegrationSettingsRouter(optionRoute)
 			optionRoute.GET("/", controller.GetOptions)
 			optionRoute.GET("/request_policy", controller.GetRequestPolicy)
 			optionRoute.PATCH("/request_policy", controller.UpdateRequestPolicy)

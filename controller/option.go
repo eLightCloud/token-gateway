@@ -90,7 +90,8 @@ func GetOptions(c *gin.Context) {
 			continue
 		}
 		value := common.Interface2String(v)
-		isSensitiveKey := strings.HasSuffix(k, "Token") ||
+		isSensitiveKey := strings.EqualFold(strings.TrimSpace(k), model.VantageIntegrationOptionKey) ||
+			strings.HasSuffix(k, "Token") ||
 			strings.HasSuffix(k, "Secret") ||
 			strings.HasSuffix(k, "Key") ||
 			strings.HasSuffix(k, "secret") ||

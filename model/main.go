@@ -383,6 +383,9 @@ func migrateDB() error {
 		&SystemTaskLock{},
 		&CasbinRule{},
 		&AuthzRole{},
+		&VantageAccountBinding{},
+		&VantageCredentialBinding{},
+		&VantageCredentialRotation{},
 	)
 	if err != nil {
 		return err

@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-19
+last-reviewed: 2026-10-14
 ---
 
 # 70-research — 目标说明
@@ -16,3 +16,7 @@ last-reviewed: 2026-07-19
 - 已采纳的架构决策 -> 20-architecture/decisions/
 - 当前有效规范 -> 30-engineering/编码规范.md
 - 编码现场一次性排障 -> 不进入 docs；有长期参考价值的调研和方案对比才进入本目录
+
+## 专题资料
+
+- [Claude 接口修复后的测试结果](Claude接口响应结构与停止标记验证.md)：用具体例子说明剩余问题、由谁修复、对客户的影响；开发定位证据在附录。

@@ -25,8 +25,14 @@ import { PerformanceSection } from '../maintenance/performance-section'
 import { UpdateCheckerSection } from '../maintenance/update-checker-section'
 import type { OperationsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
+import { VantageIntegrationSettingsSection } from '../vantage-integration/settings-section'
 
 const OPERATIONS_SECTIONS = [
+  {
+    id: 'vantage',
+    titleKey: 'Vantage Integration',
+    build: () => <VantageIntegrationSettingsSection />,
+  },
   {
     id: 'behavior',
     titleKey: 'System Behavior',

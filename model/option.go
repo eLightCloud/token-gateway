@@ -234,6 +234,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if strings.EqualFold(strings.TrimSpace(key), VantageIntegrationOptionKey) {
+		return ErrVantageIntegrationOptionProtected
+	}
 	if err := operation_setting.ValidateQuotaOption(key, value); err != nil {
 		return err
 	}
