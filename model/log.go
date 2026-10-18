@@ -77,8 +77,8 @@ type Log struct {
 	Ip                string `json:"ip" gorm:"index;default:''"`
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
-	// BillingOperationId is set only by durable async billing adjustments. NULL
-	// remains unrestricted for ordinary logs; the unique value makes outbox
+	// BillingOperationId identifies durable billing or usage-log deliveries. NULL
+	// remains unrestricted for other logs; the unique value makes outbox
 	// replay idempotent on SQLite, MySQL and PostgreSQL.
 	BillingOperationId *string `json:"-" gorm:"type:varchar(128)"`
 	BillingSource      string  `json:"billing_source,omitempty" gorm:"type:varchar(32)"`
@@ -105,7 +105,7 @@ func ensureLogRequestId(log *Log) {
 
 func createLog(log *Log) error {
 	ensureLogRequestId(log)
-	return LOG_DB.Create(log).Error
+	return createLogWithInvoiceAcknowledgement(log)
 }
 
 func clickHouseLogOrder(prefix string) string {
@@ -383,6 +383,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		RequestId:         requestId,
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
+		BillingSource:     organizationInvoiceLogBillingSource(params.Other),
 	}
 	err := createLog(log)
 	if err != nil {
@@ -430,18 +431,19 @@ func recordTaskBillingLog(params taskBillingLogParams) {
 	}
 	createdAt := common.GetTimestamp()
 	log := &Log{
-		UserId:    params.UserId,
-		Username:  username,
-		CreatedAt: createdAt,
-		Type:      params.LogType,
-		Content:   params.Content,
-		TokenName: tokenName,
-		ModelName: params.ModelName,
-		Quota:     params.Quota,
-		ChannelId: params.ChannelId,
-		TokenId:   params.TokenId,
-		Group:     params.Group,
-		Other:     params.Other.JSONString(),
+		UserId:        params.UserId,
+		Username:      username,
+		CreatedAt:     createdAt,
+		Type:          params.LogType,
+		Content:       params.Content,
+		TokenName:     tokenName,
+		ModelName:     params.ModelName,
+		Quota:         params.Quota,
+		ChannelId:     params.ChannelId,
+		TokenId:       params.TokenId,
+		Group:         params.Group,
+		Other:         params.Other.JSONString(),
+		BillingSource: organizationInvoiceLogBillingSource(params.Other),
 	}
 	err := createLog(log)
 	if err != nil {
@@ -708,6 +710,9 @@ func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
 }
 
 func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if proceed, err := prepareOrganizationInvoiceLogCleanup(ctx, targetTimestamp); err != nil || !proceed {
+		return 0, err
+	}
 	if limit <= 0 {
 		limit = 100
 	}
@@ -778,14 +783,8 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) error {
 		return nil
 	}
 	if params.OperationId != "" {
-		var count int64
-		if err := LOG_DB.Model(&Log{}).
-			Where("billing_operation_id = ?", params.OperationId).
-			Limit(1).Count(&count).Error; err != nil {
+		if found, err := acknowledgeExistingOrganizationInvoiceLog(params.OperationId); err != nil || found {
 			return err
-		}
-		if count > 0 {
-			return nil
 		}
 	}
 	username := params.Username
@@ -802,10 +801,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) error {
 	if createdAt == 0 {
 		createdAt = common.GetTimestamp()
 	}
-	billingSource, _ := params.Other.Snapshot()["billing_source"].(string)
-	if billingSource == "" && (params.LogType == LogTypeConsume || params.LogType == LogTypeRefund) {
-		billingSource = "wallet"
-	}
+	billingSource := organizationInvoiceLogBillingSource(params.Other)
 	log := &Log{
 		UserId:            params.UserId,
 		Username:          username,
@@ -835,10 +831,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) error {
 	err := createLog(log)
 	if err != nil {
 		if params.OperationId != "" {
-			var count int64
-			if queryErr := LOG_DB.Model(&Log{}).
-				Where("billing_operation_id = ?", params.OperationId).
-				Limit(1).Count(&count).Error; queryErr == nil && count > 0 {
+			if found, queryErr := acknowledgeExistingOrganizationInvoiceLog(params.OperationId); found && queryErr == nil {
 				return nil
 			}
 		}

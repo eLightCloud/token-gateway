@@ -99,7 +99,7 @@ func writeTaskArtifacts(c *gin.Context, task *model.Task, dashboard bool) {
 	}
 	items := make([]taskArtifactResponse, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		contentURL, buildErr := service.BuildTaskArtifactContentURL(task.TaskID, artifact.Key)
+		contentURL, buildErr := service.TaskArtifactDeliveryURL(task, artifact.Key, service.BuildTaskArtifactContentURL)
 		if buildErr != nil {
 			writeTaskArtifactError(c, http.StatusInternalServerError, "artifact_url_error", "Failed to build artifact content URL")
 			return
@@ -364,8 +364,15 @@ func TaskArtifactContent(c *gin.Context) {
 		return
 	}
 	artifactStore := service.GetTaskArtifactStore()
-	if ref, resolveErr := artifactStore.Resolve(task, artifactKey); resolveErr == nil && ref != nil {
-		_ = artifactStore.Serve(c, task, ref)
+	ref, resolveErr := artifactStore.Resolve(task, artifactKey)
+	if resolveErr != nil {
+		writeTaskArtifactError(c, http.StatusServiceUnavailable, "artifact_storage_unavailable", "Stored artifact is unavailable")
+		return
+	}
+	if ref != nil {
+		if err := artifactStore.Serve(c, task, ref); err != nil && !c.Writer.Written() {
+			writeTaskArtifactError(c, http.StatusServiceUnavailable, "artifact_storage_unavailable", "Stored artifact is unavailable")
+		}
 		return
 	}
 

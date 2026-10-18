@@ -465,7 +465,7 @@ func RelayTask(c *gin.Context) {
 // come from c.Request.Context: native task endpoints use the client context,
 // while the Responses bridge supplies an independently bounded context.
 func executeTaskSubmission(c *gin.Context, relayInfo *relaycommon.RelayInfo) (*taskSubmissionOutcome, *taskdto.TaskError) {
-	return executeTaskSubmissionWith(c, relayInfo, relay.RelayTaskSubmit)
+	return executeTaskSubmissionWith(c, relayInfo, relay.RelayTaskSubmit, service.SettleOrganizationInvoiceTaskSubmission)
 }
 
 type taskSubmitAttempt func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *taskdto.TaskError)
@@ -474,6 +474,7 @@ func executeTaskSubmissionWith(
 	c *gin.Context,
 	relayInfo *relaycommon.RelayInfo,
 	submit taskSubmitAttempt,
+	settle func(*gin.Context, *relaycommon.RelayInfo, *model.Task, int, bool) error,
 ) (*taskSubmissionOutcome, *taskdto.TaskError) {
 	policy := service.RequestPolicy(c)
 	diagnostics := newTaskPluginSubmitDiagnostics(c)
@@ -558,6 +559,7 @@ func executeTaskSubmissionWith(
 
 		taskAPIError := taskSubmissionAPIError(taskErr)
 		relayInfo.LastError = taskAPIError
+		service.PreventSeedanceGenerationRetry(relayInfo, taskErr)
 		decision := decideTaskRetry(c, taskErr, common.RetryTimes-retryParam.GetRetry())
 		service.RecordPolicyFailure(c, channel.Id, taskAPIError, decision)
 		if !taskErr.LocalError {
@@ -624,6 +626,7 @@ func executeTaskSubmissionWith(
 	task.PrivateData.NodeName = common.NodeName
 	task.PrivateData.BillingContext = service.SnapshotTaskBillingContext(relayInfo)
 	task.Quota = result.Quota
+
 	task.Data = result.TaskData
 	if len(result.PluginState) > 0 {
 		task.PrivateData.PluginState = result.PluginState
@@ -672,7 +675,11 @@ func executeTaskSubmissionWith(
 		}
 	}
 	diagnostics.insertStart(task)
-	if insertErr := task.InsertWithContext(c.Request.Context(), insertOmits...); insertErr != nil {
+	enhanceDurable, insertErr := service.PersistSeedanceEnhanceSubmission(c, relayInfo, task)
+	if !enhanceDurable && insertErr == nil {
+		insertErr = task.InsertWithContext(c.Request.Context(), insertOmits...)
+	}
+	if insertErr != nil {
 		common.SysError("insert task error: " + insertErr.Error())
 		taskErr = service.TaskErrorWrapperLocal(errors.New("failed to persist task"), "task_insert_failed", http.StatusInternalServerError)
 		diagnostics.failed("insert", "database_error", taskErr, false)
@@ -683,7 +690,11 @@ func executeTaskSubmissionWith(
 	diagnostics.durable(task)
 	diagnostics.settleStart(task, result.Quota)
 
-	if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+	var settleErr error
+	if !enhanceDurable {
+		settleErr = settle(c, relayInfo, task, result.Quota, result.ExpenseConfirmed)
+	}
+	if settleErr != nil {
 		common.SysError("settle task billing error: " + settleErr.Error())
 		taskErr = service.TaskErrorWrapperLocal(errors.New("failed to settle task billing"), "task_billing_settlement_failed", http.StatusInternalServerError)
 		diagnostics.failed("settle", "billing_error", taskErr, true)
@@ -694,7 +705,6 @@ func executeTaskSubmissionWith(
 	} else {
 		policy.AddEvent(service.PolicyEvent{Decision: service.PolicyDecision{Action: "stop", Reason: "task_failed", Source: "upstream"}})
 	}
-	service.LogTaskConsumption(c, relayInfo, task)
 	diagnostics.complete(task, result.Quota)
 
 	return &taskSubmissionOutcome{Result: result, Task: task, RelayInfo: relayInfo}, nil

@@ -188,6 +188,19 @@ func TestBillingRecoveryWritesMissingLogWithoutChargingAgain(t *testing.T) {
 	var logCount int64
 	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("billing_operation_id = ?", "log-recovery:req-log-recovery").Count(&logCount).Error)
 	assert.EqualValues(t, 1, logCount)
+	// Old persisted payloads lack a source; the journal still knows the actual
+	// funding path, and replay must use it without applying money again.
+	payload, err := common.Marshal(model.RecordTaskBillingLogParams{UserId: userID, LogType: model.LogTypeRefund, Quota: 7, Other: model.NewLogOther()})
+	require.NoError(t, err)
+	journal := &model.TaskSettlementJournal{RequestId: "legacy-subscription-log", UserId: userID, BillingSource: BillingSourceSubscription, Applied: true, LogPayload: string(payload)}
+	require.NoError(t, model.DB.Create(journal).Error)
+	require.NoError(t, completeTaskSettlementJournalLog(journal))
+	var replayed model.Log
+	require.NoError(t, model.LOG_DB.Where("billing_operation_id = ?", journal.RequestId).First(&replayed).Error)
+	assert.Equal(t, BillingSourceSubscription, replayed.BillingSource)
+	assert.EqualValues(t, 9_300, getUserQuota(t, userID))
+	require.NoError(t, completeTaskSettlementJournalLog(journal))
+
 }
 
 func TestSweepPendingTaskSettlementsUsesSameAtomicApplyPath(t *testing.T) {

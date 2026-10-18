@@ -652,3 +652,60 @@ func TestSelfTaskMediaURLGuard(t *testing.T) {
 	assert.True(t, isTaskMediaFallbackLoop(remoteURL.String(), "task-1"))
 	assert.False(t, isTaskMediaFallbackLoop(remoteURL.String(), "task-2"))
 }
+
+func TestEnhancedVideoBillingSummaryScopesOwnerAndAdministrativeFacts(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.SeedanceEnhanceExecution{}, &model.SeedanceEnhanceAttempt{}))
+	task.Platform = "doubao"
+	task.Properties.OriginModelName = "doubao-seedance-2-0-mini-260615-enhance"
+	task.Quota = 123
+	require.NoError(t, model.DB.Save(task).Error)
+	require.NoError(t, model.DB.Create(&model.SeedanceEnhanceExecution{TaskID: task.TaskID, Stage: "succeeded", Attempt: 3, TargetResolution: "1080p", DurationMS: 10234, FPS: 25, SourceURL: "https://secret.example/original.mp4", SourceUsage: `{"completion_tokens":1000}`}).Error)
+	require.NoError(t, model.DB.Create(&model.SeedanceEnhanceAttempt{TaskID: task.TaskID, Number: 3, ClientToken: "private-diagnostics-token", UpstreamID: "private-upstream-id", Status: "completed", ErrorDetail: `{"code":"https://secret.example/error?key=secret-key","request_id":"invalid-id\nsecret-key","message":"secret-key"}`}).Error)
+	for _, tc := range []struct {
+		name               string
+		user, role, status int
+		admin, root        bool
+	}{
+		{"owner", 7, common.RoleCommonUser, 200, false, false},
+		{"foreign_user", 8, common.RoleCommonUser, 404, false, false},
+		{"administrator", 8, common.RoleAdminUser, 200, true, false},
+		{"root", 8, common.RoleRootUser, 200, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Set("id", tc.user)
+			c.Set("role", tc.role)
+			c.Params = gin.Params{{Key: "task_id", Value: task.TaskID}}
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/log/task_billing/"+task.TaskID, nil)
+			GetSeedanceEnhanceBilling(c)
+			assert.Equal(t, tc.status, recorder.Code)
+			assert.NotContains(t, recorder.Body.String(), "secret.example")
+			assert.NotContains(t, recorder.Body.String(), "secret-key")
+			assert.NotContains(t, recorder.Body.String(), "invalid-id")
+			if tc.status != 200 {
+				return
+			}
+			var response struct {
+				Data map[string]any `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.InDelta(t, 10.234, response.Data["seconds"], 1e-12)
+			assert.EqualValues(t, 123, response.Data["final_quota"])
+			_, hasAdmin := response.Data["admin_info"]
+			assert.Equal(t, tc.admin, hasAdmin)
+			if tc.root {
+				root := response.Data["root_info"].(map[string]any)
+				attempts := root["attempts"].([]any)
+				require.Len(t, attempts, 1)
+				diagnostic := attempts[0].(map[string]any)
+				assert.Equal(t, "", diagnostic["provider_error_code"])
+				assert.Equal(t, "", diagnostic["request_id"])
+			} else {
+				assert.NotContains(t, response.Data, "root_info")
+				assert.NotContains(t, recorder.Body.String(), "private-upstream-id")
+			}
+		})
+	}
+}

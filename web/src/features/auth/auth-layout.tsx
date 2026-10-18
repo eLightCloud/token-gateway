@@ -37,11 +37,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
           {loading ? (
             <Skeleton className='auth-brand-logo' />
           ) : (
-            <img
-              src={logo}
-              alt={t('Logo')}
-              className='auth-brand-logo'
-            />
+            <img src={logo} alt={t('Logo')} className='auth-brand-logo' />
           )}
           {loading ? (
             <Skeleton className='h-5 w-24' />

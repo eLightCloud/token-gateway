@@ -91,6 +91,7 @@ import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
 import { ResponseModelDetails } from '../model-badge'
 import { PluginAuthorLink } from '../plugin-author-link'
 import { DetailRow, DetailSection } from './log-detail-layout'
+import { VideoEnhanceBilling } from './video-enhance-billing'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -869,6 +870,14 @@ export function DetailsDialog(props: DetailsDialogProps) {
               mono
             />
           </DetailSection>
+        )}
+
+        {other?.video_enhance && other.task_id && (
+          <VideoEnhanceBilling
+            taskId={other.task_id}
+            open={props.open}
+            isAdmin={Boolean(props.isAdmin)}
+          />
         )}
 
         {/* Refund details (type=6) */}

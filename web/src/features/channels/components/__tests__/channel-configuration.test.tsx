@@ -1015,6 +1015,48 @@ test('an invalid setting in another category is revealed and focused on submissi
   )
 })
 
+test('a missing enhancement supplier returns to other settings and saves after channel-level selection', async () => {
+  editingChannel = {
+    ...editingChannel,
+    type: 54,
+    models: 'doubao-seedance-2-0-260128',
+    setting: JSON.stringify({
+      video_enhance: { enabled: false, supplier: '' },
+    }),
+  }
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  await user.click(screen.getByRole('tab', { name: /Other Settings/ }))
+  await user.click(
+    screen.getByRole('switch', { name: 'Seedance video enhancement' })
+  )
+  await user.click(screen.getByRole('tab', { name: /Connection & Models/ }))
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  const supplier = screen.getByRole('combobox', {
+    name: 'Channel video generation supplier',
+  })
+  await waitFor(() => expect(supplier).toHaveFocus())
+  expect(screen.getByRole('tab', { name: /Other Settings/ })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+  expect(supplier).toHaveAttribute('aria-invalid', 'true')
+  expect(put).not.toHaveBeenCalled()
+  await user.click(supplier)
+  await user.click(screen.getByRole('option', { name: 'runyyitd' }))
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+  const payload = put.mock.calls[0][1] as { setting: string }
+  expect(JSON.parse(payload.setting).video_enhance).toEqual({
+    enabled: true,
+    supplier: 'runyyitd',
+  })
+})
+
 test.each([
   ['batch', 'Batch Add (one key per line)'],
   ['multi_to_single', 'Multi-Key Mode (multiple keys, one channel)'],
@@ -1717,6 +1759,46 @@ test('model configuration replaces the selected-count badge at the right of the 
   expect(
     screen.getAllByRole('button', { name: 'Configure Models' })
   ).toHaveLength(1)
+})
+
+test('an enabled Seedance channel shows derived enhancement models in the model section and dialog without persisting aliases', async () => {
+  const base = 'doubao-seedance-2-0-260128'
+  const secondBase = 'doubao-seedance-2-5-260628'
+  editingChannel = {
+    ...editingChannel,
+    type: 54,
+    models: `${base},${secondBase}`,
+    setting: JSON.stringify({
+      video_enhance: { enabled: true, supplier: 'runyyitd' },
+    }),
+  }
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const user = userEvent.setup()
+  render(<ConfigurationHarness currentRow={editingChannel} />)
+  await screen.findByDisplayValue('Existing channel')
+  const models = within(screen.getByRole('group', { name: 'Models' }))
+  expect(models.getByText(`${base}-enhance`, { exact: true })).toBeVisible()
+  expect(
+    models.getByText(`${secondBase}-enhance`, { exact: true })
+  ).toBeVisible()
+  await user.click(models.getByRole('button', { name: 'Configure Models' }))
+  const dialog = within(
+    screen.getByRole('dialog', { name: 'Configure Models' })
+  )
+  expect(dialog.getByText(`${base}-enhance`, { exact: true })).toBeVisible()
+  await user.click(dialog.getByRole('checkbox', { name: secondBase }))
+  expect(
+    dialog.queryByText(`${secondBase}-enhance`, { exact: true })
+  ).toBeNull()
+  await user.click(dialog.getByRole('button', { name: 'Apply' }))
+  expect(
+    models.queryByText(`${secondBase}-enhance`, { exact: true })
+  ).toBeNull()
+  await user.click(screen.getByRole('button', { name: 'Update Channel' }))
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+  expect((put.mock.calls[0][1] as { models: string }).models).toBe(base)
 })
 
 test('model configuration uses only the current form models and persists changes only when the channel is saved', async () => {

@@ -1206,7 +1206,7 @@ func taskPluginProtocolRendererContext(
 
 	rendererArtifacts := make(map[string]any, len(artifacts))
 	for _, artifact := range artifacts {
-		contentURL, buildErr := artifactContentURL(task.TaskID, artifact.Key)
+		contentURL, buildErr := service.TaskArtifactDeliveryURL(task, artifact.Key, artifactContentURL)
 		if buildErr != nil {
 			return nil, fmt.Errorf("build task artifact content URL: %w", buildErr)
 		}

@@ -250,6 +250,9 @@ func ListModels(c *gin.Context, modelType int) {
 	}
 	models := service.GetGroupsEnabledModels(ownerGroups)
 	for _, modelName := range models {
+		if !model.SeedanceEnhanceModelAvailable(modelName) {
+			continue
+		}
 		if modelLimitEnable {
 			matchingName := ratio_setting.RoutingMatchModelName(modelName)
 			if !tokenModelLimit[modelName] && !tokenModelLimit[matchingName] {

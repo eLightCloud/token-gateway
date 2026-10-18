@@ -48,6 +48,8 @@ const (
 const TaskRefundLegacyCutoff int64 = 1771718400 // 2026-02-22 00:00:00 UTC
 
 type Task struct {
+	TaskInvoiceExpense
+
 	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
 	CreatedAt  int64                 `json:"created_at" gorm:"index"`
 	UpdatedAt  int64                 `json:"updated_at"`
@@ -550,7 +552,7 @@ func (t *Task) Snapshot() taskSnapshot {
 
 func (Task *Task) Update() error {
 	var err error
-	err = DB.Save(Task).Error
+	err = DB.Omit("invoice_origin_at", "invoice_expense_quota", "invoice_expense_confirmed_at", "invoice_expense_source", "invoice_expense_applied").Save(Task).Error
 	return err
 }
 
@@ -568,7 +570,10 @@ func (t *Task) UpdateQuota() error {
 // falls back to INSERT ON CONFLICT when the WHERE-guarded UPDATE matches
 // zero rows, which silently bypasses the CAS guard.
 func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
-	result := DB.Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
+	if isSeedanceEnhanceQuotaTask(t) {
+		return updateSeedanceEnhanceTaskStatus(t, fromStatus)
+	}
+	result := DB.Model(t).Where("status = ?", fromStatus).Select("*").Omit("invoice_origin_at", "invoice_expense_quota", "invoice_expense_confirmed_at", "invoice_expense_source", "invoice_expense_applied").Updates(t)
 	if result.Error != nil {
 		return false, result.Error
 	}

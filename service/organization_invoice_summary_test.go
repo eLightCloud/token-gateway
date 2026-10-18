@@ -12,6 +12,7 @@ import (
 
 func TestGetOrganizationInvoiceRejectsFutureMonth(t *testing.T) {
 	truncate(t)
+	startInvoiceTestRunner(t)
 	require.NoError(t, model.DB.Create(&model.Organization{
 		Id:     7101,
 		Name:   "future invoice test",
@@ -35,12 +36,14 @@ func TestGetOrganizationInvoiceBuildsMissingSummaryInBackgroundAndIncludesNoUsag
 	t.Cleanup(func() {
 		common.QuotaPerUnit = previousQuotaPerUnit
 	})
+	startInvoiceTestRunner(t)
 	const organizationId = 7001
 	const userId = 7002
 	require.NoError(t, model.DB.Create(&model.User{
-		Id:       userId,
-		Username: "funded-without-usage",
-		Status:   common.UserStatusEnabled,
+		Id:        userId,
+		CreatedAt: 1,
+		Username:  "funded-without-usage",
+		Status:    common.UserStatusEnabled,
 	}).Error)
 	require.NoError(t, model.DB.Create(&model.Organization{
 		Id:     organizationId,
@@ -107,7 +110,8 @@ func TestGetOrganizationInvoiceBuildsMissingSummaryInBackgroundAndIncludesNoUsag
 	assert.Zero(t, invoice.Accounts[0].GrossQuota)
 	assert.Equal(t, "2.5000000000", invoice.Accounts[0].Financials.OpeningBalanceAmountUSD)
 	assert.Equal(t, "4.0000000000", invoice.Accounts[0].Financials.TotalInflowAmountUSD)
-	assert.Equal(t, "reconciled", invoice.Accounts[0].Financials.ReconciliationStatus)
+	assert.Equal(t, "derived", invoice.Accounts[0].Financials.ReconciliationStatus)
+	assert.Nil(t, invoice.Accounts[0].Financials.ReconciliationDifferenceAmountUSD)
 	baseline, err := model.GetOrganizationInvoiceBaseline(organizationId)
 	require.NoError(t, err)
 	assert.Equal(t, now.Year()*100+int(now.Month()), baseline.StartMonth)
@@ -122,8 +126,9 @@ func TestGetOrganizationInvoiceBuildsMissingSummaryInBackgroundAndIncludesNoUsag
 	assert.Equal(t, "1.0000000000", invoice.Accounts[0].Financials.CurrentBalanceAmountUSD)
 }
 
-func TestGetOrganizationInvoiceDoesNotPublishIncompleteSummary(t *testing.T) {
+func TestGetOrganizationInvoicePublishesConsumptionWithIndependentWalletWarning(t *testing.T) {
 	truncate(t)
+	startInvoiceTestRunner(t)
 	const organizationId = 7201
 	const userId = 7202
 	require.NoError(t, model.DB.Create(&model.User{
@@ -157,16 +162,12 @@ func TestGetOrganizationInvoiceDoesNotPublishIncompleteSummary(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, model.OrganizationInvoiceGenerationStatusGenerating, invoice.GenerationStatus)
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-		_, err = GetOrganizationInvoice(organizationId, period, false)
-		if err != nil {
-			break
-		}
-	}
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "financials are incomplete")
+	waitForOrganizationInvoiceSummaries(t, organizationId, map[string]model.OrganizationInvoiceSummaryStatus{period.StartDate: model.OrganizationInvoiceSummaryStatusReady})
+	invoice, err = GetOrganizationInvoice(organizationId, period, false)
+	require.NoError(t, err)
+	assert.Equal(t, "complete", invoice.ExpenseCoverage.Status)
+	assert.Equal(t, "incomplete", invoice.Accounts[0].Financials.ReconciliationStatus)
+	assert.Nil(t, invoice.Accounts[0].Financials.ReconciliationDifferenceAmountUSD)
 
 	var summary model.OrganizationInvoicePeriodSummary
 	require.NoError(t, model.DB.Where(
@@ -174,6 +175,6 @@ func TestGetOrganizationInvoiceDoesNotPublishIncompleteSummary(t *testing.T) {
 		organizationId,
 		model.OrganizationInvoiceSummaryCalculationVersion,
 	).First(&summary).Error)
-	assert.Equal(t, model.OrganizationInvoiceSummaryStatusFailed, summary.Status)
-	assert.Empty(t, summary.Payload)
+	assert.Equal(t, model.OrganizationInvoiceSummaryStatusReady, summary.Status)
+	assert.NotEmpty(t, summary.Payload)
 }

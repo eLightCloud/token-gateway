@@ -37,6 +37,8 @@ import {
 } from '@/components/ui/select'
 
 import type { ChannelFormValues } from '../../lib/channel-form'
+import { videoEnhanceChannelSupported } from '../../lib/video-enhance'
+import { VideoGenerationSupplierField } from './video-generation-supplier-field'
 
 interface VideoUpstreamFieldsProps {
   form: UseFormReturn<ChannelFormValues>
@@ -60,6 +62,13 @@ export function VideoUpstreamFields(props: VideoUpstreamFieldsProps) {
   if (!enabled) return null
   return (
     <>
+      {videoEnhanceChannelSupported(
+        props.channelType,
+        props.pluginKey,
+        props.extensionKeys
+      ) && (
+        <VideoGenerationSupplierField form={props.form} locked={props.locked} />
+      )}
       <FormField
         control={props.form.control}
         name='video_upstream_protocol'

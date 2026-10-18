@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -159,4 +160,67 @@ func TestSecurityProofBindsIdentityAndOperation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ConsumeOperationProof(expired, identity, operation)
 	assert.ErrorIs(t, err, ErrAuthTokenExpired)
+}
+
+func TestSensitiveIntegrationProofUsesExistingIdentityScopeAndExpiryRules(t *testing.T) {
+	for _, scope := range []string{VerificationScopeVideoEnhanceSettings, VerificationScopeVantageIntegrationSettings} {
+		t.Run(scope, func(t *testing.T) {
+			user := setupAuthSessionTestDB(t)
+			useTestSessionSecret(t)
+			identity := AuthIdentity{UserID: 42, SessionID: "enhance-session", UserAuthVersion: 3, SessionVersion: 2}
+			operation := VerificationOperation{Scope: scope}
+			binding, err := BindVerificationOperation(operation)
+			require.NoError(t, err)
+			proof, _, err := IssueSecurityProof(identity, VerificationMethodPassword, binding)
+			require.NoError(t, err)
+			_, err = verifySecurityProof(proof, identity, binding)
+			require.NoError(t, err)
+			otherBinding, err := BindVerificationOperation(VerificationOperation{Scope: VerificationScopeAccessTokenGenerate})
+			require.NoError(t, err)
+			_, err = verifySecurityProof(proof, identity, otherBinding)
+			assert.ErrorIs(t, err, ErrProofScope)
+			otherIdentity := identity
+			otherIdentity.SessionID = "another-session"
+			_, err = verifySecurityProof(proof, otherIdentity, binding)
+			assert.Error(t, err)
+			_, err = BindVerificationOperation(VerificationOperation{Scope: scope, Context: []byte(`{"role":100}`)})
+			assert.ErrorIs(t, err, ErrVerificationContextInvalid)
+			claims, err := parseAuthClaims(proof, securityProofTokenUse, authSigningKey(securityProofTokenUse))
+			require.NoError(t, err)
+			claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(-time.Minute))
+			expired, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(authSigningKey(securityProofTokenUse))
+			require.NoError(t, err)
+			_, err = ConsumeOperationProof(expired, identity, operation)
+			assert.ErrorIs(t, err, ErrAuthTokenExpired)
+			methods, err := securityVerificationPolicy(scope, model.UserVerificationState{HasPassword: true})
+			require.NoError(t, err)
+			require.Len(t, methods, 1)
+			assert.Equal(t, VerificationMethodPassword, methods[0].Method)
+			methods, err = securityVerificationPolicy(scope, model.UserVerificationState{HasPassword: true, HasTwoFA: true})
+			require.NoError(t, err)
+			require.Len(t, methods, 1)
+			assert.Equal(t, VerificationMethodTwoFA, methods[0].Method)
+			require.NoError(t, model.DB.AutoMigrate(&model.TwoFA{}, &model.PasskeyCredential{}))
+			user.Role = common.RoleRootUser
+			require.NoError(t, model.DB.Model(user).Update("role", user.Role).Error)
+			bundle, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "enhance-test")
+			require.NoError(t, err)
+			liveIdentity, err := ParseAccessToken(bundle.AccessToken)
+			require.NoError(t, err)
+			liveProof, _, err := IssueSecurityProof(liveIdentity, VerificationMethodPassword, binding)
+			require.NoError(t, err)
+			_, err = ConsumeOperationProof(liveProof, liveIdentity, operation)
+			require.NoError(t, err)
+			_, err = ConsumeOperationProof(liveProof, liveIdentity, operation)
+			assert.ErrorIs(t, err, ErrProofConsumed)
+			passwordProof, _, err := IssueSecurityProof(liveIdentity, VerificationMethodPassword, binding)
+			require.NoError(t, err)
+			require.NoError(t, model.DB.Create(&model.TwoFA{UserId: user.Id, Secret: "unusable-test-secret", IsEnabled: true}).Error)
+			_, err = ConsumeOperationProof(passwordProof, liveIdentity, operation)
+			assert.ErrorIs(t, err, ErrProofMethod, "an enrolled second factor cannot be bypassed with an older password proof")
+			require.NoError(t, model.DB.Model(user).Update("role", common.RoleAdminUser).Error)
+			_, err = GetVerificationRequirements(liveIdentity, operation.Scope)
+			assert.ErrorIs(t, err, ErrVerificationForbidden)
+		})
+	}
 }

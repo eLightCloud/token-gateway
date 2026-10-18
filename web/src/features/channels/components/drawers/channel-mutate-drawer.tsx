@@ -205,6 +205,7 @@ import {
   assessBaseUrlTrust,
   nextTaskPluginBaseUrl,
 } from '../../lib/task-plugin-base-url'
+import { videoEnhanceChannelSupported } from '../../lib/video-enhance'
 import type { Channel } from '../../types'
 import { ChannelPluginExtensions } from '../channel-plugin-extensions'
 import { ChannelQuickOptions } from '../channel-quick-options'
@@ -234,6 +235,7 @@ import {
 import { ModelRedirectPanel } from '../model-redirect-panel'
 import { ResponsesWebSocketSetting } from '../responses-websocket-setting'
 import { UpstreamModelSelection } from '../upstream-model-selection'
+import { VideoEnhanceModels } from '../video-enhance-models'
 import {
   ChannelConfiguration,
   ChannelConfigurationStatusIndicator,
@@ -246,6 +248,7 @@ import {
   ChannelEditorLoadingState,
   ChannelModelsSection,
 } from './sections'
+import { VideoEnhanceFields } from './video-enhance-fields'
 import { VideoUpstreamFields } from './video-upstream-fields'
 
 type ChannelMutateDrawerProps = {
@@ -792,6 +795,14 @@ export function ChannelMutateDrawer({
     boundTaskPlugin?.name ||
     (currentType === CHANNEL_TYPE_TASK_PLUGIN && currentTaskPluginKey) ||
     t(currentTypeLabel)
+
+  const enhancementEnabled =
+    formValues.video_enhance?.enabled === true &&
+    videoEnhanceChannelSupported(
+      currentType,
+      currentTaskPluginKey,
+      formValues.task_extend_plugin_keys
+    )
 
   const selectProvider = useCallback(
     (target: ChannelProviderTarget) => {
@@ -3168,6 +3179,10 @@ export function ChannelMutateDrawer({
                       copyChipOnClick
                     />
                   </FormControl>
+                  <VideoEnhanceModels
+                    models={currentModelsArray}
+                    enabled={enhancementEnabled}
+                  />
                   <div className='text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs'>
                     <Route className='size-3.5 shrink-0' aria-hidden='true' />
                     {mappingCount > 0 && (
@@ -4698,6 +4713,13 @@ export function ChannelMutateDrawer({
                   pluginKey={currentTaskPluginKey}
                   extensionKeys={formValues.task_extend_plugin_keys}
                 />
+                <VideoEnhanceFields
+                  form={form}
+                  locked={sensitiveLocked}
+                  channelType={currentType}
+                  pluginKey={currentTaskPluginKey}
+                  extensionKeys={formValues.task_extend_plugin_keys}
+                />
               </fieldset>
             </div>
             {upstreamModelDetectionFields}
@@ -4990,6 +5012,7 @@ export function ChannelMutateDrawer({
         <ConfigureModelsDialog
           open
           models={currentModelsArray}
+          enhancementEnabled={enhancementEnabled}
           plugins={pluginExtensions}
           initialPluginKey={modelConfiguration.pluginKey}
           onOpenChange={(nextOpen) => {

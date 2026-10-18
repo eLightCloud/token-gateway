@@ -84,6 +84,7 @@ const CONFIGURATION_BLOCKS = {
       'proxy',
       'http_protocol',
       'http2_connection_shards',
+      'video_enhance',
       'video_upstream_protocol',
       'video_upstream_profile',
       'disable_task_polling_sleep',
@@ -112,7 +113,7 @@ export function getChannelConfigurationSection(
   field: string
 ): ChannelConfigurationSection {
   for (const block of Object.values(CONFIGURATION_BLOCKS)) {
-    if ((block.fields as readonly string[]).includes(field)) {
+    if ((block.fields as readonly string[]).includes(field.split('.')[0])) {
       return block.section
     }
   }
@@ -174,6 +175,8 @@ export function getChannelConfigurationState(
           (values.type === 14 && values.claude_beta_query)))
     ),
     extraSettings: Boolean(
+      values.video_enhance?.enabled ||
+      values.video_enhance?.supplier ||
       values.proxy?.trim() ||
       (values.http_protocol && values.http_protocol !== 'auto') ||
       (values.http2_connection_shards ?? 1) > 1 ||

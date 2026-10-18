@@ -28,6 +28,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if err := os.Setenv("ORGANIZATION_INVOICE_BATCH_DELAY_MS", "0"); err != nil {
+		panic(err)
+	}
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		panic("failed to open test db: " + err.Error())
@@ -42,6 +45,9 @@ func TestMain(m *testing.M) {
 	model.LOG_DB = db
 
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	// Mirror the production single-node default set by common.InitEnv so the
+	// organization-invoice builder's master gate opens in tests too.
+	common.IsMasterNode = true
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
@@ -60,6 +66,13 @@ func TestMain(m *testing.M) {
 		&model.OrganizationInvoicePeriodSummary{},
 		&model.OrganizationInvoiceBaseline{},
 		&model.OrganizationInvoiceAccountBaseline{},
+		&model.OrganizationInvoiceUsageShard{},
+		&model.OrganizationInvoiceDayCache{},
+		&model.OrganizationInvoiceSourceCursor{},
+		&model.OrganizationInvoiceModelSet{},
+		&model.OrganizationUsageSnapshot{},
+		&model.HeavyStatsPermit{},
+		&model.OrganizationInvoiceLogRetention{},
 		&model.TaskSettlementJournal{},
 		&model.UserQuotaAdjustment{},
 		&model.UserQuotaAdjustmentLegacyFact{},
@@ -98,6 +111,10 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM task_settlement_journals")
 		model.DB.Exec("DELETE FROM organization_billing_settlement_rules")
 		model.DB.Exec("DELETE FROM organization_invoice_period_summaries")
+		model.DB.Exec("DELETE FROM organization_invoice_day_caches")
+		model.DB.Exec("DELETE FROM organization_invoice_source_cursors")
+		model.DB.Exec("DELETE FROM organization_invoice_log_retentions")
+		model.DB.Exec("DELETE FROM organization_invoice_usage_shards")
 		model.DB.Exec("DELETE FROM organization_invoice_account_baselines")
 		model.DB.Exec("DELETE FROM organization_invoice_baselines")
 		model.DB.Exec("DELETE FROM task_settlement_journals")
@@ -307,19 +324,21 @@ func TestTaskBillingOtherOmitsEmptyUsageFacts(t *testing.T) {
 	assert.NotContains(t, other, "usage_facts")
 }
 
-func callLogTaskConsumption(t *testing.T, info *relaycommon.RelayInfo, task *model.Task) *model.Log {
+func recordTaskSubmissionForTest(t *testing.T, info *relaycommon.RelayInfo, task *model.Task) *model.Log {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
 	ctx.Set("token_name", "test_token")
-	LogTaskConsumption(ctx, info, task)
+	task.PrivateData.BillingContext = SnapshotTaskBillingContext(info)
+	require.NoError(t, model.DB.Create(task).Error)
+	require.NoError(t, SettleOrganizationInvoiceTaskSubmission(ctx, info, task, info.PriceData.Quota, task.Status == model.TaskStatusSuccess))
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	return log
 }
 
-func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {
+func TestTaskSubmissionLogIncludesTieredSnapshotUsageFacts(t *testing.T) {
 	truncate(t)
 	const userID, channelID = 40, 40
 	seedUser(t, userID, 10_000)
@@ -349,7 +368,7 @@ func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {
 		},
 	}
 
-	log := callLogTaskConsumption(t, info, task)
+	log := recordTaskSubmissionForTest(t, info, task)
 
 	var other map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
@@ -362,12 +381,9 @@ func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {
 	assert.Equal(t, float64(5), facts["seconds"])
 	assert.NotContains(t, other, "resolution")
 	assert.NotContains(t, other, "seconds")
-	assert.Contains(t, log.Content, "计算参数：")
-	assert.Contains(t, log.Content, "resolution: 720P")
-	assert.Contains(t, log.Content, "seconds: 5")
 }
 
-func TestLogTaskConsumptionWithoutSnapshotKeepsRatioMode(t *testing.T) {
+func TestTaskSubmissionLogWithoutSnapshotKeepsRatioMode(t *testing.T) {
 	truncate(t)
 	const userID, channelID = 41, 41
 	seedUser(t, userID, 10_000)
@@ -390,7 +406,7 @@ func TestLogTaskConsumptionWithoutSnapshotKeepsRatioMode(t *testing.T) {
 		PriceData:       priceData,
 	}
 
-	log := callLogTaskConsumption(t, info, task)
+	log := recordTaskSubmissionForTest(t, info, task)
 
 	var other map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
@@ -406,7 +422,7 @@ func TestLogTaskConsumptionWithoutSnapshotKeepsRatioMode(t *testing.T) {
 
 // Task logs distinguish jobs the client polls from requests whose HTTP call
 // returned the deliverable itself, and flag results the gateway did not keep.
-func TestLogTaskConsumptionMarksInlineResultsAndDiscardedArtifacts(t *testing.T) {
+func TestTaskSubmissionLogMarksInlineResultsAndDiscardedArtifacts(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
 		status             model.TaskStatus
@@ -440,7 +456,9 @@ func TestLogTaskConsumptionMarksInlineResultsAndDiscardedArtifacts(t *testing.T)
 			if tc.pinnedProtocol != "" {
 				ctx.Set(jsplugin.ContextKeyPinnedEndpoint, jsplugin.PinnedEndpoint{Protocol: tc.pinnedProtocol})
 			}
-			LogTaskConsumption(ctx, info, task)
+			task.PrivateData.BillingContext = SnapshotTaskBillingContext(info)
+			require.NoError(t, model.DB.Create(task).Error)
+			require.NoError(t, SettleOrganizationInvoiceTaskSubmission(ctx, info, task, info.PriceData.Quota, task.Status == model.TaskStatusSuccess))
 			log := getLastLog(t)
 			require.NotNil(t, log)
 			var other map[string]any
@@ -689,6 +707,8 @@ func TestRefundTaskQuota_Subscription(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.EqualValues(t, model.LogTypeRefund, log.Type)
+	assert.Equal(t, BillingSourceSubscription, log.BillingSource)
+	assert.Equal(t, BillingSourceSubscription, decodeLogOther(t, log)["billing_source"])
 	assert.Zero(t, getTaskQuota(t, task.ID))
 }
 
@@ -700,6 +720,7 @@ func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 	seedUser(t, userID, 5000)
 
 	task := makeTask(userID, 0, 0, 0, BillingSourceWallet, 0)
+	require.NoError(t, model.DB.Create(task).Error)
 
 	assert.True(t, RefundTaskQuota(ctx, task, "zero quota task"))
 
@@ -871,8 +892,13 @@ func TestRecalculate_ZeroDelta(t *testing.T) {
 	seedUser(t, userID, initQuota)
 
 	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
-
-	RecalculateTaskQuota(ctx, task, preConsumed, "exact match")
+	require.NoError(t, model.DB.Create(task).Error)
+	require.True(t, RecalculateTaskQuota(ctx, task, preConsumed, "exact match"))
+	var confirmed model.Task
+	require.NoError(t, model.DB.First(&confirmed, task.ID).Error)
+	require.NotNil(t, confirmed.InvoiceExpenseQuota)
+	assert.EqualValues(t, preConsumed, *confirmed.InvoiceExpenseQuota)
+	assert.True(t, confirmed.InvoiceExpenseApplied)
 
 	// No change to user quota
 	assert.EqualValues(t, initQuota, getUserQuota(t, userID))
@@ -891,12 +917,15 @@ func TestRecalculate_ActualQuotaZero(t *testing.T) {
 	seedUser(t, userID, initQuota)
 
 	task := makeTask(userID, 0, 5000, 0, BillingSourceWallet, 0)
-
-	RecalculateTaskQuota(ctx, task, 0, "zero actual")
-
-	// No change (early return)
-	assert.EqualValues(t, initQuota, getUserQuota(t, userID))
-	assert.EqualValues(t, int64(0), countLogs(t))
+	require.NoError(t, model.DB.Create(task).Error)
+	require.True(t, RecalculateTaskQuota(ctx, task, 0, "zero actual"))
+	assert.EqualValues(t, initQuota+5000, getUserQuota(t, userID))
+	var confirmed model.Task
+	require.NoError(t, model.DB.First(&confirmed, task.ID).Error)
+	require.NotNil(t, confirmed.InvoiceExpenseQuota)
+	assert.Zero(t, *confirmed.InvoiceExpenseQuota)
+	assert.True(t, confirmed.InvoiceExpenseApplied)
+	assert.EqualValues(t, int64(1), countLogs(t))
 }
 
 func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
@@ -930,6 +959,8 @@ func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.EqualValues(t, model.LogTypeRefund, log.Type)
+	assert.Equal(t, BillingSourceSubscription, log.BillingSource)
+	assert.Equal(t, BillingSourceSubscription, decodeLogOther(t, log)["billing_source"])
 }
 
 // ===========================================================================
@@ -1577,6 +1608,11 @@ func TestRefundTaskQuota_FundingFailureKeepsAccountingAndPendingMarker(t *testin
 	assert.EqualValues(t, 1, requestCount)
 	assert.EqualValues(t, int64(preConsumed), getChannelUsedQuota(t, channelID))
 	assert.EqualValues(t, int64(0), countLogs(t))
+	var confirmed model.Task
+	require.NoError(t, model.DB.First(&confirmed, task.ID).Error)
+	require.NotNil(t, confirmed.InvoiceExpenseQuota)
+	assert.Zero(t, *confirmed.InvoiceExpenseQuota)
+	assert.False(t, confirmed.InvoiceExpenseApplied, "fee is known but funding still needs the existing recovery")
 }
 
 func TestSettle_TieredEvaluationFailureKeepsPreConsumedCharge(t *testing.T) {
@@ -1881,6 +1917,58 @@ func TestSettle_TokenRecalcFallsBackToCompletionTokens(t *testing.T) {
 
 			assert.EqualValues(t, testCase.wantSettled, settled)
 			assert.EqualValues(t, testCase.wantQuota, task.Quota)
+		})
+	}
+}
+
+func TestOrganizationInvoiceTaskSubmissionConfirmationSurvivesOutboxAndSnapshotSave(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		confirmed bool
+		actual    int
+	}{
+		{"confirmed_inline", true, 700}, {"zero_fee", true, 0}, {"unconfirmed_inline", false, 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userId = 9910
+			require.NoError(t, model.LOG_DB.Where("user_id = ?", userId).Delete(&model.Log{}).Error)
+			seedUser(t, userId, 10000)
+			task := makeTask(userId, 0, tc.actual, 0, BillingSourceWallet, 0)
+			task.TaskID = "invoice-" + tc.name
+			task.Status = model.TaskStatusSuccess
+			require.NoError(t, model.DB.Create(task).Error)
+			stale := *task
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/task/submit", nil)
+			info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}, ChannelMeta: &relaycommon.ChannelMeta{}, UserId: userId, RequestId: "invoice-submit-" + tc.name, OriginModelName: "test-model", BillingSource: BillingSourceWallet, FinalPreConsumedQuota: 1000, PriceData: types.PriceData{Quota: tc.actual}}
+			require.NoError(t, SettleOrganizationInvoiceTaskSubmission(c, info, task, tc.actual, tc.confirmed))
+			var saved model.Task
+			require.NoError(t, model.DB.First(&saved, task.ID).Error)
+			assert.Greater(t, saved.InvoiceOriginAt, int64(0))
+			if tc.confirmed {
+				require.NotNil(t, saved.InvoiceExpenseQuota)
+				assert.EqualValues(t, tc.actual, *saved.InvoiceExpenseQuota)
+				assert.True(t, saved.InvoiceExpenseApplied)
+				// The replay is after successful outbox cleanup. It must neither adjust
+				// money again nor append a second consumption record.
+				before := getUserQuota(t, userId)
+				require.NoError(t, SettleOrganizationInvoiceTaskSubmission(c, info, task, tc.actual, true))
+				assert.Equal(t, before, getUserQuota(t, userId))
+			} else {
+				assert.Nil(t, saved.InvoiceExpenseQuota, "SUCCESS without a pricing result must remain unknown")
+			}
+			assert.EqualValues(t, 1, countLogs(t))
+			log := getLastLog(t)
+			require.NotNil(t, log)
+			assert.Equal(t, saved.InvoiceOriginAt, log.CreatedAt)
+			require.NoError(t, stale.Update())
+			require.NoError(t, model.DB.First(&saved, task.ID).Error)
+			assert.Greater(t, saved.InvoiceOriginAt, int64(0))
+			if tc.confirmed {
+				require.NotNil(t, saved.InvoiceExpenseQuota)
+				assert.EqualValues(t, tc.actual, *saved.InvoiceExpenseQuota)
+			}
 		})
 	}
 }

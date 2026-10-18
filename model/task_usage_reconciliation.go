@@ -8,6 +8,7 @@ import (
 // TaskUsageReconciliation separates completed generation from unfinished billing.
 // Reservation and normalized facts survive restart; no credential is stored here.
 type TaskUsageReconciliation struct {
+	ActualQuota   *int           `json:"actual_quota,omitempty"`
 	ReservedQuota int            `json:"reserved_quota"`
 	Facts         map[string]any `json:"facts"`
 	NextAttemptAt int64          `json:"next_attempt_at"`

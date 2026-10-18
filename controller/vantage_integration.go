@@ -46,17 +46,23 @@ func vantageRespondError(c *gin.Context, err error) {
 }
 
 func vantageRespondProvision(c *gin.Context, result *service.VantageProvisionResult) {
+	quotaSetup, err := service.VantageProvisionTokenQuota(result)
+	if err != nil {
+		vantageRespondError(c, err)
+		return
+	}
 	status := http.StatusOK
 	if result.Created {
 		status = http.StatusCreated
 	}
 	c.JSON(status, gin.H{
-		"success":    true,
-		"created":    result.Created,
-		"request_id": vantageRequestId(c),
-		"account":    result.Account,
-		"credential": result.Credential,
-		"token_key":  result.TokenKey,
+		"success":     true,
+		"created":     result.Created,
+		"request_id":  vantageRequestId(c),
+		"account":     result.Account,
+		"credential":  result.Credential,
+		"token_key":   result.TokenKey,
+		"quota_setup": quotaSetup,
 	})
 }
 

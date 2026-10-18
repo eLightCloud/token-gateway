@@ -1,3 +1,6 @@
+// Historical aggregation is retained as a comparison oracle only for intact
+// log history without asynchronous task expenses. Production invoices use
+// source coverage, confirmed task expenses and resumable usage shards.
 package model
 
 import (

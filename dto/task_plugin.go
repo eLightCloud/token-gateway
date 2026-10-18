@@ -13,6 +13,7 @@ type TaskPluginError struct {
 // context a plugin needs to interpret its own persisted tasks (for example a
 // southbound video protocol pinned at submission).
 type TaskView struct {
+	Model           string `json:"model,omitempty"`
 	TaskID          string `json:"task_id"`
 	Platform        string `json:"platform"`
 	Status          string `json:"status"`

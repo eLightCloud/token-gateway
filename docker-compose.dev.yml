@@ -27,7 +27,10 @@ services:
     volumes:
       - dev_data:/data
     environment:
-      - SQL_DSN=postgresql://root:123456@postgres:5432/new-api
+      - SQL_DSN=${DOCKER_SQL_DSN:-postgresql://root:123456@postgres:5432/new-api}
+      - LOG_SQL_DSN=${LOG_SQL_DSN:-}
+      - SQL_MAX_OPEN_CONNS=${SQL_MAX_OPEN_CONNS:-1000}
+      - SQL_MAX_IDLE_CONNS=${SQL_MAX_IDLE_CONNS:-100}
       - REDIS_CONN_STRING=redis://redis
       - TZ=Asia/Shanghai
       - BATCH_UPDATE_ENABLED=true
@@ -52,19 +55,22 @@ services:
       - dev-network
 
   postgres:
-    image: postgres:15-alpine
+    shm_size: ${POSTGRES_SHM_SIZE:-512m}
+    image: postgres:18.4-alpine
     container_name: new-api-dev-pg
     restart: unless-stopped
     environment:
-      POSTGRES_USER: root
-      POSTGRES_PASSWORD: 123456
-      POSTGRES_DB: new-api
+      POSTGRES_USER: ${POSTGRES_USER:-root}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      POSTGRES_DB: ${POSTGRES_DB:-new-api}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-54329}:5432"
     volumes:
-      - dev_pg_data:/var/lib/postgresql/data
+      - dev_pg_data:/var/lib/postgresql
     networks:
       - dev-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U root -d new-api"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 3s
       retries: 5

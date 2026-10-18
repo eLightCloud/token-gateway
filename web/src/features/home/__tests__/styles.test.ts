@@ -19,20 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+
 import { describe, test } from 'vitest'
 
-const mainSource = readFileSync(
-  resolve('src/main.tsx'),
-  'utf8'
-)
-const localStyles = readFileSync(
-  resolve('src/styles/local.css'),
-  'utf8'
-)
-const homeStyles = readFileSync(
-  resolve('src/styles/lighting-home.css'),
-  'utf8'
-)
+const mainSource = readFileSync(resolve('src/main.tsx'), 'utf8')
+const localStyles = readFileSync(resolve('src/styles/local.css'), 'utf8')
+const homeStyles = readFileSync(resolve('src/styles/lighting-home.css'), 'utf8')
 
 describe('Lighting homepage style entry', () => {
   test('loads local styles after the upstream global stylesheet', () => {

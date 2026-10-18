@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
@@ -85,9 +87,10 @@ type organizationE2ELog struct {
 }
 
 type organizationE2EResponse struct {
-	Success bool            `json:"success"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data"`
+	Success   bool            `json:"success"`
+	Message   string          `json:"message"`
+	Data      json.RawMessage `json:"data"`
+	Discovery json.RawMessage `json:"discovery"`
 }
 
 type organizationE2EPage[T any] struct {
@@ -127,6 +130,7 @@ func setupOrganizationE2E(t *testing.T) (organizationE2EFixture, *gin.Engine) {
 	model.DB = db
 	model.LOG_DB = db
 	require.NoError(t, db.AutoMigrate(
+		&model.Task{}, &model.Midjourney{},
 		&model.User{},
 		&model.Organization{},
 		&model.OrganizationMember{},
@@ -134,6 +138,18 @@ func setupOrganizationE2E(t *testing.T) (organizationE2EFixture, *gin.Engine) {
 		&model.OrganizationInvoicePeriodSummary{},
 		&model.OrganizationInvoiceBaseline{},
 		&model.OrganizationInvoiceAccountBaseline{},
+		&model.OrganizationInvoiceUsageShard{},
+		&model.OrganizationInvoiceDayCache{},
+		&model.OrganizationInvoiceSourceCursor{},
+		&model.OrganizationInvoiceModelSet{},
+		&model.OrganizationUsageSlice{},
+		&model.OrganizationUsageCell{},
+		&model.OrganizationUsageSnapshot{}, &model.OrganizationUsageSourceRevision{}, &model.OrganizationUsageDelivery{},
+		&model.HeavyStatsPermit{},
+		&model.OrganizationInvoiceLogRetention{},
+		&model.TaskSettlementJournal{},
+		&model.SystemTask{},
+		&model.SystemTaskLock{},
 		&model.UserQuotaAdjustment{},
 		&model.UserQuotaAdjustmentLegacyFact{},
 		&model.Checkin{},
@@ -275,16 +291,21 @@ func registerOrganizationE2ERoutes(router *gin.Engine) {
 		organizationRoute.DELETE("/current/members/:user_id", DeleteCurrentOrganizationMember)
 		organizationRoute.POST("/current/members/:user_id/billing-start/preview", PreviewCurrentOrganizationMemberBillingStart)
 		organizationRoute.POST("/current/members/:user_id/billing-start", UpdateCurrentOrganizationMemberBillingStart)
+		organizationRoute.GET("/current/billing/usage", GetCurrentOrganizationBillingUsage)
+		organizationRoute.POST("/current/billing/usage/recalculate", RecalculateCurrentOrganizationUsage)
+		organizationRoute.GET("/current/billing/usage/export", ExportCurrentOrganizationBillingUsage)
 		organizationRoute.GET("/current/billing/summary", GetCurrentOrganizationBillingSummary)
 		organizationRoute.GET("/current/billing/members", GetCurrentOrganizationBillingMembers)
 		organizationRoute.GET("/current/billing/models", GetCurrentOrganizationBillingModels)
 		organizationRoute.GET("/current/billing/channels", GetCurrentOrganizationBillingChannels)
 		organizationRoute.GET("/current/billing/trend", GetCurrentOrganizationBillingTrend)
 		organizationRoute.GET("/current/billing/logs", GetCurrentOrganizationBillingLogs)
+		organizationRoute.GET("/current/billing/logs/cursor", GetCurrentOrganizationBillingUsageLogs)
 		organizationRoute.GET("/current/billing/logs/export", ExportCurrentOrganizationBillingLogs)
 		organizationRoute.GET("/current/billing/logs/display-export", ExportCurrentOrganizationBillingDisplayLogs)
 		organizationRoute.GET("/current/billing/export", ExportCurrentOrganizationBilling)
 		organizationRoute.GET("/current/invoice", GetCurrentOrganizationInvoice)
+		organizationRoute.POST("/current/invoice/recalculate", RecalculateCurrentOrganizationInvoice)
 		organizationRoute.GET("/current/invoice/export", ExportCurrentOrganizationInvoice)
 		organizationRoute.GET("/current/invoice/settlement-rules", GetCurrentOrganizationSettlementRules)
 		organizationRoute.PUT("/current/invoice/settlement-rules", UpdateCurrentOrganizationSettlementRule)
@@ -299,8 +320,10 @@ func registerOrganizationE2ERoutes(router *gin.Engine) {
 		adminOrganizationRoute.POST("/:id/members/:user_id/billing-start/preview", AdminPreviewOrganizationMemberBillingStart)
 		adminOrganizationRoute.POST("/:id/members/:user_id/billing-start", AdminUpdateOrganizationMemberBillingStart)
 		adminOrganizationRoute.GET("/:id/billing/summary", AdminGetOrganizationBillingSummary)
+		adminOrganizationRoute.POST("/:id/billing/usage/recalculate", AdminRecalculateOrganizationUsage)
 		adminOrganizationRoute.GET("/:id/billing/channels", AdminGetOrganizationBillingChannels)
 		adminOrganizationRoute.GET("/:id/invoice", AdminGetOrganizationInvoice)
+		adminOrganizationRoute.POST("/:id/invoice/recalculate", AdminRecalculateOrganizationInvoice)
 		adminOrganizationRoute.GET("/:id/invoice/export", AdminExportOrganizationInvoice)
 		adminOrganizationRoute.GET("/:id/invoice/settlement-rules", AdminGetOrganizationSettlementRules)
 		adminOrganizationRoute.PUT("/:id/invoice/settlement-rules", AdminUpdateOrganizationSettlementRule)
@@ -357,6 +380,14 @@ func decodeOrganizationE2EResponse(t *testing.T, recorder *httptest.ResponseReco
 	var response organizationE2EResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	return response
+}
+
+func decodeOrganizationE2ERulesDiscovery(t *testing.T, response organizationE2EResponse) model.OrganizationInvoiceDiscoveryMeta {
+	t.Helper()
+	require.NotNil(t, response.Discovery)
+	var discovery model.OrganizationInvoiceDiscoveryMeta
+	require.NoError(t, common.Unmarshal(response.Discovery, &discovery))
+	return discovery
 }
 
 func decodeOrganizationE2EData[T any](t *testing.T, response organizationE2EResponse) T {
@@ -965,7 +996,17 @@ func TestOrganizationE2EBillingStartExportsBackfill(t *testing.T) {
 }
 
 func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
+	previousMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() {
+		common.IsMasterNode = previousMaster
+	})
 	fixture, router := setupOrganizationE2E(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); service.RunSystemTaskRunner(ctx) }()
+	t.Cleanup(func() { cancel(); <-stopped })
+
 	organizationId := fixture.Organization.Id
 	require.NoError(t, model.DB.Create(&model.OrganizationInvoiceBaseline{
 		OrganizationId: organizationId,
@@ -1084,6 +1125,23 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 		"/api/organization/current/invoice/settlement-rules?effective_month=2026-07",
 		nil,
 	))
+	// The first read only registers the shared preparation; the option list
+	// must not present an empty result as complete.
+	firstDiscovery := decodeOrganizationE2ERulesDiscovery(t, rulesResponse)
+	assert.Equal(t, model.OrganizationInvoiceDiscoveryPreparing, firstDiscovery.Status)
+	assert.Empty(t, decodeOrganizationE2EData[[]model.OrganizationSettlementRuleOption](t, rulesResponse))
+	require.NoError(t, model.PrepareOrganizationInvoiceModelSetsNow(context.Background(), organizationId))
+
+	rulesResponse = requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t,
+		router,
+		fixture,
+		1001,
+		http.MethodGet,
+		"/api/organization/current/invoice/settlement-rules?effective_month=2026-07",
+		nil,
+	))
+	assert.Equal(t, model.OrganizationInvoiceDiscoveryReady, decodeOrganizationE2ERulesDiscovery(t, rulesResponse).Status)
 	rules := decodeOrganizationE2EData[[]model.OrganizationSettlementRuleOption](t, rulesResponse)
 	require.Len(t, rules, 4)
 	for _, rule := range rules {
@@ -1170,23 +1228,58 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 			Status:          common.TopUpStatusSuccess,
 		},
 	}).Error)
+	invoiceBeforeRecalculation := requireOrganizationE2EInvoiceReady(t, router, fixture, 1001, "/api/organization/current/invoice?"+invoiceQuery)
 	refreshResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t,
 		router,
 		fixture,
 		1001,
-		http.MethodGet,
-		"/api/organization/current/invoice?"+invoiceQuery+"&refresh=1",
-		nil,
+		http.MethodPost,
+		"/api/organization/current/invoice/recalculate?"+invoiceQuery,
+		map[string]any{"expected_token": invoiceBeforeRecalculation.RecalculationToken},
 	))
 	assert.Equal(
 		t,
 		model.OrganizationInvoiceGenerationStatusGenerating,
 		decodeOrganizationE2EData[model.OrganizationInvoice](t, refreshResponse).GenerationStatus,
 	)
+	buildingInvoice := decodeOrganizationE2EData[model.OrganizationInvoice](t, refreshResponse)
+	assert.True(t, buildingInvoice.PreviousPublication)
+	assert.Equal(t, invoiceBeforeRecalculation.GrossTotalQuota, buildingInvoice.GrossTotalQuota)
+	assert.Equal(t, invoiceBeforeRecalculation.SourceAsOf, buildingInvoice.SourceAsOf)
+	duplicate := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(t, router, fixture, 1001,
+		http.MethodPost, "/api/organization/current/invoice/recalculate?"+invoiceQuery,
+		map[string]any{"expected_token": invoiceBeforeRecalculation.RecalculationToken}))
+	assert.Equal(t, buildingInvoice.RecalculationToken, decodeOrganizationE2EData[model.OrganizationInvoice](t, duplicate).RecalculationToken)
 	exportedInvoice := requireOrganizationE2EInvoiceReady(
 		t, router, fixture, 1001, "/api/organization/current/invoice?"+invoiceQuery,
 	)
+	var cachedSourceReads int
+	countCachedSourceRead := func(tx *gorm.DB) {
+		if tx.Statement.Table == "logs" || strings.Contains(tx.Statement.SQL.String(), "FROM logs") || strings.Contains(tx.Statement.SQL.String(), "FROM `logs`") {
+			cachedSourceReads++
+		}
+	}
+	require.NoError(t, model.LOG_DB.Callback().Query().Before("gorm:query").Register("invoice_cached_query", countCachedSourceRead))
+	require.NoError(t, model.LOG_DB.Callback().Row().Before("gorm:row").Register("invoice_cached_row", countCachedSourceRead))
+	cachedInvoiceResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(t, router, fixture, 1001,
+		http.MethodGet, "/api/organization/current/invoice?"+invoiceQuery, nil))
+	require.NoError(t, model.LOG_DB.Callback().Query().Remove("invoice_cached_query"))
+	require.NoError(t, model.LOG_DB.Callback().Row().Remove("invoice_cached_row"))
+	assert.Zero(t, cachedSourceReads)
+	assert.Equal(t, exportedInvoice.Revision, decodeOrganizationE2EData[model.OrganizationInvoice](t, cachedInvoiceResponse).Revision)
+	legacyInvoice := decodeOrganizationE2EResponse(t, performOrganizationE2ERequest(t, router, fixture, 1001,
+		http.MethodGet, "/api/organization/current/invoice?"+invoiceQuery+"&refresh=1", nil))
+	assert.False(t, legacyInvoice.Success)
+	assert.Contains(t, legacyInvoice.Message, "version-checked POST")
+	completedRetry := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(t, router, fixture, 1001,
+		http.MethodPost, "/api/organization/current/invoice/recalculate?"+invoiceQuery,
+		map[string]any{"expected_token": invoiceBeforeRecalculation.RecalculationToken}))
+	assert.Equal(t, model.OrganizationInvoiceGenerationStatusReady, decodeOrganizationE2EData[model.OrganizationInvoice](t, completedRetry).GenerationStatus)
+	deniedRecalculation := performOrganizationE2ERequest(t, router, fixture, 1002,
+		http.MethodPost, "/api/organization/current/invoice/recalculate?"+invoiceQuery,
+		map[string]any{"expected_token": exportedInvoice.RecalculationToken})
+	assert.False(t, decodeOrganizationE2EResponse(t, deniedRecalculation).Success)
 	exportedAccounts := make(map[string]model.OrganizationInvoiceAccount, len(exportedInvoice.Accounts))
 	for _, account := range exportedInvoice.Accounts {
 		exportedAccounts[account.Username] = account
@@ -1233,7 +1326,7 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 			categoryHeader = record
 		case "用户上期余额":
 			previousBalanceAmounts = record
-		case "用户当期充值金额":
+		case "用户当期流入金额":
 			periodRechargeAmounts = record
 		case "用户当期消费金额":
 			consumptionAmounts = record
@@ -1310,4 +1403,275 @@ func TestOrganizationE2EInvoiceInvalidFactorWritesFailureAudit(t *testing.T) {
 	factor, err := common.Marshal(audits[0].Other.Op.Params["factor"])
 	require.NoError(t, err)
 	assert.JSONEq(t, `"-0.0001"`, string(factor))
+}
+
+func TestOrganizationE2EUsageSnapshotScopesAndChannelProjection(t *testing.T) {
+	fixture, router := setupOrganizationE2E(t)
+	const billingWindow = "start_timestamp=1782864000&end_timestamp=1783511999"
+	buildRegisteredUsageSnapshots := func() {
+		for {
+			snapshot, owner, err := model.ClaimNextOrganizationUsageBuild(context.Background(), 0)
+			require.NoError(t, err)
+			if snapshot == nil {
+				return
+			}
+			require.NoError(t, model.RunOrganizationUsageBuild(context.Background(), snapshot, owner))
+		}
+	}
+
+	registerResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/usage?"+billingWindow, nil,
+	))
+	registered := decodeOrganizationE2EData[organizationUsageResponse](t, registerResponse)
+	require.Equal(t, model.OrganizationUsageStatusBuilding, registered.Status)
+	require.NotZero(t, registered.SnapshotId)
+	for _, mode := range []string{"paused", "disabled"} {
+		t.Run("existing_target_"+mode, func(t *testing.T) {
+			if mode == "paused" {
+				t.Setenv("ORGANIZATION_USAGE_PAUSED", "true")
+			} else {
+				t.Setenv("ORGANIZATION_USAGE_ENABLED_ORGS", "999999")
+			}
+			response := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet,
+				fmt.Sprintf("/api/organization/current/billing/usage?%s&snapshot_id=%d", billingWindow, registered.SnapshotId), nil))
+			assert.Equal(t, organizationUsageStatusPaused, decodeOrganizationE2EData[organizationUsageResponse](t, response).Status)
+			persisted, err := model.GetOrganizationUsageSnapshot(context.Background(), registered.SnapshotId)
+			require.NoError(t, err)
+			assert.Equal(t, model.OrganizationUsageStatusBuilding, persisted.Status)
+			assert.Equal(t, registered.Revision, persisted.Revision)
+		})
+	}
+	buildRegisteredUsageSnapshots()
+
+	readyResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/usage?"+billingWindow, nil,
+	))
+	ready := decodeOrganizationE2EData[organizationUsageResponse](t, readyResponse)
+	require.Equal(t, model.OrganizationUsageStatusReady, ready.Status)
+	require.NotNil(t, ready.Payload)
+	assert.Equal(t, int64(420), ready.Payload.TotalQuota)
+	assert.Equal(t, 3, int(ready.Payload.RequestCount))
+	require.Len(t, ready.Payload.Channels, 2)
+	// Status reads must expose a transient failure, never re-register it.
+	require.NoError(t, model.DB.Model(&model.OrganizationUsageSnapshot{}).Where("id = ?", ready.SnapshotId).
+		Updates(map[string]any{"status": model.OrganizationUsageStatusFailed, "failure_kind": model.OrganizationUsageFailureKindTransient}).Error)
+	trackedResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(t, router, fixture, 1001,
+		http.MethodGet, fmt.Sprintf("/api/organization/current/billing/usage?%s&snapshot_id=%d", billingWindow, ready.SnapshotId), nil))
+	tracked := decodeOrganizationE2EData[organizationUsageResponse](t, trackedResponse)
+	assert.Equal(t, model.OrganizationUsageStatusFailed, tracked.Status)
+	assert.Equal(t, ready.Revision, tracked.Revision)
+	storedFailure, err := model.GetOrganizationUsageSnapshot(context.Background(), ready.SnapshotId)
+	require.NoError(t, err)
+	assert.Equal(t, model.OrganizationUsageStatusFailed, storedFailure.Status)
+	assert.Equal(t, ready.Revision, storedFailure.Revision)
+	var snapshotsBefore, snapshotsAfter int64
+	require.NoError(t, model.DB.Model(&model.OrganizationUsageSnapshot{}).Count(&snapshotsBefore).Error)
+	wrongTarget := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet,
+		fmt.Sprintf("/api/organization/current/billing/usage?%s&model_name=another-scope&snapshot_id=%d", billingWindow, ready.SnapshotId), nil)
+	assert.False(t, decodeOrganizationE2EResponse(t, wrongTarget).Success)
+	require.NoError(t, model.DB.Model(&model.OrganizationUsageSnapshot{}).Count(&snapshotsAfter).Error)
+	assert.Equal(t, snapshotsBefore, snapshotsAfter, "a status read must never register a missing identity")
+
+	// Only the explicit version-checked POST retries a deterministic failure;
+	// normal reads, including legacy refresh flags, preserve its generation.
+	require.NoError(t, model.DB.Model(&model.OrganizationUsageSnapshot{}).Where("id = ?", ready.SnapshotId).
+		Updates(map[string]any{"status": model.OrganizationUsageStatusFailed, "failure_kind": model.OrganizationUsageFailureKindData}).Error)
+	retryResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodPost, "/api/organization/current/billing/usage/recalculate?"+billingWindow,
+		map[string]any{"expected_snapshot_id": ready.SnapshotId, "expected_revision": ready.Revision},
+	))
+	retried := decodeOrganizationE2EData[organizationUsageResponse](t, retryResponse)
+	require.Equal(t, model.OrganizationUsageStatusBuilding, retried.Status)
+	buildRegisteredUsageSnapshots()
+	readyResponse = requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet, "/api/organization/current/billing/usage?"+billingWindow, nil,
+	))
+	ready = decodeOrganizationE2EData[organizationUsageResponse](t, readyResponse)
+	require.Equal(t, model.OrganizationUsageStatusReady, ready.Status)
+	assert.EqualValues(t, 420, ready.Payload.TotalQuota)
+
+	for _, state := range []string{organizationUsageStatusQueued, organizationUsageStatusPaused, "disabled"} {
+		t.Run("waiting_target_"+state, func(t *testing.T) {
+			if state == organizationUsageStatusPaused {
+				t.Setenv("ORGANIZATION_USAGE_PAUSED", "true")
+			} else if state == "disabled" {
+				t.Setenv("ORGANIZATION_USAGE_ENABLED_ORGS", "999999")
+			} else {
+				t.Setenv("ORGANIZATION_USAGE_MAX_BUILDING_PER_ORG", "1")
+				occupied, err := model.RegisterOrganizationUsageSnapshot(context.Background(), model.OrganizationUsageRequest{
+					OrganizationId: fixture.Organization.Id, RangeStart: 1782864000, EffectiveEnd: 1783511999,
+					Scope: model.OrganizationUsageScope{ModelName: "queue-occupant"},
+				})
+				require.NoError(t, err)
+				require.NotNil(t, occupied)
+				t.Cleanup(func() { require.NoError(t, model.DB.Delete(occupied).Error) })
+			}
+			var before int64
+			require.NoError(t, model.DB.Model(&model.OrganizationUsageSnapshot{}).Count(&before).Error)
+			waitingResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(t, router, fixture, 1001,
+				http.MethodGet, "/api/organization/current/billing/usage?"+billingWindow+"&model_name=tracking-pending", nil))
+			waiting := decodeOrganizationE2EData[organizationUsageResponse](t, waitingResponse)
+			expectedStatus := state
+			if state == "disabled" {
+				expectedStatus = organizationUsageStatusPaused
+			}
+			assert.Equal(t, expectedStatus, waiting.Status)
+			assert.Zero(t, waiting.SnapshotId)
+			assert.EqualValues(t, 1782864000, waiting.RangeStart)
+			assert.EqualValues(t, 1783511999, waiting.RangeEnd)
+			assert.EqualValues(t, 1783511999, waiting.RequestedEnd)
+			var after int64
+			require.NoError(t, model.DB.Model(&model.OrganizationUsageSnapshot{}).Count(&after).Error)
+			assert.Equal(t, before, after)
+		})
+	}
+
+	// Repeated queries read the same materialized generation without logs.
+	var sourceReads int
+	countSourceRead := func(tx *gorm.DB) {
+		if tx.Statement.Table == "logs" || strings.Contains(tx.Statement.SQL.String(), "FROM logs") || strings.Contains(tx.Statement.SQL.String(), "FROM `logs`") {
+			sourceReads++
+		}
+	}
+	require.NoError(t, model.LOG_DB.Callback().Query().Before("gorm:query").Register("usage_cached_query", countSourceRead))
+	require.NoError(t, model.LOG_DB.Callback().Row().Before("gorm:row").Register("usage_cached_row", countSourceRead))
+	cachedResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(t, router, fixture, 1001,
+		http.MethodGet, "/api/organization/current/billing/usage?"+billingWindow, nil))
+	require.NoError(t, model.LOG_DB.Callback().Query().Remove("usage_cached_query"))
+	require.NoError(t, model.LOG_DB.Callback().Row().Remove("usage_cached_row"))
+	assert.Zero(t, sourceReads)
+	assert.Equal(t, ready.Revision, decodeOrganizationE2EData[organizationUsageResponse](t, cachedResponse).Revision)
+	legacyResponse := performOrganizationE2ERequest(t, router, fixture, 1001,
+		http.MethodGet, "/api/organization/current/billing/usage?"+billingWindow+"&refresh=1", nil)
+	legacy := decodeOrganizationE2EResponse(t, legacyResponse)
+	assert.False(t, legacy.Success)
+	assert.Contains(t, legacy.Message, "version-checked POST")
+
+	// The CSV reads the published generation, even when raw logs are no
+	// longer available to the request's aggregation path.
+	exportURL := fmt.Sprintf("/api/organization/current/billing/usage/export?%s&snapshot_id=%d&generation=%d", billingWindow, ready.SnapshotId, ready.PayloadGeneration)
+	exportResponse := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, exportURL, nil)
+	require.Equal(t, "text/csv; charset=utf-8", exportResponse.Header().Get("Content-Type"))
+	assert.Contains(t, exportResponse.Body.String(), "消费额度(quota),420")
+	wrongGeneration := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, exportURL+"0", nil)
+	assert.False(t, decodeOrganizationE2EResponse(t, wrongGeneration).Success)
+	wrongScope := performOrganizationE2ERequest(t, router, fixture, 1002, http.MethodGet, exportURL, nil)
+	assert.False(t, decodeOrganizationE2EResponse(t, wrongScope).Success)
+	wrongView := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, exportURL+"&type=6", nil)
+	assert.False(t, decodeOrganizationE2EResponse(t, wrongView).Success)
+
+	// A member without billing-channel permission is scoped to their own
+	// usage and must not receive channel facts through the snapshot.
+	memberRegisterResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/usage?"+billingWindow, nil,
+	))
+	memberRegistered := decodeOrganizationE2EData[organizationUsageResponse](t, memberRegisterResponse)
+	require.NotEqual(t, registered.SnapshotId, memberRegistered.SnapshotId, "member scope is its own snapshot identity")
+	buildRegisteredUsageSnapshots()
+
+	memberReadyResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1002, http.MethodGet, "/api/organization/current/billing/usage?"+billingWindow, nil,
+	))
+	memberReady := decodeOrganizationE2EData[organizationUsageResponse](t, memberReadyResponse)
+	require.Equal(t, model.OrganizationUsageStatusReady, memberReady.Status)
+	require.NotNil(t, memberReady.Payload)
+	assert.Equal(t, int64(300), memberReady.Payload.TotalQuota, "member sees only their own usage")
+	assert.Equal(t, 1, memberReady.Payload.MemberCount)
+	assert.Empty(t, memberReady.Payload.Channels, "members must not receive channel usage")
+	assert.False(t, memberReady.Payload.ChannelsTruncated)
+	memberTracked := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(t, router, fixture, 1002, http.MethodGet,
+		fmt.Sprintf("/api/organization/current/billing/usage?%s&snapshot_id=%d", billingWindow, memberReady.SnapshotId), nil))
+	assert.Empty(t, decodeOrganizationE2EData[organizationUsageResponse](t, memberTracked).Payload.Channels)
+	forbiddenTrack := performOrganizationE2ERequest(t, router, fixture, 1002, http.MethodGet,
+		fmt.Sprintf("/api/organization/current/billing/usage?%s&snapshot_id=%d", billingWindow, ready.SnapshotId), nil)
+	assert.False(t, decodeOrganizationE2EResponse(t, forbiddenTrack).Success)
+	// Supplying another scope's snapshot id cannot rebuild it or leak its payload.
+	memberRecalculation := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(t, router, fixture, 1002,
+		http.MethodPost, "/api/organization/current/billing/usage/recalculate?"+billingWindow,
+		map[string]any{"expected_snapshot_id": ready.SnapshotId, "expected_revision": ready.Revision}))
+	memberOnly := decodeOrganizationE2EData[organizationUsageResponse](t, memberRecalculation)
+	assert.Equal(t, memberReady.SnapshotId, memberOnly.SnapshotId)
+	assert.Empty(t, memberOnly.Payload.Channels)
+	protected, err := model.GetOrganizationUsageSnapshot(context.Background(), ready.SnapshotId)
+	require.NoError(t, err)
+	assert.Equal(t, ready.Revision, protected.Revision)
+	assert.Equal(t, model.OrganizationUsageStatusReady, protected.Status)
+
+	// The user-side cursor page applies the same member scope; channel facts
+	// are stripped for callers without channel visibility.
+	memberLogsResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1002, http.MethodGet,
+		"/api/organization/current/billing/logs/cursor?"+billingWindow+"&page_size=1", nil,
+	))
+	memberLogs := decodeOrganizationE2EData[model.OrganizationUsageLogPage](t, memberLogsResponse)
+	require.Len(t, memberLogs.Items, 1)
+	assert.Equal(t, 70, memberLogs.Items[0].Quota, "newest in-window member log first")
+	assert.Zero(t, memberLogs.Items[0].ChannelId, "members must not receive channel facts through the cursor page")
+	require.True(t, memberLogs.HasMore)
+	require.NotEmpty(t, memberLogs.NextCursor)
+
+	secondPageResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1002, http.MethodGet,
+		"/api/organization/current/billing/logs/cursor?"+billingWindow+"&page_size=1&cursor="+memberLogs.NextCursor, nil,
+	))
+	secondPage := decodeOrganizationE2EData[model.OrganizationUsageLogPage](t, secondPageResponse)
+	require.Len(t, secondPage.Items, 1)
+	assert.Equal(t, 230, secondPage.Items[0].Quota)
+	assert.False(t, secondPage.HasMore, "logs outside the member window never enter the page")
+	assert.Empty(t, secondPage.NextCursor)
+
+	defaultEndResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(t, router, fixture, 1002, http.MethodGet,
+		"/api/organization/current/billing/logs/cursor?start_timestamp=1782864000&page_size=1&cursor="+memberLogs.NextCursor, nil))
+	defaultEndPage := decodeOrganizationE2EData[model.OrganizationUsageLogPage](t, defaultEndResponse)
+	assert.Equal(t, memberLogs.RangeEnd, defaultEndPage.RangeEnd)
+	require.Len(t, defaultEndPage.Items, 1)
+	assert.Equal(t, secondPage.Items[0].Id, defaultEndPage.Items[0].Id)
+
+	// A cursor is bound to the exact range it was issued for.
+	replayResponse := performOrganizationE2ERequest(
+		t, router, fixture, 1002, http.MethodGet,
+		"/api/organization/current/billing/logs/cursor?start_timestamp=1782864000&end_timestamp=1783425599&cursor="+memberLogs.NextCursor, nil,
+	)
+	require.Equal(t, http.StatusOK, replayResponse.Code)
+	assert.False(t, decodeOrganizationE2EResponse(t, replayResponse).Success)
+
+	// A billing viewer keeps channel facts on the same endpoint.
+	viewerLogsResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
+		t, router, fixture, 1001, http.MethodGet,
+		"/api/organization/current/billing/logs/cursor?"+billingWindow+"&page_size=1", nil,
+	))
+	viewerLogs := decodeOrganizationE2EData[model.OrganizationUsageLogPage](t, viewerLogsResponse)
+	require.Len(t, viewerLogs.Items, 1)
+	assert.NotZero(t, viewerLogs.Items[0].ChannelId, "billing viewers keep channel facts")
+}
+
+func TestOrganizationUsageCurrentBucketBoundaries(t *testing.T) {
+	beijing := time.FixedZone("Asia/Shanghai", 8*3600)
+	now := time.Date(2026, 10, 18, 14, 2, 37, 0, beijing).Unix()
+	day := time.Date(2026, 10, 18, 0, 0, 0, 0, beijing).Unix()
+	for _, test := range []struct {
+		name      string
+		end, want int64
+	}{
+		{"open", 0, model.OrganizationUsageBucketTarget(now)},
+		{"explicit today", day + 86400, model.OrganizationUsageBucketTarget(now)},
+		{"already ended exact period", day + 12*3600, day + 12*3600},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, ok := organizationUsageRequestAt(1, model.OrganizationBillingFilters{StartTimestamp: day, EndTimestamp: test.end}, now)
+			require.True(t, ok)
+			assert.Equal(t, test.want, request.EffectiveEnd)
+			assert.Equal(t, test.end, request.RequestedEnd)
+		})
+	}
+	monthEnd := time.Date(2026, 10, 1, 0, 0, 0, 0, beijing).Unix()
+	historical, ok := organizationUsageRequestAt(1, model.OrganizationBillingFilters{EndTimestamp: monthEnd}, now)
+	require.True(t, ok)
+	assert.Equal(t, time.Date(2026, 9, 1, 0, 0, 0, 0, beijing).Unix(), historical.RangeStart)
+
+	midnight := time.Date(2026, 11, 1, 0, 0, 0, 0, beijing).Unix()
+	request, ok := organizationUsageRequestAt(1, model.OrganizationBillingFilters{}, midnight)
+	require.True(t, ok)
+	assert.Equal(t, midnight, request.RangeStart)
+	assert.Equal(t, midnight, request.EffectiveEnd)
 }

@@ -17,6 +17,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if err := os.Setenv("ORGANIZATION_INVOICE_BATCH_DELAY_MS", "0"); err != nil {
+		panic(err)
+	}
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		panic("failed to open test db: " + err.Error())
@@ -48,6 +51,11 @@ func TestMain(m *testing.M) {
 		&OrganizationInvoicePeriodSummary{},
 		&OrganizationInvoiceBaseline{},
 		&OrganizationInvoiceAccountBaseline{},
+		&OrganizationInvoiceUsageShard{},
+		&OrganizationInvoiceDayCache{},
+		&OrganizationInvoiceSourceCursor{},
+		&OrganizationInvoiceLogRetention{},
+		&OrganizationInvoiceModelSet{},
 		&UserQuotaAdjustment{},
 		&UserQuotaAdjustmentLegacyFact{},
 		&Checkin{},
@@ -88,6 +96,9 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM midjourneys")
 		DB.Exec("DELETE FROM organization_billing_settlement_rules")
 		DB.Exec("DELETE FROM organization_invoice_period_summaries")
+		DB.Exec("DELETE FROM organization_invoice_day_caches")
+		DB.Exec("DELETE FROM organization_invoice_source_cursors")
+		DB.Exec("DELETE FROM organization_invoice_log_retentions")
 		DB.Exec("DELETE FROM organization_invoice_account_baselines")
 		DB.Exec("DELETE FROM organization_invoice_baselines")
 		DB.Exec("DELETE FROM user_quota_adjustments")

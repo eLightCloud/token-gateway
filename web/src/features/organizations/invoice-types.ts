@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { ApiResponse } from './types'
+
 export type OrganizationInvoiceParams = {
   start_date: string
   end_date: string
@@ -37,6 +39,7 @@ export type OrganizationInvoiceAccount = {
 }
 
 export type OrganizationInvoiceAccountFinancials = {
+  wallet_refund_amount_usd?: string
   opening_balance_amount_usd: string
   payment_top_up_amount_usd: string
   admin_increase_amount_usd: string
@@ -49,7 +52,12 @@ export type OrganizationInvoiceAccountFinancials = {
   closing_balance_amount_usd: string
   current_balance_amount_usd: string
   reconciliation_difference_amount_usd?: string
-  reconciliation_status: 'generating' | 'derived' | 'reconciled' | 'incomplete'
+  reconciliation_status:
+    | 'generating'
+    | 'derived'
+    | 'reconciled'
+    | 'incomplete'
+    | 'unavailable'
   calculation_version: number
   net_delta_quota: number
 }
@@ -93,7 +101,51 @@ export type OrganizationInvoiceModelRow = {
   share_percent: string
 }
 
+// Lightweight progress contract while the requested snapshot is generating:
+// names the month actually being built (possibly an earlier dependency
+// month), the persisted build stage, and a coarse percentage.
+export type OrganizationInvoiceBuildInfo = {
+  status: string
+  stage?: string
+  period?: OrganizationInvoicePeriod
+  progress?: number
+  error?: string
+}
+
+export type OrganizationInvoiceExpenseCoverage = {
+  status: 'complete' | 'incomplete'
+  total_rows: number
+  total_quota: number
+  ordinary_rows: number
+  ordinary_quota: number
+  task_rows: number
+  task_quota: number
+  unknown_rows: number
+  unknown_quota: number
+  pending_source_rows?: number
+  pending_tasks: number
+  wallet_issues?: {
+    user_id: number
+    task_id?: string
+    reason: string
+    origin_at?: number
+  }[]
+  missing_task_logs: number
+  issues?: {
+    user_id: number
+    task_id?: string
+    reason: string
+    reserved_quota: number
+  }[]
+}
+
 export type OrganizationInvoice = {
+  recalculation_token?: string
+  previous_publication?: boolean
+  coverage_period?: OrganizationInvoicePeriod
+  expense_coverage?: OrganizationInvoiceExpenseCoverage
+  evidence_as_of?: number
+  wallet_warning?: string
   generation_status: 'generating' | 'ready'
   source_as_of: number
   calculation_version: number
@@ -106,6 +158,7 @@ export type OrganizationInvoice = {
   gross_total_quota: number
   gross_total_amount_usd: string
   settled_total_amount_usd: string
+  build?: OrganizationInvoiceBuildInfo
 }
 
 export type OrganizationSettlementRuleOption = {
@@ -120,6 +173,24 @@ export type OrganizationSettlementRuleOption = {
   version: number
   inherited: boolean
 }
+
+export type OrganizationSettlementDiscovery = {
+  status: 'preparing' | 'updating' | 'ready' | 'failed'
+  evidence_as_of?: number
+  failure_code?: string
+}
+
+export type OrganizationSettlementRulesResponse = ApiResponse<
+  OrganizationSettlementRuleOption[]
+> & {
+  discovery?: OrganizationSettlementDiscovery
+}
+
+export type OrganizationSettlementRuleUpdateResponse =
+  ApiResponse<OrganizationSettlementRuleUpdateResult> & {
+    code?: string
+    retryable?: boolean
+  }
 
 export type OrganizationSettlementRuleUpdatePayload = {
   category_key: string

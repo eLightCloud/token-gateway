@@ -361,6 +361,9 @@ func ValidateModelPricing(name string, values PricingValues) error {
 // Writes pass the locked database snapshot here, so allowing an unchanged stale
 // override cannot bypass validation through an out-of-date process-local cache.
 func validateModelPricing(name string, values, previous PricingValues) error {
+	if err := validateSeedanceEnhancePricing(name, values); err != nil {
+		return err
+	}
 	if strings.TrimSpace(name) == "" {
 		return errors.New("model name is required")
 	}

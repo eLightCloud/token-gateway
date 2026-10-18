@@ -60,6 +60,18 @@ func CombineOrganizationInvoiceSummaries(
 		if invoice == nil || invoice.GenerationStatus != OrganizationInvoiceGenerationStatusReady {
 			return nil, errors.New("organization invoice monthly summary is not ready")
 		}
+		if err := mergeOrganizationInvoiceExpenseCoverage(&result.ExpenseCoverage, invoice.ExpenseCoverage); err != nil {
+			return nil, err
+		}
+		if invoice.EvidenceAsOf > result.EvidenceAsOf {
+			result.EvidenceAsOf = invoice.EvidenceAsOf
+		}
+		if invoice.WalletWarning != "" {
+			result.WalletWarning = invoice.WalletWarning
+		}
+		if invoice.CoveragePeriod.EndTimestamp > result.CoveragePeriod.EndTimestamp {
+			result.CoveragePeriod.EndTimestamp = invoice.CoveragePeriod.EndTimestamp
+		}
 		if invoice.SourceAsOf > result.SourceAsOf {
 			result.SourceAsOf = invoice.SourceAsOf
 		}
@@ -200,6 +212,14 @@ func CombineOrganizationInvoiceSummaries(
 	})
 
 	result.ModelRows = buildOrganizationInvoiceModelRows(models, result.Accounts, result.GrossTotalQuota)
+	if result.CoveragePeriod.EndTimestamp == 0 {
+		result.CoveragePeriod = period
+	} else {
+		result.CoveragePeriod.StartTimestamp = period.StartTimestamp
+		result.CoveragePeriod.StartDate = period.StartDate
+		result.CoveragePeriod.Timezone = period.Timezone
+		result.CoveragePeriod.EndDate = time.Unix(result.CoveragePeriod.EndTimestamp, 0).In(organizationInvoiceLocation).Format("2006-01-02")
+	}
 	result.GrossTotalAmountUSD = organizationInvoiceAmountString(result.GrossTotalQuota)
 	result.SettledTotalAmountUSD = settledTotal.StringFixed(10)
 	return result, nil
@@ -209,8 +229,16 @@ func addOrganizationInvoiceFinancials(
 	target *OrganizationInvoiceAccountFinancials,
 	value OrganizationInvoiceAccountFinancials,
 ) error {
+	if value.ReconciliationStatus == "unavailable" || target.ReconciliationStatus == "unavailable" {
+		*target = OrganizationInvoiceAccountFinancials{ReconciliationStatus: "unavailable", CalculationVersion: OrganizationInvoiceSummaryCalculationVersion}
+		return nil
+	}
 	if target.CalculationVersion == 0 {
 		target.OpeningBalanceAmountUSD = value.OpeningBalanceAmountUSD
+		target.SourceFactsComplete = value.SourceFactsComplete
+	}
+	if target.CalculationVersion != 0 {
+		target.SourceFactsComplete = target.SourceFactsComplete && value.SourceFactsComplete
 	}
 	fields := []struct {
 		target *string
@@ -224,6 +252,12 @@ func addOrganizationInvoiceFinancials(
 		{&target.AIWalletDeductionAmountUSD, value.AIWalletDeductionAmountUSD},
 		{&target.OtherDeductionAmountUSD, value.OtherDeductionAmountUSD},
 		{&target.TotalDeductionAmountUSD, value.TotalDeductionAmountUSD},
+	}
+	if value.WalletRefundAmountUSD != "" {
+		fields = append(fields, struct {
+			target *string
+			value  string
+		}{&target.WalletRefundAmountUSD, value.WalletRefundAmountUSD})
 	}
 	for _, field := range fields {
 		left := decimal.Zero

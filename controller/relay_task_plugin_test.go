@@ -58,6 +58,20 @@ func (b *taskSubmissionTestBilling) Reserve(int) error {
 	return b.reserveErr
 }
 
+// Lifecycle fixtures mock the money boundary so they can force settlement
+// failure and client disconnects. Real BillingSession/outbox behavior is
+// exercised by TestImmediateTaskSettlementDatabase and the service matrix.
+func executeTaskSubmissionTestWith(c *gin.Context, info *relaycommon.RelayInfo, submit taskSubmitAttempt) (*taskSubmissionOutcome, *dto.TaskError) {
+	return executeTaskSubmissionWith(c, info, submit, func(c *gin.Context, info *relaycommon.RelayInfo, task *model.Task, quota int, confirmed bool) error {
+		switch info.Billing.(type) {
+		case *taskSubmissionTestBilling, *nativeRouteBilling:
+			return service.SettleBilling(c, info, quota)
+		default:
+			return service.SettleOrganizationInvoiceTaskSubmission(c, info, task, quota, confirmed)
+		}
+	})
+}
+
 func TestPresentTaskSubmissionUsesNativePresenterAfterPersistence(t *testing.T) {
 	plugin, err := pluginruntime.CompilePlugin(`
 export const meta = {apiVersion:1,key:"presenter-test",name:"Presenter",version:"1.0.0",author:{name:"Test"},models:["model"],fetchMode:"per_task",routes:[{method:"POST",path:"/vendor/jobs",type:"submit",decode:"decode",render:"created"}]};
@@ -139,7 +153,7 @@ func TestExecuteTaskSubmissionRefundsWhenInsertFails(t *testing.T) {
 	c := taskSubmissionTestContext()
 	info := taskSubmissionRelayInfo(billing)
 
-	outcome, taskErr := executeTaskSubmissionWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+	outcome, taskErr := executeTaskSubmissionTestWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 		return &relay.TaskSubmitResult{
 			UpstreamTaskID: "upstream_private",
 			Platform:       constant.TaskPlatform("plugin"),
@@ -161,7 +175,7 @@ func TestExecuteTaskSubmissionSettlementFailureStaysDurableAndWritesNothing(t *t
 	c := taskSubmissionTestContext()
 	info := taskSubmissionRelayInfo(billing)
 
-	outcome, taskErr := executeTaskSubmissionWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+	outcome, taskErr := executeTaskSubmissionTestWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 		return &relay.TaskSubmitResult{
 			UpstreamTaskID: "upstream_private",
 			Platform:       constant.TaskPlatform("plugin"),
@@ -204,7 +218,7 @@ func TestExecuteTaskSubmissionPersistsPinnedPluginProvenance(t *testing.T) {
 	billing := &taskSubmissionTestBilling{events: &events}
 	info := taskSubmissionRelayInfo(billing)
 
-	outcome, taskErr := executeTaskSubmissionWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+	outcome, taskErr := executeTaskSubmissionTestWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 		return &relay.TaskSubmitResult{
 			UpstreamTaskID: "upstream-private",
 			Platform:       constant.TaskPlatform("document-parser"),
@@ -267,7 +281,7 @@ func TestExecuteTaskSubmissionHonorsRouteRetainResult(t *testing.T) {
 			info := taskSubmissionRelayInfo(&taskSubmissionTestBilling{events: &events})
 			upstream := []byte(`{"data":[{"url":"https://cdn.example/a.png"}]}`)
 
-			outcome, taskErr := executeTaskSubmissionWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+			outcome, taskErr := executeTaskSubmissionTestWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 				return &relay.TaskSubmitResult{
 					UpstreamTaskID: "task_public",
 					Platform:       constant.TaskPlatform("sync-images"),
@@ -311,7 +325,7 @@ func TestExecuteTaskSubmissionRefundsCancellationBeforeDurableBarrier(t *testing
 	c.Request = c.Request.WithContext(requestContext)
 	info := taskSubmissionRelayInfo(billing)
 
-	outcome, taskErr := executeTaskSubmissionWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+	outcome, taskErr := executeTaskSubmissionTestWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 		cancel()
 		return &relay.TaskSubmitResult{
 			UpstreamTaskID: "upstream_private",
@@ -338,7 +352,7 @@ func TestExecuteTaskSubmissionDisconnectBeforeUpstreamAcceptanceSkipsSubmitAndRe
 	info := taskSubmissionRelayInfo(billing)
 	submitted := false
 
-	outcome, taskErr := executeTaskSubmissionWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+	outcome, taskErr := executeTaskSubmissionTestWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 		submitted = true
 		return nil, nil
 	})
@@ -367,7 +381,7 @@ func TestExecuteTaskSubmissionCallerCancellationDuringSubmitRefundsBeforeDurable
 
 	go func() {
 		defer close(done)
-		outcome, taskErr = executeTaskSubmissionWith(c, info, func(c *gin.Context, _ *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+		outcome, taskErr = executeTaskSubmissionTestWith(c, info, func(c *gin.Context, _ *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 			close(submitStarted)
 			<-c.Request.Context().Done()
 			return nil, service.TaskErrorWrapperLocal(c.Request.Context().Err(), "do_request_failed", http.StatusInternalServerError)
@@ -408,7 +422,7 @@ func TestExecuteTaskSubmissionDisconnectAfterDurableInsertDoesNotRefund(t *testi
 	}
 	info := taskSubmissionRelayInfo(billing)
 
-	outcome, taskErr := executeTaskSubmissionWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+	outcome, taskErr := executeTaskSubmissionTestWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 		return &relay.TaskSubmitResult{
 			UpstreamTaskID: "upstream_private",
 			Platform:       constant.TaskPlatform("plugin"),
@@ -671,7 +685,7 @@ func TestExecuteTaskSubmissionRefundsWhenFinalReserveFails(t *testing.T) {
 	billing := &taskSubmissionTestBilling{events: &events, reserveErr: errors.New("insufficient funds")}
 	c := taskSubmissionTestContext()
 	info := taskSubmissionRelayInfo(billing)
-	outcome, taskErr := executeTaskSubmissionWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+	outcome, taskErr := executeTaskSubmissionTestWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 		return &relay.TaskSubmitResult{Platform: "plugin", Quota: 600, Immediate: &relaycommon.TaskInfo{Status: "SUCCESS"}}, nil
 	})
 	require.Nil(t, outcome)

@@ -1,0 +1,7 @@
+{
+  "translation.DoubaoVideo": "DoubaoVideo",
+  "translation.Pass request body directly to upstream": "Truyền phần thân yêu cầu trực tiếp lên upstream",
+  "translation.Single .js file, up to 1 MiB. Its source is shown below before upload.": "Một tệp .js duy nhất, tối đa 1 MiB. Mã nguồn được hiển thị bên dưới trước khi tải lên.",
+  "translation.Plugin source exceeds the 1 MiB limit.": "Mã nguồn plugin vượt giới hạn 1 MiB.",
+  "translation.Selecting a plugin fills its declared models.": "Chọn plugin sẽ điền các model đã khai báo."
+}

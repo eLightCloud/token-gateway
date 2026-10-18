@@ -318,6 +318,9 @@ func is64BitIntegerType(dbType common.DatabaseType, dataType string) bool {
 }
 
 func migrateDB() error {
+	if err := guardOrganizationLogMigration(DB, common.MainDatabaseType()); err != nil {
+		return err
+	}
 	if err := migrateQuotaBalanceColumns(); err != nil {
 		return err
 	}
@@ -347,8 +350,21 @@ func migrateDB() error {
 		&OrganizationInvoicePeriodSummary{},
 		&OrganizationInvoiceBaseline{},
 		&OrganizationInvoiceAccountBaseline{},
+		&OrganizationInvoiceUsageShard{},
+		&OrganizationInvoiceDayCache{},
+		&OrganizationInvoiceSourceCursor{},
+		&OrganizationInvoiceLogRetention{},
+		&OrganizationUsageSlice{},
+		&OrganizationUsageCell{},
+		&OrganizationUsageSnapshot{},
+		&OrganizationUsageSourceRevision{},
+		&OrganizationUsageDelivery{},
+		&HeavyStatsPermit{},
 		&OrganizationDiscountSnapshot{},
 		&TaskSettlementJournal{},
+		&SeedanceEnhanceConfig{},
+		&SeedanceEnhanceExecution{},
+		&SeedanceEnhanceAttempt{},
 		&UserQuotaAdjustment{},
 		&UserQuotaAdjustmentLegacyFact{},
 		&UserSession{},
@@ -386,8 +402,13 @@ func migrateDB() error {
 		&VantageAccountBinding{},
 		&VantageCredentialBinding{},
 		&VantageCredentialRotation{},
+		&VantageTokenQuotaConfig{},
+		&VantageTokenQuotaOperation{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := MigrateOrganizationInvoiceShardIndex(); err != nil {
 		return err
 	}
 	if err := migrateLogBillingOperationIndex(DB); err != nil {
@@ -415,6 +436,9 @@ func migrateDB() error {
 }
 
 func migrateLOGDB() error {
+	if err := guardOrganizationLogMigration(LOG_DB, common.LogDatabaseType()); err != nil {
+		return err
+	}
 	if err := MigrateAuditLogs(); err != nil {
 		return err
 	}
@@ -433,6 +457,9 @@ func migrateClickHouseLogDB() error {
 		return err
 	}
 	if err := LOG_DB.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS billing_operation_id Nullable(String) DEFAULT NULL").Error; err != nil {
+		return err
+	}
+	if err := migrateClickHouseLogBillingSource(); err != nil {
 		return err
 	}
 	return syncClickHouseLogTTL(ttlDays)

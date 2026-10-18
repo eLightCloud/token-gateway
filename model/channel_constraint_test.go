@@ -177,6 +177,33 @@ func TestFilterCandidateIDs(t *testing.T) {
 }
 
 func TestChannelSatisfiesFilters(t *testing.T) {
+	channelSyncLock.Lock()
+	previousChannels := channelsIDM
+	channelsIDM = make(map[int]*Channel)
+	channelSyncLock.Unlock()
+	t.Cleanup(func() {
+		channelSyncLock.Lock()
+		channelsIDM = previousChannels
+		channelSyncLock.Unlock()
+	})
+	for _, channelType := range []int{constant.ChannelTypeDoubaoVideo, constant.ChannelTypeVolcEngine} {
+		channel := &Channel{Id: 900099, Type: channelType}
+		ok, kind := ChannelSatisfiesFilters(channel, "doubao-seedance-2-0-260128-enhance", nil)
+		assert.False(t, ok)
+		assert.Equal(t, dto.FilterVideoEnhance, kind)
+		channelSyncLock.Lock()
+		previous, existed := channelsIDM[channel.Id]
+		channelsIDM[channel.Id] = channel
+		kept, emptiedBy := filterCandidateIDs([]int{channel.Id}, "doubao-seedance-2-0-260128-enhance", identityFilters("doubao", []int{channelType}))
+		if existed {
+			channelsIDM[channel.Id] = previous
+		} else {
+			delete(channelsIDM, channel.Id)
+		}
+		channelSyncLock.Unlock()
+		assert.Empty(t, kept)
+		assert.Equal(t, dto.FilterVideoEnhance, emptiedBy)
+	}
 	alphaSetting := `{"task_plugin_key":"alpha"}`
 	alpha := &Channel{Id: 1, Type: constant.ChannelTypeTaskPlugin, Setting: &alphaSetting}
 	ordinary := &Channel{Id: 2, Type: constant.ChannelTypeOpenAI}

@@ -21,9 +21,9 @@ import { api } from '@/lib/api'
 import type {
   OrganizationInvoice,
   OrganizationInvoiceParams,
-  OrganizationSettlementRuleOption,
   OrganizationSettlementRuleUpdatePayload,
-  OrganizationSettlementRuleUpdateResult,
+  OrganizationSettlementRulesResponse,
+  OrganizationSettlementRuleUpdateResponse,
 } from './invoice-types'
 import type { ApiResponse } from './types'
 
@@ -73,24 +73,28 @@ export const organizationInvoiceKeys = {
 export async function getOrganizationInvoice(
   params: OrganizationInvoiceParams,
   organizationId?: number,
-  refresh = false
+  refresh = false,
+  signal?: AbortSignal
 ): Promise<ApiResponse<OrganizationInvoice>> {
   const query = organizationInvoiceQuery(params)
   const response = await api.get(
-    `${organizationInvoiceBasePath(organizationId)}?${query}${refresh ? '&refresh=1' : ''}`
+    `${organizationInvoiceBasePath(organizationId)}?${query}${refresh ? '&refresh=1' : ''}`,
+    { signal, disableDuplicate: Boolean(signal) }
   )
   return response.data
 }
 
 export async function getOrganizationSettlementRules(
   effectiveMonth: string,
-  organizationId?: number
-): Promise<ApiResponse<OrganizationSettlementRuleOption[]>> {
+  organizationId?: number,
+  signal?: AbortSignal
+): Promise<OrganizationSettlementRulesResponse> {
   const query = new URLSearchParams({
     effective_month: effectiveMonth,
   }).toString()
   const response = await api.get(
-    `${organizationInvoiceBasePath(organizationId)}/settlement-rules?${query}`
+    `${organizationInvoiceBasePath(organizationId)}/settlement-rules?${query}`,
+    { signal }
   )
   return response.data
 }
@@ -98,7 +102,7 @@ export async function getOrganizationSettlementRules(
 export async function updateOrganizationSettlementRule(
   payload: OrganizationSettlementRuleUpdatePayload,
   organizationId?: number
-): Promise<ApiResponse<OrganizationSettlementRuleUpdateResult>> {
+): Promise<OrganizationSettlementRuleUpdateResponse> {
   const response = await api.put(
     `${organizationInvoiceBasePath(organizationId)}/settlement-rules`,
     payload

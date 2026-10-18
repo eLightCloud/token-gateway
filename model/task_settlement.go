@@ -25,6 +25,9 @@ var ErrTaskSettlementJournalConflict = errors.New("task settlement journal confl
 // optional task quota and Applied in one main-database transaction. Recovery
 // calls this same operation and never repeats pricing logic or partial steps.
 type TaskSettlementJournal struct {
+	InvoiceTaskEntity               string `json:"invoice_task_entity,omitempty" gorm:"type:varchar(32)"`
+	InvoiceTaskId                   int64  `json:"invoice_task_id,omitempty"`
+	InvoiceExpenseQuota             *int64 `json:"invoice_expense_quota,omitempty"`
 	Id                              int64  `json:"id"`
 	RequestId                       string `json:"request_id" gorm:"type:varchar(128);uniqueIndex"`
 	Operation                       string `json:"operation" gorm:"type:varchar(32)"`
@@ -92,7 +95,8 @@ func ensureTaskSettlementJournalTx(tx *gorm.DB, journal *TaskSettlementJournal) 
 	if err := tx.Where("request_id = ?", journal.RequestId).First(&stored).Error; err != nil {
 		return nil, err
 	}
-	if stored.Operation != journal.Operation ||
+	if stored.InvoiceTaskEntity != journal.InvoiceTaskEntity || stored.InvoiceTaskId != journal.InvoiceTaskId || !sameOrganizationInvoiceExpense(stored.InvoiceExpenseQuota, journal.InvoiceExpenseQuota) ||
+		stored.Operation != journal.Operation ||
 		stored.EntityType != journal.EntityType ||
 		stored.EntityId != journal.EntityId ||
 		stored.EntityExpectedQuota != journal.EntityExpectedQuota ||
@@ -111,6 +115,24 @@ func ensureTaskSettlementJournalTx(tx *gorm.DB, journal *TaskSettlementJournal) 
 		stored.ApplyUsage != journal.ApplyUsage ||
 		stored.ApplyToken != journal.ApplyToken {
 		return nil, fmt.Errorf("%w: %s", ErrTaskSettlementJournalConflict, journal.RequestId)
+	}
+	if err := recordOrganizationInvoiceTaskOriginTx(tx, &stored); err != nil {
+		return nil, err
+	}
+	if !stored.Applied {
+		alreadyApplied, err := taskInvoiceExpenseReceiptTx(tx, &stored)
+		if err != nil {
+			return nil, err
+		}
+		if alreadyApplied {
+			if err := tx.Model(&TaskSettlementJournal{}).Where("id = ?", stored.Id).Update("applied", true).Error; err != nil {
+				return nil, err
+			}
+			stored.Applied = true
+		}
+	}
+	if err := confirmOrganizationInvoiceJournalExpenseTx(tx, &stored); err != nil {
+		return nil, err
 	}
 	return &stored, nil
 }
@@ -158,10 +180,15 @@ func EnsureTaskSettlementJournalWithMidjourney(journal *TaskSettlementJournal, t
 
 // ApplyTaskSettlementJournal atomically applies the journal. appliedNow is
 // true only for the transaction which changed balances; retries are no-ops.
-func ApplyTaskSettlementJournal(requestId string) (*TaskSettlementJournal, bool, error) {
+// A supplied transaction owns the final commit and cache invalidation.
+func ApplyTaskSettlementJournal(requestId string, transaction ...*gorm.DB) (*TaskSettlementJournal, bool, error) {
+	database := DB
+	if len(transaction) > 0 {
+		database = transaction[0]
+	}
 	var stored TaskSettlementJournal
 	appliedNow := false
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		if err := lockForUpdate(tx).
 			Where("request_id = ?", requestId).
 			First(&stored).Error; err != nil {
@@ -176,11 +203,17 @@ func ApplyTaskSettlementJournal(requestId string) (*TaskSettlementJournal, bool,
 			return err
 		}
 		if !alreadyAtTarget {
-			if err := applyTaskSettlementFundingTx(tx, &stored); err != nil {
-				return err
-			}
-			if err := applyTaskSettlementTokenTx(tx, &stored); err != nil {
-				return err
+			if stored.Operation == TaskSettlementOperationReserve {
+				if err := reserveTaskSettlementBalancesTx(tx, &stored); err != nil {
+					return err
+				}
+			} else {
+				if err := applyTaskSettlementFundingTx(tx, &stored); err != nil {
+					return err
+				}
+				if err := applyTaskSettlementTokenTx(tx, &stored); err != nil {
+					return err
+				}
 			}
 			if err := updateTaskSettlementEntityTx(tx, &stored); err != nil {
 				return err
@@ -204,10 +237,15 @@ func ApplyTaskSettlementJournal(requestId string) (*TaskSettlementJournal, bool,
 			return fmt.Errorf("%w: journal apply race for %s", ErrTaskSettlementJournalConflict, requestId)
 		}
 		stored.Applied = true
-		return nil
+		return markTaskInvoiceExpenseAppliedTx(tx, &stored)
 	})
 	if err != nil {
 		return nil, false, err
+	}
+
+	// The caller's transaction owns commit and cache invalidation.
+	if len(transaction) > 0 {
+		return &stored, appliedNow, nil
 	}
 
 	// Main DB is authoritative. Invalidate Redis after commit so the next read

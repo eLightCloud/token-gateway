@@ -75,6 +75,8 @@ func VantageInvalidRequest(message string) error {
 // vantageErrorFromModel 把集成内部语义错误映射为稳定错误码。
 func vantageErrorFromModel(err error) error {
 	switch {
+	case errors.Is(err, model.ErrVantageEnterpriseRotationUnsupported):
+		return vantageErrorf(409, "enterprise_rotation_unsupported", "enterprise credential rotation is not supported")
 	case errors.Is(err, model.ErrVantageAccountNotFound),
 		errors.Is(err, model.ErrVantageCredentialNotFound),
 		errors.Is(err, model.ErrVantageRotationNotFound):

@@ -364,7 +364,7 @@ func updateBatchTasks(ctx context.Context, adaptor BatchTaskPollingAdaptor, chan
 			task.PrivateData.ResultURL = responseItem.TaskInfo.Url
 		}
 
-		StageTaskUsageReconciliation(task, &responseItem.TaskInfo)
+		StageTaskUsageReconciliation(task, &responseItem.TaskInfo, adaptor)
 		isDone := task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure
 		terminalTransition := isDone && snap.Status != task.Status
 		won, updateErr := task.UpdateWithStatus(snap.Status)
@@ -507,7 +507,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return recordPollFailure(ctx, adaptor, task, snap.Status, pollClassTransport, resp.StatusCode, err.Error())
 	}
 
-	logger.LogDebug(ctx, "updateVideoSingleTask response: %s", responseBody)
+	logger.LogDebug(ctx, "updateVideoSingleTask response: %s", unrecognizedPollDetail("", responseBody))
 
 	switch classifyPollHTTP(resp.StatusCode) {
 	case pollClassNotFound:
@@ -535,7 +535,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return recordPollFailure(ctx, adaptor, task, snap.Status, pollClassHookError, resp.StatusCode, err.Error())
 	}
 
-	logger.LogDebug(ctx, "updateVideoSingleTask taskResult: %+v", taskResult)
+	if err = persistSeedanceGeneratedVideo(ctx, task, taskResult, responseBody, adaptor, liveSeedanceBackend{}); err != nil {
+		return recordPollFailure(ctx, adaptor, task, snap.Status, pollClassTransport, resp.StatusCode, "video_storage_unavailable")
+	}
+	logger.LogDebug(ctx, "updateVideoSingleTask status: %s", taskResult.Status)
 
 	parsedStatus := model.TaskStatus(taskResult.Status)
 	if parsedStatus == model.TaskStatusUnknown || parsedStatus == "" || !knownPollStatus(parsedStatus) {
@@ -584,14 +587,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		}
 		shouldFinalizeBilling = true
 	case model.TaskStatusFailure:
-		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
 		task.Status = model.TaskStatusFailure
 		task.Progress = taskcommon.ProgressComplete
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
 		task.FailReason = taskResult.Reason
-		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", task.TaskID, task.FailReason))
+		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", task.TaskID, redactTaskPollURLs(task.FailReason)))
 		taskResult.Progress = taskcommon.ProgressComplete
 		shouldFinalizeBilling = true
 	}
@@ -599,7 +601,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		task.Progress = taskResult.Progress
 	}
 
-	StageTaskUsageReconciliation(task, taskResult)
+	StageTaskUsageReconciliation(task, taskResult, adaptor)
 	isDone := task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure
 	if isDone && snap.Status != task.Status {
 		won, err := task.UpdateWithStatus(snap.Status)
@@ -634,7 +636,7 @@ func finalizeTerminalTask(ctx context.Context, adaptor TaskPollingAdaptor, task 
 		return
 	}
 	billingSettled := settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
-	if task.Status == model.TaskStatusFailure && !billingSettled && task.Quota != 0 {
+	if task.Status == model.TaskStatusFailure && !billingSettled {
 		RefundTaskQuota(ctx, task, task.FailReason)
 	}
 }
@@ -704,6 +706,11 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	}
 	// 按次计费的成功任务保持预扣；失败任务由调用方全额退款。
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
+		if task.Status == model.TaskStatusSuccess {
+			if err := model.ConfirmTaskInvoiceExpense(model.TaskSettlementEntityTask, task.ID, task.Quota, fmt.Sprintf("task-fixed:%d", task.ID)); err != nil {
+				logger.LogWarn(ctx, err.Error())
+			}
+		}
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))
 		return false
 	}
@@ -773,17 +780,18 @@ func pollFailureReason(class string, statusCode int, detail string) string {
 // upstream body so the WARN line is enough to diagnose a parser gap.
 func unrecognizedPollDetail(reason string, body []byte) string {
 	const maxBodyChars = 512
-	redacted := string(redactVideoResponseBody(body))
+	redacted := redactTaskPollURLs(string(redactVideoResponseBody(body)))
 	if len(redacted) > maxBodyChars {
 		redacted = redacted[:maxBodyChars] + "…"
 	}
 	if strings.TrimSpace(reason) == "" {
 		return "body=" + redacted
 	}
-	return reason + "; body=" + redacted
+	return redactTaskPollURLs(reason) + "; body=" + redacted
 }
 
 func recordPollFailure(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, fromStatus model.TaskStatus, class string, statusCode int, detail string) error {
+	detail = redactTaskPollURLs(detail)
 	task.PrivateData.PollFailures++
 	if class == pollClassUnrecognized || class == pollClassHookError {
 		// The redacted body is intentionally not persisted to Task.Data on these

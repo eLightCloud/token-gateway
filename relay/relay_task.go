@@ -29,13 +29,14 @@ import (
 )
 
 type TaskSubmitResult struct {
-	UpstreamTaskID string
-	TaskData       []byte
-	ClientResponse any
-	Platform       constant.TaskPlatform
-	Quota          int
-	Immediate      *relaycommon.TaskInfo
-	PluginState    []byte
+	UpstreamTaskID   string
+	TaskData         []byte
+	ClientResponse   any
+	Platform         constant.TaskPlatform
+	Quota            int
+	ExpenseConfirmed bool
+	Immediate        *relaycommon.TaskInfo
+	PluginState      []byte
 	//PerCallPrice   types.PriceData
 }
 
@@ -373,6 +374,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
+	expenseConfirmed := parsed.Immediate != nil && (parsed.Immediate.Status == model.TaskStatusFailure || (parsed.Immediate.Status == model.TaskStatusSuccess && info.TieredBillingSnapshot == nil))
 	if parsed.Immediate != nil && parsed.Immediate.Status == model.TaskStatusFailure {
 		finalQuota = 0
 	} else if snap := info.TieredBillingSnapshot; snap != nil {
@@ -381,6 +383,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			if err != nil {
 				logger.LogWarn(c, fmt.Sprintf("task immediate usage settlement failed; retaining reserved quota: %v", err))
 			} else {
+				expenseConfirmed = true
 				var discountClamp *common.QuotaClamp
 				finalQuota, discountClamp = common.QuotaFromDecimalChecked(decimal.NewFromInt(int64(settlement.ActualQuotaAfterGroup)).Mul(decimal.NewFromFloat(info.PriceData.DiscountSnapshot.EffectiveRatio())))
 				noteTaskQuotaClamp(info, discountClamp)
@@ -404,13 +407,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	info.PriceData.Quota = finalQuota
 
 	return &TaskSubmitResult{
-		UpstreamTaskID: parsed.UpstreamTaskID,
-		TaskData:       parsed.TaskData,
-		ClientResponse: parsed.ClientResponse,
-		Platform:       platform,
-		Quota:          finalQuota,
-		Immediate:      parsed.Immediate,
-		PluginState:    parsed.PluginState,
+		UpstreamTaskID:   parsed.UpstreamTaskID,
+		TaskData:         parsed.TaskData,
+		ClientResponse:   parsed.ClientResponse,
+		Platform:         platform,
+		Quota:            finalQuota,
+		ExpenseConfirmed: expenseConfirmed,
+		Immediate:        parsed.Immediate,
+		PluginState:      parsed.PluginState,
 	}, nil
 }
 

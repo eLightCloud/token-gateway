@@ -1,6 +1,8 @@
 package model
 
 type Midjourney struct {
+	TaskInvoiceExpense
+
 	Id          int    `json:"id"`
 	Code        int    `json:"code"`
 	UserId      int    `json:"user_id" gorm:"index"`
@@ -172,7 +174,7 @@ func (midjourney *Midjourney) Insert() error {
 
 func (midjourney *Midjourney) Update() error {
 	var err error
-	err = DB.Save(midjourney).Error
+	err = DB.Omit("invoice_origin_at", "invoice_expense_quota", "invoice_expense_confirmed_at", "invoice_expense_source", "invoice_expense_applied").Save(midjourney).Error
 	return err
 }
 
@@ -199,7 +201,7 @@ func (midjourney *Midjourney) GetBillingChannelId() int {
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
 // Uses Model().Select("*").Updates() to avoid GORM Save()'s INSERT fallback.
 func (midjourney *Midjourney) UpdateWithStatus(fromStatus string) (bool, error) {
-	result := DB.Model(midjourney).Where("status = ?", fromStatus).Select("*").Updates(midjourney)
+	result := DB.Model(midjourney).Where("status = ?", fromStatus).Select("*").Omit("invoice_origin_at", "invoice_expense_quota", "invoice_expense_confirmed_at", "invoice_expense_source", "invoice_expense_applied").Updates(midjourney)
 	if result.Error != nil {
 		return false, result.Error
 	}

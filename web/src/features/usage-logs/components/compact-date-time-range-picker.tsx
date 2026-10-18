@@ -17,10 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { CalendarDays } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { FieldError } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import {
   Popover,
@@ -29,6 +30,8 @@ import {
 } from '@/components/ui/popover'
 import dayjs from '@/lib/dayjs'
 import { cn } from '@/lib/utils'
+
+import { getLogDateTimeRangeError } from '../lib/date-time-range'
 
 interface CompactDateTimeRangePickerProps {
   start?: Date
@@ -57,6 +60,11 @@ export function CompactDateTimeRangePicker({
   const [open, setOpen] = useState(false)
   const [draftStart, setDraftStart] = useState(toInputValue(start))
   const [draftEnd, setDraftEnd] = useState(toInputValue(end))
+  const errorId = useId()
+  const rangeError = getLogDateTimeRangeError(draftStart, draftEnd)
+  let error: string | undefined
+  if (rangeError === 'invalid') error = t('Please enter a valid date')
+  if (rangeError === 'reversed') error = t('End time must be after start time')
 
   const label = useMemo(() => {
     if (!start && !end) return t('Date Range')
@@ -86,6 +94,7 @@ export function CompactDateTimeRangePicker({
   }
 
   const applyDraft = () => {
+    if (rangeError) return
     onChange({
       start: fromInputValue(draftStart),
       end: fromInputValue(draftEnd),
@@ -159,6 +168,9 @@ export function CompactDateTimeRangePicker({
               <Input
                 type='datetime-local'
                 value={draftStart}
+                max={draftEnd || undefined}
+                aria-invalid={Boolean(rangeError)}
+                aria-describedby={error ? errorId : undefined}
                 aria-label={t('Start Time')}
                 onChange={(e) => setDraftStart(e.target.value)}
                 className='h-8 text-sm leading-5 tabular-nums'
@@ -174,6 +186,9 @@ export function CompactDateTimeRangePicker({
               <Input
                 type='datetime-local'
                 value={draftEnd}
+                min={draftStart || undefined}
+                aria-invalid={Boolean(rangeError)}
+                aria-describedby={error ? errorId : undefined}
                 aria-label={t('End Time')}
                 onChange={(e) => setDraftEnd(e.target.value)}
                 className='h-8 text-sm leading-5 tabular-nums'
@@ -181,6 +196,7 @@ export function CompactDateTimeRangePicker({
             </div>
           </div>
 
+          <FieldError id={errorId}>{error}</FieldError>
           <div className='flex flex-wrap gap-1.5'>
             <Button
               type='button'
@@ -230,7 +246,12 @@ export function CompactDateTimeRangePicker({
           </div>
 
           <div className='flex justify-end'>
-            <Button size='sm' className='h-8' onClick={applyDraft}>
+            <Button
+              size='sm'
+              className='h-8'
+              onClick={applyDraft}
+              disabled={Boolean(rangeError)}
+            >
               {t('Confirm')}
             </Button>
           </div>

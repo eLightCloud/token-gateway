@@ -87,7 +87,8 @@ func getOrganizationInvoice(c *gin.Context, organizationId int) {
 	if !ok {
 		return
 	}
-	invoice, err := service.GetOrganizationInvoice(organizationId, period, c.Query("refresh") == "1")
+	refresh := c.Query("refresh") == "1" || c.Query("refresh") == "true"
+	invoice, err := service.GetOrganizationInvoice(organizationId, period, refresh)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -116,12 +117,22 @@ func getOrganizationSettlementRules(c *gin.Context, organizationId int) {
 	if !ok {
 		return
 	}
-	rules, err := model.GetOrganizationSettlementRuleOptions(organizationId, effectiveMonth)
+	rules, discovery, err := model.GetOrganizationSettlementRuleOptions(c.Request.Context(), organizationId, effectiveMonth)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, rules)
+	if discovery.Status != model.OrganizationInvoiceDiscoveryReady {
+		// Shared background work: everyone reopening the dialog advances the
+		// same task instead of starting their own scan.
+		service.EnqueueOrganizationInvoiceModelDiscovery()
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"message":   "",
+		"data":      rules,
+		"discovery": discovery,
+	})
 }
 
 func GetCurrentOrganizationSettlementRules(c *gin.Context) {
@@ -190,6 +201,7 @@ func updateOrganizationSettlementRule(c *gin.Context, organizationId int) {
 		return
 	}
 	result, err := model.UpdateOrganizationSettlementRule(
+		c.Request.Context(),
 		organizationId,
 		req.CategoryKey,
 		effectiveMonth,
@@ -197,6 +209,18 @@ func updateOrganizationSettlementRule(c *gin.Context, organizationId int) {
 		*req.ExpectedVersion,
 	)
 	if err != nil {
+		var discovery *model.OrganizationSettlementDiscoveryError
+		if errors.As(err, &discovery) {
+			recordOrganizationSettlementRuleUpdateFailure(c, organizationId, req, err, nil)
+			service.EnqueueOrganizationInvoiceModelDiscovery()
+			c.JSON(http.StatusOK, gin.H{
+				"success":   false,
+				"message":   discovery.Message,
+				"code":      discovery.Code,
+				"retryable": true,
+			})
+			return
+		}
 		var conflict *model.OrganizationSettlementVersionConflictError
 		if errors.As(err, &conflict) {
 			recordOrganizationSettlementRuleUpdateFailure(c, organizationId, req, err, &conflict.Actual)
@@ -215,6 +239,7 @@ func updateOrganizationSettlementRule(c *gin.Context, organizationId int) {
 		return
 	}
 	if result.Changed {
+		service.EnqueueOrganizationInvoiceBuild()
 		recordManageAudit(c, "organization.settlement_rule_update", map[string]interface{}{
 			"organization_id":   organizationId,
 			"category_key":      result.Rule.CategoryKey,

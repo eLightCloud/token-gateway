@@ -4,34 +4,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
 )
 
-const organizationInvoiceSummaryQueueSize = 32
-const organizationInvoiceSummaryBuildTimeout = 60 * time.Second
 const organizationInvoiceSummaryReadTimeout = 5 * time.Second
 const organizationInvoiceSummaryMaxHistoryMonths = 1200
 
-type organizationInvoiceSummaryBuild struct {
-	summary model.OrganizationInvoicePeriodSummary
-	period  model.OrganizationInvoicePeriod
-}
-
-var organizationInvoiceSummaryQueue = make(chan organizationInvoiceSummaryBuild, organizationInvoiceSummaryQueueSize)
-var organizationInvoiceSummaryWorkerOnce sync.Once
-
+// GetOrganizationInvoice reads requested ready snapshots without scanning logs
+// or decoding earlier matrices. Missing snapshots register persistent work;
+// consumption is prioritized while incomplete wallet history advances separately.
 func GetOrganizationInvoice(
 	organizationId int,
 	period model.OrganizationInvoicePeriod,
 	refresh bool,
-) (*model.OrganizationInvoice, error) {
+) (result *model.OrganizationInvoice, resultErr error) {
+	if refresh {
+		return nil, errors.New("invoice refresh requires a version-checked POST to /invoice/recalculate; query without refresh to read cached results")
+	}
 	if _, err := model.GetOrganizationById(organizationId); err != nil {
 		return nil, err
 	}
@@ -45,196 +39,190 @@ func GetOrganizationInvoice(
 			return nil, errors.New("organization invoice period cannot start in the future")
 		}
 	}
-	if refresh {
-		if err := model.InvalidateOrganizationInvoicePeriods(organizationId, requestedPeriods); err != nil {
-			return nil, err
+	// Bind the token before reading payloads, so a concurrent publication
+	// cannot attach a newer generation's token to an older returned result.
+	token, err := model.OrganizationInvoiceRecalculationToken(organizationId, requestedPeriods)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if resultErr == nil && result != nil {
+			result.RecalculationToken = token
 		}
+	}()
+	if invoice, ready, err := readReadyOrganizationInvoicePeriods(organizationId, period, requestedPeriods, now); err != nil {
+		return nil, err
+	} else if ready {
+		return invoice, nil
+	}
+	monthlyPeriods, err := organizationInvoiceChainPeriods(organizationId, period)
+	if err != nil {
+		return nil, err
 	}
 	requestedKeys := make(map[[2]int64]struct{}, len(requestedPeriods))
 	for _, requestedPeriod := range requestedPeriods {
 		requestedKeys[[2]int64{requestedPeriod.StartTimestamp, requestedPeriod.EndTimestamp}] = struct{}{}
 	}
-	monthlyPeriods := requestedPeriods
-	baseline, baselineErr := model.GetOrganizationInvoiceBaseline(organizationId)
-	if baselineErr != nil && !errors.Is(baselineErr, gorm.ErrRecordNotFound) {
-		return nil, baselineErr
-	}
-	if baselineErr == nil {
-		targetStart := time.Unix(period.StartTimestamp, 0).In(time.FixedZone(model.OrganizationInvoiceTimezone, 8*60*60))
-		targetEnd := time.Unix(period.EndTimestamp, 0).In(targetStart.Location())
-		lastTargetMonthStart := time.Date(targetEnd.Year(), targetEnd.Month(), 1, 0, 0, 0, 0, targetStart.Location())
-		baselineStart, parseErr := time.ParseInLocation(
-			"2006-01",
-			model.FormatOrganizationInvoiceMonth(baseline.StartMonth),
-			targetStart.Location(),
-		)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		if baselineStart.Before(lastTargetMonthStart) {
-			priorPeriods := make([]model.OrganizationInvoicePeriod, 0)
-			priorKeys := make(map[[2]int64]struct{})
-			for cursor := baselineStart; cursor.Before(lastTargetMonthStart); cursor = cursor.AddDate(0, 1, 0) {
-				if len(priorPeriods) >= organizationInvoiceSummaryMaxHistoryMonths {
-					return nil, errors.New("organization invoice baseline history is too long")
-				}
-				next := cursor.AddDate(0, 1, 0)
-				priorPeriod := model.OrganizationInvoicePeriod{
-					StartDate:      cursor.Format("2006-01-02"),
-					EndDate:        next.AddDate(0, 0, -1).Format("2006-01-02"),
-					Timezone:       model.OrganizationInvoiceTimezone,
-					StartTimestamp: cursor.Unix(),
-					EndTimestamp:   next.Unix() - 1,
-				}
-				priorPeriods = append(priorPeriods, priorPeriod)
-				priorKeys[[2]int64{priorPeriod.StartTimestamp, priorPeriod.EndTimestamp}] = struct{}{}
-			}
-			monthlyPeriods = priorPeriods
-			for _, requestedPeriod := range requestedPeriods {
-				if _, exists := priorKeys[[2]int64{requestedPeriod.StartTimestamp, requestedPeriod.EndTimestamp}]; !exists {
-					monthlyPeriods = append(monthlyPeriods, requestedPeriod)
-				}
-			}
-		}
-	}
+
+	// Read-only pass: collect the requested ready snapshots and locate the
+	// first month that is not a usable ready result. Earlier dependency
+	// months are only checked by status, never decoded.
 	readyInvoices := make([]*model.OrganizationInvoice, 0, len(requestedPeriods))
 	var sourceAsOf int64
 	var revision int
-	for _, monthlyPeriod := range monthlyPeriods {
+	blockingIndex := -1
+	var blockingSummary *model.OrganizationInvoicePeriodSummary
+	for index, monthlyPeriod := range monthlyPeriods {
 		_, requested := requestedKeys[[2]int64{monthlyPeriod.StartTimestamp, monthlyPeriod.EndTimestamp}]
-		summary, claimed, err := model.PrepareOrganizationInvoiceSummary(
-			organizationId,
-			monthlyPeriod,
-			false,
-		)
+		summary, err := model.LookupOrganizationInvoiceSummary(organizationId, monthlyPeriod, requested)
 		if err != nil {
 			return nil, err
 		}
-		if summary.SourceAsOf > sourceAsOf {
-			sourceAsOf = summary.SourceAsOf
-		}
-		if summary.Revision > revision {
-			revision = summary.Revision
-		}
-		if summary.Status == model.OrganizationInvoiceSummaryStatusReady && !claimed {
-			invoice, err := model.DecodeOrganizationInvoiceSummary(summary)
-			if err != nil {
-				if failErr := model.FailOrganizationInvoiceSummary(summary, err); failErr != nil {
-					common.SysError(fmt.Sprintf("failed to invalidate unreadable organization invoice summary %d: %v", summary.Id, failErr))
-				}
-				return nil, err
+		usable := summary != nil &&
+			summary.Status == model.OrganizationInvoiceSummaryStatusReady &&
+			(summary.Finalized || now <= summary.PeriodEnd)
+		if usable {
+			if summary.SourceAsOf > sourceAsOf {
+				sourceAsOf = summary.SourceAsOf
+			}
+			if summary.Revision > revision {
+				revision = summary.Revision
 			}
 			if requested {
+				invoice, err := model.DecodeOrganizationInvoiceSummary(*summary)
+				if err != nil {
+					if failErr := model.FailOrganizationInvoiceSummary(*summary, err); failErr != nil {
+						common.SysError(fmt.Sprintf("failed to invalidate unreadable organization invoice summary %d: %v", summary.Id, failErr))
+					}
+					return nil, err
+				}
 				readyInvoices = append(readyInvoices, invoice)
 			}
 			continue
 		}
-		if summary.Status == model.OrganizationInvoiceSummaryStatusFailed && !claimed {
+		blockingIndex = index
+		blockingSummary = summary
+		break
+	}
+
+	if blockingIndex < 0 {
+		invoice, err := model.CombineOrganizationInvoiceSummaries(period, readyInvoices)
+		if err != nil {
+			return nil, err
+		}
+		readContext, cancel := context.WithTimeout(context.Background(), organizationInvoiceSummaryReadTimeout)
+		defer cancel()
+		if err := model.RefreshOrganizationInvoiceCurrentBalances(readContext, invoice); err != nil {
+			return nil, err
+		}
+		return invoice, nil
+	}
+
+	// Registration pass: enqueue every remaining month of the chain so the
+	// builder can advance dependencies without further page requests. A
+	// deterministic data failure that is not eligible for re-claim surfaces
+	// its stored reason instead of being retried on every poll.
+	for _, monthlyPeriod := range monthlyPeriods[blockingIndex:] {
+		summary, _, err := model.RegisterOrganizationInvoiceSummary(organizationId, monthlyPeriod, false, now)
+		if err != nil {
+			return nil, err
+		}
+		if _, requested := requestedKeys[[2]int64{monthlyPeriod.StartTimestamp, monthlyPeriod.EndTimestamp}]; requested {
+			if err := model.PrioritizeOrganizationInvoiceRequest(summary); err != nil {
+				return nil, err
+			}
+		}
+		if _, requested := requestedKeys[[2]int64{monthlyPeriod.StartTimestamp, monthlyPeriod.EndTimestamp}]; requested && summary.Status == model.OrganizationInvoiceSummaryStatusFailed {
 			return nil, fmt.Errorf("organization invoice summary generation failed: %s", summary.Error)
 		}
-		if claimed {
-			organizationInvoiceSummaryWorkerOnce.Do(func() {
-				gopool.Go(runOrganizationInvoiceSummaryWorker)
-			})
-			job := organizationInvoiceSummaryBuild{summary: summary, period: monthlyPeriod}
-			select {
-			case organizationInvoiceSummaryQueue <- job:
-			default:
-				queueErr := errors.New("organization invoice summary build queue is full")
-				if failErr := model.FailOrganizationInvoiceSummary(summary, queueErr); failErr != nil {
-					common.SysError(fmt.Sprintf("failed to mark organization invoice summary %d as failed: %v", summary.Id, failErr))
-				}
-				return nil, queueErr
-			}
-		}
-		return &model.OrganizationInvoice{
-			GenerationStatus:   model.OrganizationInvoiceGenerationStatusGenerating,
-			SourceAsOf:         sourceAsOf,
-			CalculationVersion: model.OrganizationInvoiceSummaryCalculationVersion,
-			Revision:           revision,
-			Period:             period,
-			Currency:           "USD",
-			Accounts:           []model.OrganizationInvoiceAccount{},
-			CategoryRows:       []model.OrganizationInvoiceCategoryRow{},
-			ModelRows:          []model.OrganizationInvoiceModelRow{},
-		}, nil
 	}
-	invoice, err := model.CombineOrganizationInvoiceSummaries(period, readyInvoices)
+	EnqueueOrganizationInvoiceBuild()
+
+	build := &model.OrganizationInvoiceBuildInfo{
+		Status: model.OrganizationInvoiceGenerationStatusGenerating,
+		Period: monthlyPeriods[blockingIndex],
+	}
+	if blockingSummary != nil {
+		build.Stage = blockingSummary.Stage
+		build.Progress = model.OrganizationInvoiceBuildProgress(*blockingSummary)
+	} else {
+		build.Stage = model.OrganizationInvoiceStagePending
+	}
+	if previous, err := readPreviousOrganizationInvoice(organizationId, period, requestedPeriods, build); err != nil {
+		return nil, err
+	} else if previous != nil {
+		return previous, nil
+	}
+	return &model.OrganizationInvoice{
+		GenerationStatus:   model.OrganizationInvoiceGenerationStatusGenerating,
+		SourceAsOf:         sourceAsOf,
+		CalculationVersion: model.OrganizationInvoiceSummaryCalculationVersion,
+		Revision:           revision,
+		Period:             period,
+		Currency:           "USD",
+		Accounts:           []model.OrganizationInvoiceAccount{},
+		CategoryRows:       []model.OrganizationInvoiceCategoryRow{},
+		ModelRows:          []model.OrganizationInvoiceModelRow{},
+		Build:              build,
+	}, nil
+}
+
+// organizationInvoiceChainPeriods returns the monthly periods that must be
+// ready to serve the requested period: every full calendar month from the
+// organization's baseline up to the request, plus the requested months
+// themselves. Without a baseline the request months stand alone; the first
+// build freezes the baseline at its month.
+func organizationInvoiceChainPeriods(
+	organizationId int,
+	period model.OrganizationInvoicePeriod,
+) ([]model.OrganizationInvoicePeriod, error) {
+	requestedPeriods, err := model.SplitOrganizationInvoicePeriod(period)
 	if err != nil {
 		return nil, err
 	}
-	readContext, cancel := context.WithTimeout(context.Background(), organizationInvoiceSummaryReadTimeout)
-	defer cancel()
-	if err := model.RefreshOrganizationInvoiceCurrentBalances(readContext, invoice); err != nil {
-		return nil, err
+	location := time.FixedZone(model.OrganizationInvoiceTimezone, 8*60*60)
+	baseline, baselineErr := model.GetOrganizationInvoiceBaseline(organizationId)
+	if baselineErr != nil && !errors.Is(baselineErr, gorm.ErrRecordNotFound) {
+		return nil, baselineErr
 	}
-	return invoice, nil
-}
-
-func runOrganizationInvoiceSummaryWorker() {
-	for job := range organizationInvoiceSummaryQueue {
-		buildOrganizationInvoiceSummary(job)
+	if baselineErr != nil {
+		return requestedPeriods, nil
 	}
-}
-
-func buildOrganizationInvoiceSummary(job organizationInvoiceSummaryBuild) {
-	startedAt := time.Now()
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err := fmt.Errorf("panic while building organization invoice summary: %v", recovered)
-			if failErr := model.FailOrganizationInvoiceSummary(job.summary, err); failErr != nil {
-				common.SysError(fmt.Sprintf("failed to persist organization invoice summary panic %d: %v", job.summary.Id, failErr))
-			}
+	targetStart := time.Unix(period.StartTimestamp, 0).In(location)
+	targetEnd := time.Unix(period.EndTimestamp, 0).In(targetStart.Location())
+	lastTargetMonthStart := time.Date(targetEnd.Year(), targetEnd.Month(), 1, 0, 0, 0, 0, targetStart.Location())
+	baselineStart, parseErr := time.ParseInLocation(
+		"2006-01",
+		model.FormatOrganizationInvoiceMonth(baseline.StartMonth),
+		targetStart.Location(),
+	)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if !baselineStart.Before(lastTargetMonthStart) {
+		return requestedPeriods, nil
+	}
+	priorPeriods := make([]model.OrganizationInvoicePeriod, 0)
+	priorKeys := make(map[[2]int64]struct{})
+	for cursor := baselineStart; cursor.Before(lastTargetMonthStart); cursor = cursor.AddDate(0, 1, 0) {
+		if len(priorPeriods) >= organizationInvoiceSummaryMaxHistoryMonths {
+			return nil, errors.New("organization invoice baseline history is too long")
 		}
-		if elapsed := time.Since(startedAt); elapsed > time.Minute {
-			common.SysError(fmt.Sprintf("organization invoice summary %d build took %s", job.summary.Id, elapsed.Round(time.Second)))
+		next := cursor.AddDate(0, 1, 0)
+		priorPeriod := model.OrganizationInvoicePeriod{
+			StartDate:      cursor.Format("2006-01-02"),
+			EndDate:        next.AddDate(0, 0, -1).Format("2006-01-02"),
+			Timezone:       model.OrganizationInvoiceTimezone,
+			StartTimestamp: cursor.Unix(),
+			EndTimestamp:   next.Unix() - 1,
 		}
-	}()
-
-	refreshedSummary, err := model.RefreshOrganizationInvoiceSummarySourceAsOf(job.summary, time.Now().Unix())
-	if err != nil {
-		common.SysError(fmt.Sprintf("failed to refresh organization invoice summary cutoff %d: %v", job.summary.Id, err))
-		return
+		priorPeriods = append(priorPeriods, priorPeriod)
+		priorKeys[[2]int64{priorPeriod.StartTimestamp, priorPeriod.EndTimestamp}] = struct{}{}
 	}
-	job.summary = refreshedSummary
-	buildPeriod := job.period
-	if job.summary.SourceAsOf >= buildPeriod.StartTimestamp && job.summary.SourceAsOf < buildPeriod.EndTimestamp {
-		buildPeriod.EndTimestamp = job.summary.SourceAsOf
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), organizationInvoiceSummaryBuildTimeout)
-	defer cancel()
-	if _, err := model.EnsureOrganizationInvoiceOpeningBaseline(
-		ctx,
-		job.summary.OrganizationId,
-		job.period,
-	); err != nil {
-		if failErr := model.FailOrganizationInvoiceSummary(job.summary, err); failErr != nil {
-			common.SysError(fmt.Sprintf("failed to persist organization invoice baseline error %d: %v", job.summary.Id, failErr))
-		}
-		return
-	}
-	invoice, err := model.GetOrganizationInvoiceWithContext(ctx, job.summary.OrganizationId, buildPeriod)
-	if err != nil {
-		if failErr := model.FailOrganizationInvoiceSummary(job.summary, err); failErr != nil {
-			common.SysError(fmt.Sprintf("failed to persist organization invoice summary error %d: %v", job.summary.Id, failErr))
-		}
-		return
-	}
-	for _, account := range invoice.Accounts {
-		if account.Financials.ReconciliationStatus == "incomplete" {
-			err := fmt.Errorf("organization invoice account %d financials are incomplete", account.UserId)
-			if failErr := model.FailOrganizationInvoiceSummary(job.summary, err); failErr != nil {
-				common.SysError(fmt.Sprintf("failed to persist incomplete organization invoice summary %d: %v", job.summary.Id, failErr))
-			}
-			return
+	for _, requestedPeriod := range requestedPeriods {
+		if _, exists := priorKeys[[2]int64{requestedPeriod.StartTimestamp, requestedPeriod.EndTimestamp}]; !exists {
+			priorPeriods = append(priorPeriods, requestedPeriod)
 		}
 	}
-	invoice.GenerationStatus = model.OrganizationInvoiceGenerationStatusReady
-	invoice.SourceAsOf = job.summary.SourceAsOf
-	invoice.CalculationVersion = job.summary.CalculationVersion
-	invoice.Revision = job.summary.Revision
-	invoice.Period = job.period
-	if err := model.CompleteOrganizationInvoiceSummary(job.summary, invoice); err != nil {
-		common.SysError(fmt.Sprintf("failed to complete organization invoice summary %d: %v", job.summary.Id, err))
-	}
+	return priorPeriods, nil
 }

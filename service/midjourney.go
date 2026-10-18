@@ -117,6 +117,7 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 	model.UpdateUserUsedQuota(task.UserId, -quota)
 	model.UpdateChannelUsedQuota(billingChannelId, -quota)
 	other := model.NewLogOther()
+	other.SetPublic("billing_source", BillingSourceWallet)
 	other.SetPublic("task_id", task.MjId)
 	other.SetPublic("reason", reason)
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
@@ -133,6 +134,8 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 	task.Quota = 0
 	if err := task.UpdateBillingState(); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("Midjourney 退款成功但清除 quota 失败 task %s: %s", task.MjId, err.Error()))
+	} else if err := model.ConfirmTaskInvoiceExpense(model.TaskSettlementEntityMidjourney, int64(task.Id), 0, fmt.Sprintf("midjourney-refund:%d", task.Id)); err != nil {
+		logger.LogWarn(ctx, "Midjourney invoice confirmation needs review: "+err.Error())
 	}
 	return true
 }

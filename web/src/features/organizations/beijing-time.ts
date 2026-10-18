@@ -99,3 +99,35 @@ export function getBeijingMonthDateRange(
     effectiveMonth: startDate.slice(0, 7),
   }
 }
+
+// Default invoice snapshot range: Beijing month start through yesterday, so
+// every covered day is a complete natural day. On the first day of a month no
+// complete day exists yet; the function then returns the previous full month
+// and flags the fallback so the UI can explain why the current month has no
+// data yet.
+export function getBeijingInvoiceDefaultRange(timestamp = Date.now()): {
+  startDate: string
+  endDate: string
+  effectiveMonth: string
+  currentMonthPending: boolean
+} {
+  const beijingNow = new Date(timestamp + BEIJING_OFFSET_SECONDS * 1000)
+  const year = beijingNow.getUTCFullYear()
+  const month = beijingNow.getUTCMonth()
+  const monthStart = new Date(Date.UTC(year, month, 1))
+    .toISOString()
+    .slice(0, 10)
+  const yesterday = new Date(Date.UTC(year, month, beijingNow.getUTCDate() - 1))
+    .toISOString()
+    .slice(0, 10)
+  if (yesterday >= monthStart) {
+    return {
+      startDate: monthStart,
+      endDate: yesterday,
+      effectiveMonth: monthStart.slice(0, 7),
+      currentMonthPending: false,
+    }
+  }
+  const previousMonth = getBeijingMonthDateRange(timestamp, -1)
+  return { ...previousMonth, currentMonthPending: true }
+}

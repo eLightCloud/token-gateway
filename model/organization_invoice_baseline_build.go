@@ -93,18 +93,24 @@ func organizationInvoiceOpeningQuotaMap(
 		StartTimestamp: 1,
 		EndTimestamp:   historyEnd,
 	}
-	financials, err := getOrganizationInvoiceAccountFinancials(ctx, organizationId, scopes, history)
+	var financials map[int]OrganizationInvoiceAccountFinancials
+	var err error
+	if cached, _ := ctx.Value(organizationInvoiceOpeningCacheKey{}).(bool); cached {
+		financials, err = organizationInvoiceOpeningFinancialsCached(ctx, organizationId, scopes, history)
+	} else {
+		financials, err = getOrganizationInvoiceAccountFinancials(ctx, organizationId, scopes, history, nil)
+	}
 	if err != nil {
 		return nil, err
 	}
 	for _, scope := range scopes {
 		accountFinancials := financials[scope.userId]
 		if !accountFinancials.SourceFactsComplete {
-			return nil, fmt.Errorf("organization invoice opening balance facts are incomplete for user %d", scope.userId)
+			return nil, NewOrganizationInvoiceDataError(fmt.Errorf("organization invoice opening balance facts are incomplete for user %d", scope.userId))
 		}
 		opening := accountFinancials.NetDeltaQuota
 		if opening < 0 {
-			return nil, fmt.Errorf("organization invoice opening balance is negative for user %d", scope.userId)
+			return nil, NewOrganizationInvoiceDataError(fmt.Errorf("organization invoice opening balance is negative for user %d", scope.userId))
 		}
 		openingQuotas[scope.userId] = opening
 	}

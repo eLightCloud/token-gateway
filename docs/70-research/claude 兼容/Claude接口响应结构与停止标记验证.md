@@ -6,6 +6,8 @@ last-reviewed: 2026-10-14
 
 # Claude 接口修复后的测试结果
 
+> 历史快照：以下为 2026 年 10 月 14 日结果。最新状态请看 [2026 年 10 月 18 日两端复测报告](2026-10-18-两端Claude兼容复测报告.md)，其中停止标记、签名拒绝等已有新的通过证据。
+
 **上游已经修好了一部分问题，但还没有全部修好。剩下的主要问题是：AI 已经按指定标记停止回答，却把“为什么停止”告诉错了。**
 
 直接访问上游也会出现这个问题，应先让上游修复。普通聊天受影响较小；客户如果靠这个结束说明来决定下一步做什么，程序就可能判断错误。因此，目前还不能向客户确认“返回结果与官方完全一致”。
@@ -199,7 +201,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}
 
 ### 定位线索与后续验证
 
-本地原生 Claude 非流式处理使用 `responseData = data` 返回上游数据；原生流式处理用量后发送事件。参见 [Claude 响应处理代码](../../relay/channel/claude/relay-claude.go) 中 `HandleClaudeResponseData` 和 `HandleStreamResponseData`。这提供辅助证据，不能替代线上路由确认。
+本地原生 Claude 非流式处理使用 `responseData = data` 返回上游数据；原生流式处理用量后发送事件。参见 [Claude 响应处理代码](../../../relay/channel/claude/relay-claude.go) 中 `HandleClaudeResponseData` 和 `HandleStreamResponseData`。这提供辅助证据，不能替代线上路由确认。
 
 上游转换时可能丢失了“自然结束”和“命中标记”的区别，需要结合内部日志确认。我方不能仅因请求中带有停止标记，就强行把所有 `end_turn` 改成 `stop_sequence`，因为回答可能在命中标记前自然结束。
 

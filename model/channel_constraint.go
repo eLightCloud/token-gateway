@@ -5,18 +5,23 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/seedanceenhance"
 )
 
 var filterEvalOrder = []dto.ChannelFilterKind{
+	dto.FilterVideoEnhance,
 	dto.FilterRequestPath,
 	dto.FilterTaskPluginIdentity,
 	dto.FilterResponsesWebSocket,
 }
 
 // ChannelSatisfiesFilters reports whether ch passes every filter.
-// On false, it returns the kind of the first violated filter (request_path
-// then task_plugin_identity) for error attribution.
+// On false, it returns the first violated capability or request filter for
+// error attribution.
 func ChannelSatisfiesFilters(ch *Channel, modelName string, filters []dto.ChannelFilter) (bool, dto.ChannelFilterKind) {
+	if ch != nil && !SeedanceEnhanceChannelAvailable(ch, modelName) {
+		return false, dto.FilterVideoEnhance
+	}
 	if ch == nil {
 		return false, ""
 	}
@@ -43,8 +48,13 @@ func filterCandidateIDs(ids []int, modelName string, filters []dto.ChannelFilter
 	}
 	kept = ids
 	for _, kind := range filterEvalOrder {
+		if kind == dto.FilterVideoEnhance {
+			if _, enhanced := seedanceenhance.BaseModel(modelName); !enhanced {
+				continue
+			}
+		}
 		kindFilters := filtersByKind(filters, kind)
-		if len(kindFilters) == 0 {
+		if len(kindFilters) == 0 && kind != dto.FilterVideoEnhance {
 			continue
 		}
 		next := make([]int, 0, len(kept))
@@ -76,7 +86,13 @@ func candidatePassesKindFilters(ch *Channel, exists bool, modelName string, kind
 	if kind == dto.FilterRequestPath && !exists {
 		return true
 	}
+	if kind == dto.FilterVideoEnhance && (!exists || ch == nil) {
+		return true
+	}
 	if !exists || ch == nil {
+		return false
+	}
+	if kind == dto.FilterVideoEnhance && !SeedanceEnhanceChannelAvailable(ch, modelName) {
 		return false
 	}
 	for _, filter := range filters {

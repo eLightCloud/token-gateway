@@ -19,11 +19,15 @@ For commercial licensing, please contact support@quantumnous.com
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, within } from '@testing-library/react'
 import i18next from 'i18next'
-import { afterEach, beforeAll, describe, expect, test } from 'vitest'
+import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
+
+import { api } from '@/lib/api'
+import { formatLogQuota } from '@/lib/format'
 
 import type { UsageLog } from '../../data/schema'
 import type { LogOtherData } from '../../types'
 import { DetailsDialog } from '../dialogs/details-dialog'
+import { VideoEnhanceBilling } from '../dialogs/video-enhance-billing'
 
 const i18nKeys = {
   'Log Details': 'Log Details',
@@ -231,4 +235,140 @@ describe('usage facts billing details', () => {
     expect(screen.queryByText('seconds')).toBeNull()
     expect(screen.getByText('Total Cost')).toBeInTheDocument()
   })
+})
+
+test('enhancement details show millisecond seconds and final task cost independently of ledger entries', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        task_id: 'enhance-bill',
+        billing_status: 'settled',
+        final_quota: 1234,
+        seconds: 10.234,
+        resolution: '2k',
+        unit_price_usd: 0.02,
+        admin_info: {
+          stage: 'succeeded',
+          attempts: 3,
+          error_code: 'private-diagnostic',
+        },
+        root_info: {
+          attempts: [
+            {
+              number: 1,
+              status: 'failed',
+              error_code: 'private-attempt',
+              request_id: 'private-request',
+            },
+          ],
+        },
+      },
+    },
+  })
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  try {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <VideoEnhanceBilling taskId='enhance-bill' open isAdmin={false} />
+      </QueryClientProvider>
+    )
+    await screen.findByText('Final net consumption')
+    expect(
+      screen.getByText('Billable video duration').nextElementSibling
+    ).toHaveTextContent('10.234 seconds')
+    expect(
+      screen.getByText('Final net consumption').nextElementSibling
+    ).toHaveTextContent(formatLogQuota(1234))
+    expect(screen.queryByText('Enhancement attempts')).toBeNull()
+    expect(screen.queryByText('private-diagnostic')).toBeNull()
+    expect(screen.queryByText('private-attempt')).toBeNull()
+    expect(screen.queryByText('private-request')).toBeNull()
+  } finally {
+    queryClient.clear()
+  }
+})
+
+test('administrators see processing diagnostics and root-only provider request IDs', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        task_id: 'enhance-failed',
+        billing_status: 'refunded',
+        final_quota: 0,
+        admin_info: {
+          stage: 'output_storing',
+          attempts: 3,
+          error_code: 'oss_upload_failed_http_403',
+        },
+        root_info: {
+          attempts: [
+            {
+              number: 2,
+              status: 'failed',
+              error_code: 'video_enhancement_failed',
+              provider_error_code: 'VideoEnhanceFailed',
+              request_id: 'mediakit-request-2',
+            },
+          ],
+        },
+      },
+    },
+  })
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  try {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <VideoEnhanceBilling taskId='enhance-failed' open isAdmin />
+      </QueryClientProvider>
+    )
+    await screen.findByText('Fully refunded')
+    expect(
+      screen.getByText('Last processing error').nextElementSibling
+    ).toHaveTextContent('oss_upload_failed_http_403')
+    expect(
+      screen.getByText('Processing stage').nextElementSibling
+    ).toHaveTextContent('output_storing')
+    expect(
+      screen.getByText('Upstream error code').nextElementSibling
+    ).toHaveTextContent('VideoEnhanceFailed')
+    expect(screen.getByText('Request ID').nextElementSibling).toHaveTextContent(
+      'mediakit-request-2'
+    )
+  } finally {
+    queryClient.clear()
+  }
+})
+
+test('enhancement details keep final cost pending until settlement finishes', async () => {
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        task_id: 'enhance-pending',
+        billing_status: 'settling',
+        final_quota: null,
+      },
+    },
+  })
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  try {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <VideoEnhanceBilling taskId='enhance-pending' open isAdmin={false} />
+      </QueryClientProvider>
+    )
+    await screen.findByText('Settlement pending')
+    expect(screen.queryByText('Final net consumption')).toBeNull()
+    expect(screen.queryByText('Fully refunded')).toBeNull()
+  } finally {
+    queryClient.clear()
+  }
 })

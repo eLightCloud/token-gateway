@@ -183,7 +183,7 @@ func TestServeTaskPluginProtocolDisconnectBeforeDurableBarrierPersistsAndSettles
 			ChannelId:   1,
 			ChannelType: constant.ChannelTypeTaskPlugin,
 		}
-		return executeTaskSubmissionWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+		return executeTaskSubmissionTestWith(c, info, func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 			close(submitStarted)
 			<-releaseSubmit
 			return &relay.TaskSubmitResult{
@@ -1819,7 +1819,7 @@ func TestServeTaskPluginImageProtocolDisconnectDuringSubmissionKeepsDurableSettl
 		info.TaskRelayInfo.PublicTaskID = "task_image_disconnect"
 		info.TaskRelayInfo.LockedChannel = &model.Channel{Id: 1, Type: constant.ChannelTypeTaskPlugin, Name: "image-bridge"}
 		info.ChannelMeta = &relaycommon.ChannelMeta{ChannelId: 1, ChannelType: constant.ChannelTypeTaskPlugin}
-		return executeTaskSubmissionWith(c, info, func(c *gin.Context, _ *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+		return executeTaskSubmissionTestWith(c, info, func(c *gin.Context, _ *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
 			close(submitStarted)
 			<-releaseSubmit
 			// The upstream call runs on the request context: a context that

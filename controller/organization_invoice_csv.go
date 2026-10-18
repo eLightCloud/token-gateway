@@ -21,6 +21,13 @@ type organizationInvoiceCSVAmountFormatter struct {
 	err error
 }
 
+func (f *organizationInvoiceCSVAmountFormatter) optionalAmount(value string) string {
+	if value == "" {
+		return "—"
+	}
+	return f.amount(value)
+}
+
 func (f *organizationInvoiceCSVAmountFormatter) amount(value string) string {
 	if f.err != nil {
 		return ""
@@ -53,6 +60,9 @@ func writeOrganizationInvoiceCSV(
 	_ = writer.Write([]string{"组织名称", exportContext.OrganizationName})
 	_ = writer.Write([]string{"账期", invoice.Period.StartDate + " ~ " + invoice.Period.EndDate})
 	_ = writer.Write([]string{"币种", invoice.Currency})
+	if err := writeOrganizationInvoiceCSVHeaderNotes(writer, invoice); err != nil {
+		return err
+	}
 	_ = writer.Write([]string{})
 
 	categoryDisplayNameHeader := []string{"真实姓名"}
@@ -94,17 +104,17 @@ func writeOrganizationInvoiceCSV(
 	)
 	_ = writer.Write(categoryTotal)
 	previousBalanceAmounts := []string{"用户上期余额"}
-	periodRechargeAmounts := []string{"用户当期充值金额"}
+	periodRechargeAmounts := []string{"用户当期流入金额"}
 	consumptionAmounts := []string{"用户当期消费金额"}
 	currentBalances := []string{"用户当前余额"}
 	for _, account := range invoice.Accounts {
 		previousBalanceAmounts = append(
 			previousBalanceAmounts,
-			amountFormatter.amount(account.Financials.OpeningBalanceAmountUSD),
+			amountFormatter.optionalAmount(account.Financials.OpeningBalanceAmountUSD),
 		)
 		periodRechargeAmounts = append(
 			periodRechargeAmounts,
-			amountFormatter.amount(account.Financials.TotalInflowAmountUSD),
+			amountFormatter.optionalAmount(account.Financials.TotalInflowAmountUSD),
 		)
 		consumptionAmounts = append(
 			consumptionAmounts,
@@ -112,7 +122,7 @@ func writeOrganizationInvoiceCSV(
 		)
 		currentBalances = append(
 			currentBalances,
-			amountFormatter.amount(account.Financials.CurrentBalanceAmountUSD),
+			amountFormatter.optionalAmount(account.Financials.CurrentBalanceAmountUSD),
 		)
 	}
 	previousBalanceAmounts = append(previousBalanceAmounts, "", "", "")
@@ -123,6 +133,9 @@ func writeOrganizationInvoiceCSV(
 	_ = writer.Write(periodRechargeAmounts)
 	_ = writer.Write(consumptionAmounts)
 	_ = writer.Write(currentBalances)
+	if err := writeOrganizationInvoiceCSVRefunds(writer, invoice, &amountFormatter); err != nil {
+		return err
+	}
 	_ = writer.Write([]string{})
 
 	modelDisplayNameHeader := []string{"真实姓名"}
@@ -161,5 +174,8 @@ func writeOrganizationInvoiceCSV(
 		"100.0%",
 	)
 	_ = writer.Write(modelTotal)
+	if err := writeOrganizationInvoiceReconciliationCSV(writer, invoice); err != nil {
+		return err
+	}
 	return amountFormatter.err
 }

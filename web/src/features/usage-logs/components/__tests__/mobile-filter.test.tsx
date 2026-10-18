@@ -287,3 +287,65 @@ it.each([
     })
   }
 )
+
+it('keeps reversed log times in the picker until corrected and never applies them', async () => {
+  const onChange = vi.fn()
+  const user = userEvent.setup()
+  render(<CompactDateTimeRangePicker onChange={onChange} />)
+  await user.click(screen.getByRole('button', { name: 'Date Range' }))
+  const start = screen.getByLabelText('Start Time')
+  const end = screen.getByLabelText('End Time')
+  fireEvent.change(start, { target: { value: '2026-10-18T12:00' } })
+  fireEvent.change(end, { target: { value: '2026-10-18T11:00' } })
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'End time must be after start time'
+  )
+  expect(start).toHaveAttribute('aria-invalid', 'true')
+  expect(start).toHaveAttribute('max', '2026-10-18T11:00')
+  expect(end).toHaveAttribute('min', '2026-10-18T12:00')
+  expect(end).toHaveAccessibleDescription('End time must be after start time')
+  await user.click(screen.getByRole('button', { name: 'Confirm' }))
+  expect(onChange).not.toHaveBeenCalled()
+  fireEvent.change(end, { target: { value: '2026-10-18T13:00' } })
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Confirm' }))
+  expect(onChange).toHaveBeenCalledWith({
+    start: new Date(2026, 9, 18, 12),
+    end: new Date(2026, 9, 18, 13),
+  })
+})
+
+it.each([
+  { start: '', end: '', expected: {} },
+  {
+    start: '2026-10-18T12:00',
+    end: '',
+    expected: { start: new Date(2026, 9, 18, 12) },
+  },
+  {
+    start: '2026-10-18T12:00',
+    end: '2026-10-18T12:00',
+    expected: {
+      start: new Date(2026, 9, 18, 12),
+      end: new Date(2026, 9, 18, 12),
+    },
+  },
+])('accepts open or equal log boundaries: $start / $end', async (range) => {
+  const onChange = vi.fn()
+  const user = userEvent.setup()
+  render(<CompactDateTimeRangePicker onChange={onChange} />)
+  await user.click(screen.getByRole('button', { name: 'Date Range' }))
+  fireEvent.change(screen.getByLabelText('Start Time'), {
+    target: { value: range.start },
+  })
+  fireEvent.change(screen.getByLabelText('End Time'), {
+    target: { value: range.end },
+  })
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Confirm' }))
+  expect(onChange).toHaveBeenCalledWith({
+    start: undefined,
+    end: undefined,
+    ...range.expected,
+  })
+})

@@ -11,8 +11,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -319,6 +321,39 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	require.True(t, ok)
 	require.Empty(t, missingExprPricing.BillingMode)
 	require.Empty(t, missingExprPricing.BillingExpr)
+}
+
+func TestListModelsIncludesProviderTaskPricingWithoutModelPrice(t *testing.T) {
+	withSelfUseModeDisabled(t)
+	withTieredBillingConfig(t, map[string]string{}, map[string]string{})
+	db := setupModelListControllerTestDB(t)
+	const key = "model-list-task-pricing"
+	_, err := jsplugin.DefaultRegistry.Register(`
+	export const meta = {apiVersion:1,key:"model-list-task-pricing",name:"Task pricing",version:"1.0.0",author:{name:"Test"},models:["zz-task-priced","zz-task-unpriced","zz-task-incompatible"],fetchMode:"per_task",usageSchema:{seconds:{type:"number",unit:"second",description:{en:"Video generation unit price",zh:"视频生成单价"}}}};
+	export function buildSubmitRequest(){return {};}
+	export function parseSubmitResponse(){return {};}
+	export function buildQueryRequest(){return {};}
+	export function parseTaskResult(){return {};}
+	`, jsplugin.Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(key) })
+	prices, err := common.Marshal(map[string]string{
+		key + "::zz-task-priced":        `tier("seconds", u("seconds") * 0.02)`,
+		key + "::zz-task-incompatible":  `tier("tokens", u("tokens") * 1 / 1000000)`,
+		"missing-plugin::zz-task-stale": `tier("seconds", u("seconds") * 0.02)`,
+	})
+	require.NoError(t, err)
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.PluginBillingExprOption: string(prices)}))
+	require.NoError(t, db.Create(&model.User{Id: 1001, Username: "task-price-user", Group: "default", Status: common.UserStatusEnabled}).Error)
+	for _, name := range []string{"zz-task-priced", "zz-task-unpriced", "zz-task-incompatible", "zz-task-stale"} {
+		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: name, ChannelId: 1, Enabled: true}).Error)
+	}
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 1001)
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+	assert.Equal(t, map[string]struct{}{"zz-task-priced": {}}, decodeListModelsResponse(t, recorder))
 }
 
 func TestListModelsUsesAdvancedCustomEndpointTypesFromPricingCache(t *testing.T) {

@@ -81,12 +81,14 @@ const maxTaskArtifacts = 64
 const maxTaskPluginPersistedJSONBytes = 1 << 20
 
 type TaskAdaptor struct {
-	plugin         *pluginruntime.LoadedPlugin
-	info           *relaycommon.RelayInfo
-	submit         *requestDescriptor
-	routeRequest   *pluginruntime.RouteRequestContext
-	requestHeaders map[string]string
-	files          []map[string]any
+	videoStorageConfigID uint
+	enhance              *enhanceSubmission
+	plugin               *pluginruntime.LoadedPlugin
+	info                 *relaycommon.RelayInfo
+	submit               *requestDescriptor
+	routeRequest         *pluginruntime.RouteRequestContext
+	requestHeaders       map[string]string
+	files                []map[string]any
 }
 
 func New(plugin *pluginruntime.LoadedPlugin) *TaskAdaptor { return &TaskAdaptor{plugin: plugin} }
@@ -153,6 +155,9 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *TaskAdaptor) EstimateBillingValidated(c *gin.Context, info *relaycommon.RelayInfo) (map[string]float64, error) {
+	if a.enhance != nil {
+		return nil, nil
+	}
 	usageContext := a.submitContext(c, info)
 	usageContext["usagePurpose"] = "billing_ratios"
 	return a.usageRatios(c.Request.Context(), []string{info.UpstreamModelName, info.OriginModelName}, "extractUsage", usageContext)
@@ -168,6 +173,9 @@ func (a *TaskAdaptor) ExtractUsageFacts(c *gin.Context, info *relaycommon.RelayI
 }
 
 func (a *TaskAdaptor) ExtractUsageFactsValidated(c *gin.Context, info *relaycommon.RelayInfo) (map[string]any, error) {
+	if a.enhance != nil {
+		return a.enhance.Facts, nil
+	}
 	if !a.hasHook(c.Request.Context(), "extractUsage") {
 		return nil, nil
 	}
@@ -439,6 +447,9 @@ func encodeFilePlaceholder(placeholder map[string]any, form *multipart.Form, lim
 }
 
 func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io.Reader) (*http.Response, error) {
+	if err := a.preflightSeedanceEnhancement(c.Request.Context(), info); err != nil {
+		return nil, err
+	}
 	wasStream := info.IsStream
 	info.IsStream = false
 	defer func() { info.IsStream = wasStream }()
@@ -519,6 +530,9 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 		)
 		return nil, service.TaskErrorWrapper(err, "plugin_submit_response_invalid", http.StatusBadGateway)
 	}
+	if err := a.freezeSeedanceEnhanceResponse(value, &parsed); err != nil {
+		return nil, service.TaskErrorWrapperLocal(err, "enhancement_submit_invalid", http.StatusBadGateway)
+	}
 	var taskData []byte
 	if parsed.TaskData != nil {
 		taskData, err = common.Marshal(parsed.TaskData)
@@ -596,10 +610,13 @@ func (a *TaskAdaptor) FetchBatchTasks(baseURL, key string, tasks []*model.Task, 
 	if err != nil {
 		return nil, err
 	}
-	return a.doFetchDescriptor(baseURL, proxy, value)
+	return a.doFetchDescriptor(context.Background(), baseURL, proxy, value)
 }
 
 func (a *TaskAdaptor) FetchTask(baseURL, key string, task *model.Task, proxy string) (*http.Response, error) {
+	if service.IsSeedanceEnhanceTask(task) {
+		return a.fetchSeedanceEnhancement(baseURL, key, task, proxy)
+	}
 	ctx, err := a.queryContext(task, key, baseURL, proxy)
 	if err != nil {
 		return nil, err
@@ -608,10 +625,10 @@ func (a *TaskAdaptor) FetchTask(baseURL, key string, task *model.Task, proxy str
 	if err != nil {
 		return nil, err
 	}
-	return a.doFetchDescriptor(baseURL, proxy, value)
+	return a.doFetchDescriptor(context.Background(), baseURL, proxy, value)
 }
 
-func (a *TaskAdaptor) doFetchDescriptor(baseURL, proxy string, value any) (*http.Response, error) {
+func (a *TaskAdaptor) doFetchDescriptor(ctx context.Context, baseURL, proxy string, value any) (*http.Response, error) {
 	var descriptor requestDescriptor
 	if err := convert(value, &descriptor); err != nil {
 		return nil, err
@@ -635,7 +652,7 @@ func (a *TaskAdaptor) doFetchDescriptor(baseURL, proxy string, value any) (*http
 	if method == "" {
 		method = http.MethodGet
 	}
-	req, err := http.NewRequest(method, descriptor.URL, requestBody)
+	req, err := http.NewRequestWithContext(ctx, method, descriptor.URL, requestBody)
 	if err != nil {
 		return nil, err
 	}
@@ -760,6 +777,9 @@ func (a *TaskAdaptor) ParseBatchResult(tasks []*model.Task, resp *http.Response,
 }
 
 func (a *TaskAdaptor) ParseTaskResult(task *model.Task, resp *http.Response, body []byte) (*relaycommon.TaskInfo, error) {
+	if service.IsSeedanceEnhanceTask(task) {
+		return a.parseSeedanceEnhancement(task, body)
+	}
 	started := time.Now()
 	input := any(string(body))
 	var decoded any
@@ -908,6 +928,9 @@ func (a *TaskAdaptor) ListArtifacts(task *model.Task) ([]channel.TaskArtifact, e
 }
 
 func (a *TaskAdaptor) BuildContentRequest(task *model.Task, artifactKey string, clientRequest channel.TaskArtifactClientRequest) (*channel.TaskContentRequest, error) {
+	if service.IsSeedanceEnhanceTask(task) {
+		return nil, fmt.Errorf("enhanced video content requires the final artifact store")
+	}
 	if !a.hasHook(context.Background(), "buildContentRequest") {
 		return nil, nil
 	}
@@ -1201,7 +1224,10 @@ func (a *TaskAdaptor) buildSubmit(c *gin.Context, info *relaycommon.RelayInfo) (
 		return a.submit, nil
 	}
 	started := time.Now()
-	value, err := a.plugin.Engine.Call(c.Request.Context(), "buildSubmitRequest", a.submitContext(c, info))
+	value, err := a.buildSeedanceEnhanceSubmit(c, info)
+	if err == nil && value == nil {
+		value, err = a.plugin.Engine.Call(c.Request.Context(), "buildSubmitRequest", a.submitContext(c, info))
+	}
 	if err != nil {
 		logger.LogDebug(
 			c,

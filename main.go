@@ -158,6 +158,13 @@ func main() {
 	controller.RegisterScheduledSystemTasks()
 	service.StartSystemTaskRunner()
 
+	// Read-only structure check of the log indexes the organization invoice
+	// relies on: reports reversed-column drift instead of silently running on
+	// a degraded access path. Repair stays a dedicated maintenance step.
+	for _, warning := range model.CheckOrganizationLogIndexDrift() {
+		common.SysError(warning)
+	}
+
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
 		common.BatchUpdateEnabled = true
 		common.SysLog("batch update enabled with interval " + strconv.Itoa(common.BatchUpdateInterval) + "s")

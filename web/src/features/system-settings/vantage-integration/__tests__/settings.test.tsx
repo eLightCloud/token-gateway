@@ -40,6 +40,15 @@ import type {
   VantageIntegrationUpdate,
 } from '../api'
 
+const { verify } = vi.hoisted(() => ({ verify: vi.fn() }))
+vi.mock('@/features/auth/secure-verification', () => ({
+  SecureVerificationDialog: () => null,
+  useSecureVerification: () => ({
+    requestVerification: verify,
+    dialogProps: {},
+  }),
+}))
+
 let settings: VantageIntegrationSettings
 let queryClient: QueryClient
 
@@ -73,6 +82,7 @@ async function renderSettings() {
 }
 
 beforeEach(() => {
+  verify.mockResolvedValue({ proof_token: 'vantage-settings-proof' })
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -147,11 +157,15 @@ describe('Vantage integration operations settings', () => {
       within(confirmation).getByRole('button', { name: 'Save Changes' })
     )
     await waitFor(() =>
-      expect(api.put).toHaveBeenCalledWith('/api/option/vantage_integration', {
-        enabled: true,
-        allowed_ipv4: ['10.0.0.9', '10.0.0.10'],
-        secret: '',
-      })
+      expect(api.put).toHaveBeenCalledWith(
+        '/api/option/vantage_integration',
+        {
+          enabled: true,
+          allowed_ipv4: ['10.0.0.9', '10.0.0.10'],
+          secret: '',
+        },
+        { headers: { 'X-Security-Proof': 'vantage-settings-proof' } }
+      )
     )
     await waitFor(() =>
       expect(toast.success).toHaveBeenCalledWith(
@@ -213,11 +227,15 @@ describe('Vantage integration operations settings', () => {
     expect(
       screen.getByText('An application secret is configured.', { exact: false })
     ).toBeVisible()
-    expect(api.put).toHaveBeenCalledWith('/api/option/vantage_integration', {
-      enabled: true,
-      allowed_ipv4: ['10.0.0.8'],
-      secret: generated,
-    })
+    expect(api.put).toHaveBeenCalledWith(
+      '/api/option/vantage_integration',
+      {
+        enabled: true,
+        allowed_ipv4: ['10.0.0.8'],
+        secret: generated,
+      },
+      { headers: { 'X-Security-Proof': 'vantage-settings-proof' } }
+    )
   })
 
   it('keeps the draft and reports failure when saving fails', async () => {
@@ -285,6 +303,25 @@ describe('Vantage integration operations settings', () => {
         'The application secret must contain at least 32 bytes.'
       )
     ).toBeVisible()
+    expect(api.put).not.toHaveBeenCalled()
+  })
+  it('does not save when security verification is cancelled', async () => {
+    verify.mockResolvedValueOnce(null)
+    const user = userEvent.setup()
+    await renderSettings()
+    const allowlist = await screen.findByLabelText('IPv4 Source Allowlist')
+    await user.clear(allowlist)
+    await user.type(allowlist, '10.0.0.9')
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+    const confirmation = await screen.findByRole('alertdialog')
+    await user.click(
+      within(confirmation).getByRole('button', { name: 'Save Changes' })
+    )
+    await waitFor(() =>
+      expect(verify).toHaveBeenCalledWith({
+        scope: 'vantage.integration.settings.write',
+      })
+    )
     expect(api.put).not.toHaveBeenCalled()
   })
 })

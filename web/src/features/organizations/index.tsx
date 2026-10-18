@@ -40,6 +40,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -82,7 +83,6 @@ import {
 import { searchUsers } from '@/features/users/api'
 import { USER_ROLE } from '@/features/users/constants'
 import type { User } from '@/features/users/types'
-import { ROLE } from '@/lib/roles'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import {
   formatBillingAmountFromQuota,
@@ -91,35 +91,21 @@ import {
   formatTimestampToDate,
   stringToColor,
 } from '@/lib/format'
+import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
   addAdminOrganizationMember,
   addCurrentOrganizationMember,
-  buildAdminOrganizationExportUrl,
   buildAdminOrganizationLogsExportUrl,
-  buildOrganizationExportUrl,
   buildOrganizationLogsExportUrl,
   downloadOrganizationExport,
   createAdminOrganization,
   getAdminOrganization,
-  getAdminOrganizationBillingFilterOptions,
-  getAdminOrganizationBillingChannels,
-  getAdminOrganizationBillingLogs,
-  getAdminOrganizationBillingMembers,
-  getAdminOrganizationBillingModels,
-  getAdminOrganizationBillingSummary,
-  getAdminOrganizationBillingTrend,
   getAdminOrganizationMembers,
   getAdminOrganizations,
   getCurrentOrganizationMembers,
-  getOrganizationBillingChannels,
-  getOrganizationBillingFilterOptions,
-  getOrganizationBillingLogs,
-  getOrganizationBillingModels,
-  getOrganizationBillingSummary,
-  getOrganizationBillingTrend,
   getOrganizationSelf,
   organizationKeys,
   removeAdminOrganizationMember,
@@ -134,13 +120,15 @@ import {
   updateAdminOrganizationMemberBillingStart,
 } from './api'
 import {
-  beijingDateBoundaryToUnix,
   formatTimestampInBeijingTime,
   unixTimestampToBeijingDateInput,
 } from './beijing-time'
 import { canViewOrganizationBillingChannels } from './billing-visibility'
 import { OrganizationDiscountPanel } from './discount-panel'
+import { FilterDraftNotice } from './filter-draft-notice'
 import { OrganizationInvoicePanel } from './invoice'
+import { OrganizationRecalculateButton } from './organization-recalculate-button'
+import { OrganizationUsageBuildNotice } from './organization-usage-build-notice'
 import {
   ORGANIZATION_STATUS_DISABLED,
   ORGANIZATION_STATUS_ENABLED,
@@ -154,9 +142,15 @@ import {
   type OrganizationStatus,
   type OrganizationSummary,
   type OrganizationTrendRow,
-  type OrganizationUsageParams,
-  type OrganizationUsageRow,
 } from './types'
+import { UsageDateRangeFields } from './usage-date-range'
+import {
+  buildUsageSnapshotExportUrl,
+  type OrganizationUsageLogItem,
+  type OrganizationUsageSnapshot,
+} from './usage-snapshot-api'
+import { useOrganizationUsageQuery } from './use-organization-usage-query'
+import { dateToUnix, type useUsageFilters } from './use-usage-filters'
 
 const ROLE_OPTIONS: OrganizationRole[] = ['admin', 'member']
 type OrganizationDetailTab =
@@ -456,10 +450,20 @@ function AccessDeniedState() {
   )
 }
 
-function LoadingBlock({ label }: { label: string }) {
+function LoadingBlock({
+  label,
+  visibleLabel = false,
+}: {
+  label: string
+  visibleLabel?: boolean
+}) {
   return (
     <div className='space-y-4 p-4 sm:p-6' role='status' aria-live='polite'>
-      <span className='sr-only'>{label}</span>
+      <span
+        className={visibleLabel ? 'text-muted-foreground text-sm' : 'sr-only'}
+      >
+        {label}
+      </span>
       <div className='flex items-center justify-between gap-4'>
         <div className='space-y-2'>
           <Skeleton className='h-7 w-48' />
@@ -488,65 +492,31 @@ function useOrganizationContext() {
   })
 }
 
-function dateToUnix(value: string) {
-  return beijingDateBoundaryToUnix(value, false)
-}
-
-function unixEndOfDate(value: string) {
-  return beijingDateBoundaryToUnix(value, true)
-}
-
-function useUsageFilters() {
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
-  const [userId, setUserId] = useState('')
-  const [modelName, setModelName] = useState('')
-  const [channelId, setChannelId] = useState('')
-  const [page, setPage] = useState(1)
-
-  const params = useMemo<OrganizationUsageParams>(
-    () => ({
-      start_timestamp: dateToUnix(startDate),
-      end_timestamp: unixEndOfDate(endDate),
-      user_id: userId ? Number(userId) : undefined,
-      model_name: modelName || undefined,
-      channel: channelId ? Number(channelId) : undefined,
-      p: page,
-      page_size: 20,
-    }),
-    [channelId, endDate, modelName, page, startDate, userId]
-  )
-
-  return {
-    startDate,
-    setStartDate,
-    endDate,
-    setEndDate,
-    userId,
-    setUserId,
-    modelName,
-    setModelName,
-    channelId,
-    setChannelId,
-    page,
-    setPage,
-    params,
-  }
-}
-
-function UsageFilters({
+export function UsageFilters({
   filters,
   options,
+  optionsLoading,
+  optionsError,
   onRefresh,
+  onRetry,
+  hasChanges,
+  isRefreshing,
   onExport,
+  recalculateAction,
   exportHint,
   showMemberFilter,
   showChannelFilter,
 }: {
   filters: ReturnType<typeof useUsageFilters>
   options?: OrganizationBillingFilterOptions
+  optionsLoading?: boolean
+  optionsError?: Error | null
   onRefresh: () => void
+  onRetry?: () => void
+  hasChanges?: boolean
+  isRefreshing?: boolean
   onExport?: () => void
+  recalculateAction?: React.ReactNode
   exportHint?: string
   showMemberFilter: boolean
   showChannelFilter: boolean
@@ -579,7 +549,12 @@ function UsageFilters({
   let exportControl: React.ReactNode = null
   if (onExport) {
     exportControl = (
-      <Button variant='outline' size='sm' onClick={onExport}>
+      <Button
+        variant='outline'
+        size='sm'
+        onClick={onExport}
+        disabled={!filters.isDateRangeValid || hasChanges || isRefreshing}
+      >
         <Download />
         {t('Export')}
       </Button>
@@ -591,7 +566,14 @@ function UsageFilters({
         <Tooltip>
           <TooltipTrigger
             render={
-              <Button variant='outline' size='sm' onClick={onExport}>
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={onExport}
+                disabled={
+                  !filters.isDateRangeValid || hasChanges || isRefreshing
+                }
+              >
                 <Download />
                 {t('Export')}
               </Button>
@@ -607,43 +589,44 @@ function UsageFilters({
       <div className='text-muted-foreground mb-3 text-xs font-medium tracking-wide'>
         {t('Filters')}
       </div>
+      {optionsError ? (
+        <ErrorState
+          description={optionsError.message}
+          onRetry={onRetry ?? onRefresh}
+        />
+      ) : null}
       <div className='grid items-end gap-3 sm:grid-cols-2 lg:grid-cols-[repeat(5,minmax(0,1fr))_auto]'>
-        <FieldLabel label={`${t('Start date')} (${t('Beijing Time')})`}>
-          <Input
-            type='date'
-            value={filters.startDate}
-            onChange={(event) => {
-              filters.setStartDate(event.target.value)
-              filters.setPage(1)
-            }}
-          />
-        </FieldLabel>
-        <FieldLabel label={`${t('End date')} (${t('Beijing Time')})`}>
-          <Input
-            type='date'
-            value={filters.endDate}
-            onChange={(event) => {
-              filters.setEndDate(event.target.value)
-              filters.setPage(1)
-            }}
-          />
-        </FieldLabel>
+        <UsageDateRangeFields range={filters} />
         {showMemberFilter ? (
           <FieldLabel label={t('User')}>
             <NativeSelect
               className='w-full'
               value={filters.userId}
+              disabled={optionsLoading}
               onChange={(event) => {
                 filters.setUserId(event.target.value)
-                filters.setPage(1)
               }}
             >
-              <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
+              {optionsLoading ? (
+                <NativeSelectOption value=''>
+                  {t('Preparing usage statistics...')}
+                </NativeSelectOption>
+              ) : (
+                <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
+              )}
               {memberOptions.map((row) => (
                 <NativeSelectOption key={row.user_id} value={row.user_id}>
                   {row.username || `${t('User')} #${row.user_id}`}
                 </NativeSelectOption>
               ))}
+              {filters.userId &&
+              !memberOptions.some(
+                (row) => String(row.user_id) === filters.userId
+              ) ? (
+                <NativeSelectOption value={filters.userId}>
+                  {t('User')} #{filters.userId}
+                </NativeSelectOption>
+              ) : null}
             </NativeSelect>
           </FieldLabel>
         ) : null}
@@ -651,17 +634,31 @@ function UsageFilters({
           <NativeSelect
             className='w-full'
             value={filters.modelName}
+            disabled={optionsLoading}
             onChange={(event) => {
               filters.setModelName(event.target.value)
-              filters.setPage(1)
             }}
           >
-            <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
+            {optionsLoading ? (
+              <NativeSelectOption value=''>
+                {t('Preparing usage statistics...')}
+              </NativeSelectOption>
+            ) : (
+              <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
+            )}
             {modelOptions.map((row) => (
               <NativeSelectOption key={row.model_name} value={row.model_name}>
                 {row.model_name}
               </NativeSelectOption>
             ))}
+            {filters.modelName &&
+            !modelOptions.some(
+              (row) => row.model_name === filters.modelName
+            ) ? (
+              <NativeSelectOption value={filters.modelName}>
+                {filters.modelName}
+              </NativeSelectOption>
+            ) : null}
           </NativeSelect>
         </FieldLabel>
         {showChannelFilter ? (
@@ -669,28 +666,50 @@ function UsageFilters({
             <NativeSelect
               className='w-full'
               value={filters.channelId}
+              disabled={optionsLoading}
               onChange={(event) => {
                 filters.setChannelId(event.target.value)
-                filters.setPage(1)
               }}
             >
-              <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
+              {optionsLoading ? (
+                <NativeSelectOption value=''>
+                  {t('Preparing usage statistics...')}
+                </NativeSelectOption>
+              ) : (
+                <NativeSelectOption value=''>{t('All')}</NativeSelectOption>
+              )}
               {channelOptions.map((row) => (
                 <NativeSelectOption key={row.channel_id} value={row.channel_id}>
                   {row.channel_name || `${t('Channel')} ${row.channel_id}`}
                 </NativeSelectOption>
               ))}
+              {filters.channelId &&
+              !channelOptions.some(
+                (row) => String(row.channel_id) === filters.channelId
+              ) ? (
+                <NativeSelectOption value={filters.channelId}>
+                  {t('Channel')} #{filters.channelId}
+                </NativeSelectOption>
+              ) : null}
             </NativeSelect>
           </FieldLabel>
         ) : null}
         <div className='flex gap-2'>
-          <Button variant='outline' size='sm' onClick={onRefresh}>
+          <Button
+            variant='outline'
+            size='sm'
+            onClick={onRefresh}
+            disabled={!filters.isDateRangeValid || isRefreshing}
+            aria-busy={isRefreshing}
+          >
             <RefreshCw />
-            {t('Refresh')}
+            {t('Query')}
           </Button>
+          {recalculateAction}
           {exportControl}
         </div>
       </div>
+      <FilterDraftNotice visible={Boolean(hasChanges)} />
     </section>
   )
 }
@@ -943,8 +962,131 @@ function TrendTable({ rows }: { rows?: OrganizationTrendRow[] }) {
   )
 }
 
-function LogsTable({ rows }: { rows?: OrganizationUsageRow[] }) {
+export function UsageSnapshotStatePanels(props: {
+  snapshot?: OrganizationUsageSnapshot
+  isLoading: boolean
+  error?: Error | null
+  onRefresh: () => void
+}) {
   const { t } = useTranslation()
+  const snapshot = props.snapshot
+  const payload = snapshot?.payload
+  let notice = null
+  if (props.error) {
+    notice = (
+      <ErrorState description={props.error.message} onRetry={props.onRefresh} />
+    )
+  } else if (props.isLoading && !snapshot) {
+    notice = (
+      <LoadingBlock label={t('Loading usage statistics...')} visibleLabel />
+    )
+  } else if (snapshot?.status === 'building') {
+    notice = (
+      <OrganizationUsageBuildNotice
+        sliceDone={snapshot.slice_done}
+        sliceTotal={snapshot.slice_total}
+        coveredUntil={payload?.covered_until}
+      />
+    )
+  } else if (snapshot?.status === 'failed') {
+    notice = (
+      <ErrorState
+        title={t('Usage statistics failed')}
+        description={snapshot.error}
+        onRetry={props.onRefresh}
+      />
+    )
+  } else if (snapshot?.status === 'queued' || snapshot?.status === 'paused') {
+    notice = (
+      <div className='text-muted-foreground text-sm'>
+        {snapshot.queue_reason || t('Usage statistics are queued.')}
+      </div>
+    )
+  } else if (!payload) {
+    notice = (
+      <ErrorState
+        title={t('Usage statistics failed')}
+        onRetry={props.onRefresh}
+      />
+    )
+  }
+  if (!payload) return <Panel title={t('Usage statistics')}>{notice}</Panel>
+  return (
+    <div className='space-y-4'>
+      {notice}
+      {snapshot?.status !== 'ready' || props.error ? (
+        <div className='text-muted-foreground flex items-center gap-2 text-sm'>
+          <Badge variant='secondary'>{t('Previous results')}</Badge>
+          {t('Showing the last published generation for this range.')}
+        </div>
+      ) : null}
+      <SummaryGrid summary={payload} />
+      <div className='grid gap-4 xl:grid-cols-2'>
+        <Panel title={t('Usage trend')}>
+          <TrendTable rows={payload.trend} />
+        </Panel>
+        <Panel title={t('Members')}>
+          <DimensionTable
+            rows={payload.members}
+            nameLabel={t('Member')}
+            totalQuota={payload.total_quota}
+          />
+        </Panel>
+        <Panel title={t('Model usage')}>
+          <DimensionTable
+            rows={payload.models}
+            nameLabel={t('Model')}
+            totalQuota={payload.total_quota}
+            showPricing
+          />
+          {payload.models_truncated ? <DimensionTruncatedHint /> : null}
+        </Panel>
+        <Panel title={t('Channel usage')}>
+          <DimensionTable
+            rows={payload.channels}
+            nameLabel={t('Channel')}
+            totalQuota={payload.total_quota}
+          />
+          {payload.channels_truncated ? <DimensionTruncatedHint /> : null}
+        </Panel>
+      </div>
+      <div className='text-muted-foreground text-xs'>
+        {t('Coverage through')}
+        {': '}
+        {formatTimestampInBeijingTime(payload.covered_until)}
+      </div>
+    </div>
+  )
+}
+
+function DimensionTruncatedHint() {
+  const { t } = useTranslation()
+  return (
+    <div className='text-muted-foreground mt-2 text-xs'>
+      {t(
+        'List truncated to the top rows by consumption; totals stay complete.'
+      )}
+    </div>
+  )
+}
+
+function UsageLogCursorTable(props: {
+  rows?: OrganizationUsageLogItem[]
+  options?: OrganizationBillingFilterOptions
+}) {
+  const { t } = useTranslation()
+  const memberNames = useMemo(() => {
+    const names = new Map<number, string>()
+    for (const member of props.options?.members ?? []) {
+      if (member.user_id != null) {
+        names.set(
+          member.user_id,
+          member.display_name || member.username || `${member.user_id}`
+        )
+      }
+    }
+    return names
+  }, [props.options])
   return (
     <Table>
       <TableHeader>
@@ -960,18 +1102,17 @@ function LogsTable({ rows }: { rows?: OrganizationUsageRow[] }) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {(rows ?? []).map((row, index) => (
-          <TableRow key={`${row.id ?? index}-${row.created_at ?? ''}`}>
+        {(props.rows ?? []).map((row) => (
+          <TableRow key={row.id}>
             <TableCell>
               {formatTimestampInBeijingTime(row.created_at)}
             </TableCell>
             <TableCell>
-              {row.username ||
-                (row.user_id != null ? `${t('User')} #${row.user_id}` : '-')}
+              {memberNames.get(row.user_id) || `${t('User')} #${row.user_id}`}
             </TableCell>
             <TableCell>{row.model_name || '-'}</TableCell>
             <TableCell className='text-right whitespace-nowrap tabular-nums'>
-              {formatBillingAmountFromQuota(row.quota ?? 0)}
+              {formatBillingAmountFromQuota(row.quota)}
             </TableCell>
             <TableCell className='text-right whitespace-nowrap tabular-nums'>
               {formatNumber(row.prompt_tokens)}
@@ -981,9 +1122,39 @@ function LogsTable({ rows }: { rows?: OrganizationUsageRow[] }) {
             </TableCell>
           </TableRow>
         ))}
-        {!rows?.length ? <EmptyTableRow colSpan={6} /> : null}
+        {!props.rows?.length ? <EmptyTableRow colSpan={6} /> : null}
       </TableBody>
     </Table>
+  )
+}
+
+function CursorPager(props: {
+  hasMore: boolean
+  canGoBack: boolean
+  isFetching: boolean
+  onPrev: () => void
+  onNext: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className='flex items-center justify-end gap-3 pt-3'>
+      <Button
+        variant='outline'
+        size='sm'
+        disabled={!props.canGoBack || props.isFetching}
+        onClick={props.onPrev}
+      >
+        {t('Previous')}
+      </Button>
+      <Button
+        variant='outline'
+        size='sm'
+        disabled={!props.hasMore || props.isFetching}
+        onClick={props.onNext}
+      >
+        {t('Next')}
+      </Button>
+    </div>
   )
 }
 
@@ -1543,50 +1714,26 @@ function MembersTable({
 export function OrganizationUsagePage() {
   const { t } = useTranslation()
   const contextQuery = useOrganizationContext()
-  const filters = useUsageFilters()
   const self = contextQuery.data?.data
   const role = self?.member.role
-  const enabled = Boolean(self && canViewBilling(role))
+  const usage = useOrganizationUsageQuery({
+    organizationId: self?.organization.id,
+    mode: 'billing',
+    enabled: Boolean(self && canViewBilling(role)),
+  })
+  const {
+    filters,
+    directoryOptions,
+    directoryLoading,
+    directoryError,
+    usageSnapshotQuery,
+  } = usage
   const canViewChannels = canViewOrganizationBillingChannels(role)
-
-  const filterOptionsQuery = useQuery({
-    queryKey: organizationKeys.filterOptions(canViewChannels),
-    queryFn: () => getOrganizationBillingFilterOptions(canViewChannels),
-    enabled,
-  })
-
-  const summaryQuery = useQuery({
-    queryKey: organizationKeys.summary(filters.params),
-    queryFn: () => getOrganizationBillingSummary(filters.params),
-    enabled,
-  })
-  const trendQuery = useQuery({
-    queryKey: organizationKeys.trend(filters.params),
-    queryFn: () => getOrganizationBillingTrend(filters.params),
-    enabled,
-  })
-  const modelsQuery = useQuery({
-    queryKey: organizationKeys.models(filters.params),
-    queryFn: () => getOrganizationBillingModels(filters.params),
-    enabled,
-  })
-  const channelsQuery = useQuery({
-    queryKey: organizationKeys.channels(filters.params),
-    queryFn: () => getOrganizationBillingChannels(filters.params),
-    enabled: enabled && canViewChannels,
-  })
+  const usageSnapshot = usageSnapshotQuery.data?.data
 
   if (contextQuery.isLoading) return <LoadingBlock label={t('Loading...')} />
   if (!self) return <OrganizationEmptyState />
   if (!canViewBilling(role)) return <AccessDeniedState />
-
-  const refresh = () => {
-    void filterOptionsQuery.refetch()
-    void summaryQuery.refetch()
-    void trendQuery.refetch()
-    void modelsQuery.refetch()
-    if (canViewChannels) void channelsQuery.refetch()
-  }
 
   return (
     <SectionPageLayout>
@@ -1603,40 +1750,52 @@ export function OrganizationUsagePage() {
         <div className='space-y-4'>
           <UsageFilters
             filters={filters}
-            options={filterOptionsQuery.data?.data}
+            options={directoryOptions}
+            optionsLoading={directoryLoading}
+            optionsError={directoryError}
             showMemberFilter={role === 'admin'}
             showChannelFilter={canViewChannels}
-            onRefresh={refresh}
-            exportHint={t('Export includes raw log content and request IDs')}
-            onExport={() => {
-              void downloadOrganizationExport(
-                buildOrganizationExportUrl(filters.params)
-              )
-            }}
-          />
-          <SummaryGrid summary={summaryQuery.data?.data} />
-          <div className='grid gap-4 xl:grid-cols-2'>
-            <Panel title={t('Usage trend')}>
-              <TrendTable rows={trendQuery.data?.data} />
-            </Panel>
-            <Panel title={t('Model usage')}>
-              <DimensionTable
-                rows={modelsQuery.data?.data}
-                nameLabel={t('Model')}
-                totalQuota={summaryQuery.data?.data?.total_quota}
-                showPricing
+            onRefresh={usage.refresh}
+            onRetry={usage.retry}
+            hasChanges={usage.hasChanges}
+            isRefreshing={usage.isRefreshing}
+            recalculateAction={
+              <OrganizationRecalculateButton
+                kind='usage'
+                coveredUntil={usageSnapshot?.range_end}
+                organizationId={self?.organization.id}
+                scope={`${filters.startDate} – ${filters.endDate}`}
+                filters={filters}
+                pending={usage.isRecalculating}
+                disabled={
+                  usage.hasChanges ||
+                  usage.isRefreshing ||
+                  !usageSnapshot?.snapshot_id ||
+                  usageSnapshot.status === 'building'
+                }
+                onConfirm={usage.recalculate}
               />
-            </Panel>
-            {canViewChannels ? (
-              <Panel title={t('Channel usage')}>
-                <DimensionTable
-                  rows={channelsQuery.data?.data}
-                  nameLabel={t('Channel')}
-                  totalQuota={summaryQuery.data?.data?.total_quota}
-                />
-              </Panel>
-            ) : null}
-          </div>
+            }
+            exportHint={t('Usage statistics')}
+            onExport={
+              usageSnapshot?.payload
+                ? () => {
+                    void downloadOrganizationExport(
+                      buildUsageSnapshotExportUrl(
+                        usage.appliedParams,
+                        usageSnapshot
+                      )
+                    )
+                  }
+                : undefined
+            }
+          />
+          <UsageSnapshotStatePanels
+            snapshot={usageSnapshotQuery.data?.data}
+            isLoading={usageSnapshotQuery.isLoading}
+            error={usageSnapshotQuery.error}
+            onRefresh={usage.retry}
+          />
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>
@@ -1814,28 +1973,29 @@ export function OrganizationMembersPage() {
 export function OrganizationLogsPage() {
   const { t } = useTranslation()
   const contextQuery = useOrganizationContext()
-  const filters = useUsageFilters()
   const self = contextQuery.data?.data
   const role = self?.member.role
-  const enabled = Boolean(self && canViewBilling(role))
-
-  const filterOptionsQuery = useQuery({
-    queryKey: organizationKeys.filterOptions(false),
-    queryFn: () => getOrganizationBillingFilterOptions(false),
-    enabled,
+  const usage = useOrganizationUsageQuery({
+    organizationId: self?.organization.id,
+    mode: 'logs',
+    enabled: Boolean(self && canViewBilling(role)),
   })
-
-  const logsQuery = useQuery({
-    queryKey: organizationKeys.logs(filters.params),
-    queryFn: () => getOrganizationBillingLogs(filters.params),
-    enabled,
-  })
+  const {
+    filters,
+    directoryOptions,
+    directoryLoading,
+    directoryError,
+    logsQuery,
+    logsParams,
+    logsCursorStack,
+    setLogsCursorStack,
+  } = usage
 
   if (contextQuery.isLoading) return <LoadingBlock label={t('Loading...')} />
   if (!self) return <OrganizationEmptyState />
   if (!canViewBilling(role)) return <AccessDeniedState />
 
-  const pageData = logsQuery.data?.data
+  const logsData = logsQuery.data?.data
 
   return (
     <SectionPageLayout>
@@ -1847,26 +2007,54 @@ export function OrganizationLogsPage() {
         <div className='space-y-4'>
           <UsageFilters
             filters={filters}
-            options={filterOptionsQuery.data?.data}
+            options={directoryOptions}
+            optionsLoading={directoryLoading}
+            optionsError={directoryError}
             showMemberFilter={role === 'admin'}
             showChannelFilter={false}
-            onRefresh={() => {
-              void filterOptionsQuery.refetch()
-              void logsQuery.refetch()
-            }}
-            onExport={() => {
-              void downloadOrganizationExport(
-                buildOrganizationLogsExportUrl(filters.params)
-              )
-            }}
+            onRefresh={usage.refresh}
+            onRetry={usage.retry}
+            hasChanges={usage.hasChanges}
+            isRefreshing={usage.isRefreshing}
+            onExport={
+              logsData
+                ? () => {
+                    void downloadOrganizationExport(
+                      buildOrganizationLogsExportUrl({
+                        ...logsParams,
+                        start_timestamp: logsData.range_start,
+                        end_timestamp: logsData.range_end - 1,
+                      })
+                    )
+                  }
+                : undefined
+            }
           />
           <Panel title={t('Billing logs')}>
-            <LogsTable rows={pageData?.items} />
-            <Pager
-              page={pageData?.page ?? filters.page}
-              total={pageData?.total ?? 0}
-              pageSize={pageData?.page_size ?? 20}
-              onPageChange={filters.setPage}
+            {logsQuery.error ? (
+              <ErrorState
+                description={logsQuery.error.message}
+                onRetry={usage.retry}
+              />
+            ) : (
+              <UsageLogCursorTable
+                rows={logsData?.items}
+                options={directoryOptions}
+              />
+            )}
+            <CursorPager
+              hasMore={logsData?.has_more ?? false}
+              canGoBack={logsCursorStack.length > 0}
+              isFetching={logsQuery.isFetching || logsQuery.isError}
+              onPrev={() => setLogsCursorStack((stack) => stack.slice(0, -1))}
+              onNext={() => {
+                if (logsData?.next_cursor) {
+                  setLogsCursorStack((stack) => [
+                    ...stack,
+                    logsData.next_cursor as string,
+                  ])
+                }
+              }}
             />
           </Panel>
         </div>
@@ -2064,7 +2252,11 @@ export function AdminOrganizationsPage() {
   )
 }
 
-export function AdminOrganizationDetailPage({ id }: { id: number }) {
+export function AdminOrganizationDetailPage(props: { id: number }) {
+  return <AdminOrganizationDetailView key={props.id} id={props.id} />
+}
+
+function AdminOrganizationDetailView({ id }: { id: number }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   // 组织折扣是 Root 专属能力：普通 Admin 不显示折扣页签（后端同样返回 403）。
@@ -2072,6 +2264,7 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
     (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
   )
   const [tab, setTab] = useState<OrganizationDetailTab>('members')
+  const [invoiceVisited, setInvoiceVisited] = useState(false)
   const [memberDialogOpen, setMemberDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
@@ -2079,17 +2272,31 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
     useState<OrganizationMember | null>(null)
   const [adjustingMember, setAdjustingMember] =
     useState<OrganizationMember | null>(null)
-  const filters = useUsageFilters()
-  const logsParams = useMemo<OrganizationUsageParams>(
-    () => ({ ...filters.params, channel: undefined }),
-    [filters.params]
-  )
-
-  const filterOptionsQuery = useQuery({
-    queryKey: organizationKeys.adminFilterOptions(id),
-    queryFn: () => getAdminOrganizationBillingFilterOptions(id),
-    enabled: tab === 'billing' || tab === 'logs',
+  const billingUsage = useOrganizationUsageQuery({
+    organizationId: id,
+    admin: true,
+    mode: 'billing',
+    enabled: tab === 'billing',
   })
+  const logUsage = useOrganizationUsageQuery({
+    organizationId: id,
+    admin: true,
+    mode: 'logs',
+    enabled: tab === 'logs',
+  })
+  const usage = tab === 'logs' ? logUsage : billingUsage
+  const {
+    filters,
+    directoryError,
+    directoryOptions,
+    directoryLoading,
+    logsParams,
+    logsCursorStack,
+    setLogsCursorStack,
+  } = usage
+  const usageSnapshotQuery = billingUsage.usageSnapshotQuery
+  const logsQuery = logUsage.logsQuery
+  const usageSnapshot = usageSnapshotQuery.data?.data
 
   const organizationQuery = useQuery({
     queryKey: organizationKeys.adminDetail(id),
@@ -2099,37 +2306,6 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
     queryKey: organizationKeys.adminMembers(id, showHistory),
     queryFn: () => getAdminOrganizationMembers(id, showHistory),
   })
-  const summaryQuery = useQuery({
-    queryKey: organizationKeys.adminSummary(id, filters.params),
-    queryFn: () => getAdminOrganizationBillingSummary(id, filters.params),
-    enabled: tab === 'billing',
-  })
-  const billingTrendQuery = useQuery({
-    queryKey: organizationKeys.adminBillingTrend(id, filters.params),
-    queryFn: () => getAdminOrganizationBillingTrend(id, filters.params),
-    enabled: tab === 'billing',
-  })
-  const billingMembersQuery = useQuery({
-    queryKey: organizationKeys.adminBillingMembers(id, filters.params),
-    queryFn: () => getAdminOrganizationBillingMembers(id, filters.params),
-    enabled: tab === 'billing',
-  })
-  const billingModelsQuery = useQuery({
-    queryKey: organizationKeys.adminBillingModels(id, filters.params),
-    queryFn: () => getAdminOrganizationBillingModels(id, filters.params),
-    enabled: tab === 'billing',
-  })
-  const billingChannelsQuery = useQuery({
-    queryKey: organizationKeys.adminBillingChannels(id, filters.params),
-    queryFn: () => getAdminOrganizationBillingChannels(id, filters.params),
-    enabled: tab === 'billing',
-  })
-  const logsQuery = useQuery({
-    queryKey: organizationKeys.adminLogs(id, logsParams),
-    queryFn: () => getAdminOrganizationBillingLogs(id, logsParams),
-    enabled: tab === 'logs',
-  })
-
   const invalidate = () => {
     void queryClient.invalidateQueries({
       queryKey: ['admin', 'organizations', id],
@@ -2225,7 +2401,10 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
         </div>
         <Tabs
           value={tab}
-          onValueChange={(value) => setTab(value as OrganizationDetailTab)}
+          onValueChange={(value) => {
+            setTab(value as OrganizationDetailTab)
+            if (value === 'invoice') setInvoiceVisited(true)
+          }}
           className='gap-0'
         >
           <TabsList
@@ -2300,81 +2479,115 @@ export function AdminOrganizationDetailPage({ id }: { id: number }) {
         <div className='space-y-4'>
           <UsageFilters
             filters={filters}
-            options={filterOptionsQuery.data?.data}
+            options={directoryOptions}
+            optionsLoading={directoryLoading}
+            optionsError={directoryError}
             showMemberFilter
             showChannelFilter
-            onRefresh={() => {
-              void filterOptionsQuery.refetch()
-              void summaryQuery.refetch()
-              void billingTrendQuery.refetch()
-              void billingMembersQuery.refetch()
-              void billingModelsQuery.refetch()
-              void billingChannelsQuery.refetch()
-            }}
-            exportHint={t('Export includes raw log content and request IDs')}
-            onExport={() => {
-              void downloadOrganizationExport(
-                buildAdminOrganizationExportUrl(id, filters.params)
-              )
-            }}
+            onRefresh={usage.refresh}
+            onRetry={usage.retry}
+            hasChanges={usage.hasChanges}
+            isRefreshing={usage.isRefreshing}
+            recalculateAction={
+              <OrganizationRecalculateButton
+                kind='usage'
+                coveredUntil={usageSnapshot?.range_end}
+                organizationId={id}
+                scope={`${filters.startDate} – ${filters.endDate}`}
+                filters={filters}
+                pending={usage.isRecalculating}
+                disabled={
+                  usage.hasChanges ||
+                  usage.isRefreshing ||
+                  !usageSnapshot?.snapshot_id ||
+                  usageSnapshot.status === 'building'
+                }
+                onConfirm={usage.recalculate}
+              />
+            }
+            exportHint={t('Usage statistics')}
+            onExport={
+              usageSnapshot?.payload
+                ? () => {
+                    void downloadOrganizationExport(
+                      buildUsageSnapshotExportUrl(
+                        usage.appliedParams,
+                        usageSnapshot,
+                        id
+                      )
+                    )
+                  }
+                : undefined
+            }
           />
-          <SummaryGrid summary={summaryQuery.data?.data} />
-          <div className='grid gap-4 xl:grid-cols-2'>
-            <Panel title={t('Usage trend')}>
-              <TrendTable rows={billingTrendQuery.data?.data} />
-            </Panel>
-            <Panel title={t('Members')}>
-              <DimensionTable
-                rows={billingMembersQuery.data?.data}
-                nameLabel={t('Member')}
-                totalQuota={summaryQuery.data?.data?.total_quota}
-              />
-            </Panel>
-            <Panel title={t('Model usage')}>
-              <DimensionTable
-                rows={billingModelsQuery.data?.data}
-                nameLabel={t('Model')}
-                totalQuota={summaryQuery.data?.data?.total_quota}
-                showPricing
-              />
-            </Panel>
-            <Panel title={t('Channel usage')}>
-              <DimensionTable
-                rows={billingChannelsQuery.data?.data}
-                nameLabel={t('Channel')}
-                totalQuota={summaryQuery.data?.data?.total_quota}
-              />
-            </Panel>
-          </div>
+          <UsageSnapshotStatePanels
+            snapshot={usageSnapshotQuery.data?.data}
+            isLoading={usageSnapshotQuery.isLoading}
+            error={usageSnapshotQuery.error}
+            onRefresh={usage.retry}
+          />
         </div>
       ) : null}
-      {tab === 'invoice' ? (
-        <OrganizationInvoicePanel organizationId={id} />
+      {invoiceVisited ? (
+        <div hidden={tab !== 'invoice'}>
+          <OrganizationInvoicePanel
+            organizationId={id}
+            enabled={tab === 'invoice'}
+          />
+        </div>
       ) : null}
       {tab === 'logs' ? (
         <div className='space-y-4'>
           <UsageFilters
             filters={filters}
-            options={filterOptionsQuery.data?.data}
+            options={directoryOptions}
+            optionsLoading={directoryLoading}
+            optionsError={directoryError}
             showMemberFilter
             showChannelFilter={false}
-            onRefresh={() => {
-              void filterOptionsQuery.refetch()
-              void logsQuery.refetch()
-            }}
-            onExport={() => {
-              void downloadOrganizationExport(
-                buildAdminOrganizationLogsExportUrl(id, logsParams)
-              )
-            }}
+            onRefresh={usage.refresh}
+            onRetry={usage.retry}
+            hasChanges={usage.hasChanges}
+            isRefreshing={usage.isRefreshing}
+            onExport={
+              logsData
+                ? () => {
+                    void downloadOrganizationExport(
+                      buildAdminOrganizationLogsExportUrl(id, {
+                        ...logsParams,
+                        start_timestamp: logsData.range_start,
+                        end_timestamp: logsData.range_end - 1,
+                      })
+                    )
+                  }
+                : undefined
+            }
           />
           <Panel title={t('Billing logs')}>
-            <LogsTable rows={logsData?.items} />
-            <Pager
-              page={logsData?.page ?? filters.page}
-              total={logsData?.total ?? 0}
-              pageSize={logsData?.page_size ?? 20}
-              onPageChange={filters.setPage}
+            {logsQuery.error ? (
+              <ErrorState
+                description={logsQuery.error.message}
+                onRetry={usage.retry}
+              />
+            ) : (
+              <UsageLogCursorTable
+                rows={logsData?.items}
+                options={directoryOptions}
+              />
+            )}
+            <CursorPager
+              hasMore={logsData?.has_more ?? false}
+              canGoBack={logsCursorStack.length > 0}
+              isFetching={logsQuery.isFetching || logsQuery.isError}
+              onPrev={() => setLogsCursorStack((stack) => stack.slice(0, -1))}
+              onNext={() => {
+                if (logsData?.next_cursor) {
+                  setLogsCursorStack((stack) => [
+                    ...stack,
+                    logsData.next_cursor as string,
+                  ])
+                }
+              }}
             />
           </Panel>
         </div>

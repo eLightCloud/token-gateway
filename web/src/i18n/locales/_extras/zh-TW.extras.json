@@ -1,0 +1,7 @@
+{
+  "translation.DoubaoVideo": "DoubaoVideo",
+  "translation.Pass request body directly to upstream": "將請求體直接傳遞給上游",
+  "translation.Single .js file, up to 1 MiB. Its source is shown below before upload.": "單一 .js 檔案，最大 1 MiB。上傳前會在下方顯示其原始碼。",
+  "translation.Plugin source exceeds the 1 MiB limit.": "外掛原始碼超過 1 MiB 上限。",
+  "translation.Selecting a plugin fills its declared models.": "選擇外掛後將自動填入其宣告的模型。"
+}

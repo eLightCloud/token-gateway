@@ -1,10 +1,10 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -26,21 +26,6 @@ type LegacyUserQuotaAdjustmentCandidate struct {
 	AlreadyApplied bool   `json:"already_applied"`
 }
 
-type legacyQuotaAuditPayload struct {
-	AdminInfo struct {
-		AdminId int `json:"admin_id"`
-	} `json:"admin_info"`
-	Op struct {
-		Action string `json:"action"`
-		Params struct {
-			TargetUserId int    `json:"target_user_id"`
-			Quota        string `json:"quota"`
-			QuotaValue   *int64 `json:"quota_value"`
-			AdjustmentId int    `json:"adjustment_id"`
-		} `json:"params"`
-	} `json:"op"`
-}
-
 const legacyQuotaAddContentPrefix = "管理员增加用户额度 "
 
 func PreviewLegacyUserQuotaAdjustments(
@@ -58,125 +43,18 @@ func previewLegacyUserQuotaAdjustments(
 	scopes []organizationInvoiceAccountScope,
 	period OrganizationInvoicePeriod,
 ) ([]LegacyUserQuotaAdjustmentCandidate, error) {
-	scopeByUser := organizationInvoiceAccountScopeMap(scopes)
-	if len(scopeByUser) == 0 {
-		return []LegacyUserQuotaAdjustmentCandidate{}, nil
-	}
-	if LOG_DB == nil {
-		return nil, errors.New("log database is not initialized")
-	}
-
-	var logs []Log
-	if err := LOG_DB.Model(&Log{}).
-		Select("id", "user_id", "created_at", "content", "other").
-		Where("type = ?", LogTypeManage).
-		Where("created_at >= ? AND created_at <= ?", period.StartTimestamp, period.EndTimestamp).
-		Where("other LIKE ? OR content LIKE ?", `%"action":"user.quota_add"%`, legacyQuotaAddContentPrefix+"%").
-		Order("created_at asc, id asc").
-		Find(&logs).Error; err != nil {
-		return nil, err
-	}
-
-	sourceLogIds := make([]int64, 0, len(logs))
-	for _, log := range logs {
-		sourceLogIds = append(sourceLogIds, int64(log.Id))
-	}
-	var existing []UserQuotaAdjustmentLegacyFact
-	if len(sourceLogIds) > 0 && DB.Migrator().HasTable(&UserQuotaAdjustmentLegacyFact{}) {
-		if err := DB.Select("source_log_id").Where("source_log_id IN ?", sourceLogIds).Find(&existing).Error; err != nil {
-			return nil, err
-		}
-	}
-	applied := make(map[int64]struct{}, len(existing))
-	for _, fact := range existing {
-		applied[fact.SourceLogId] = struct{}{}
-	}
-
-	userIds := make([]int, 0, len(scopeByUser))
-	for userId := range scopeByUser {
-		userIds = append(userIds, userId)
-	}
-	var users []User
-	if err := DB.Select("id", "username").Where("id IN ?", userIds).Find(&users).Error; err != nil {
-		return nil, err
-	}
-	usernames := make(map[int]string, len(users))
-	for _, user := range users {
-		usernames[user.Id] = user.Username
-	}
-
-	candidates := make([]LegacyUserQuotaAdjustmentCandidate, 0, len(logs))
-	for _, log := range logs {
-		var payload legacyQuotaAuditPayload
-		if err := common.UnmarshalJsonStr(log.Other, &payload); err != nil {
-			return nil, fmt.Errorf("invalid legacy quota audit log %d: %w", log.Id, err)
-		}
-		targetUserId := payload.Op.Params.TargetUserId
-		quotaText := payload.Op.Params.Quota
-		switch {
-		case payload.Op.Action == "user.quota_add":
-			if payload.Op.Params.AdjustmentId > 0 || payload.Op.Params.QuotaValue != nil {
-				continue
-			}
-		case payload.Op.Action == "" && strings.HasPrefix(log.Content, legacyQuotaAddContentPrefix):
-			targetUserId = log.UserId
-			quotaText = strings.TrimSpace(strings.TrimPrefix(log.Content, legacyQuotaAddContentPrefix))
-		default:
-			continue
-		}
-		scope, exists := scopeByUser[targetUserId]
-		if !exists || !organizationInvoiceFinancialFactInScope(scope, period, log.CreatedAt) {
-			continue
-		}
-		amount, deltaQuota, err := parseLegacyQuotaAuditAmount(quotaText)
-		if err != nil {
-			return nil, fmt.Errorf("invalid legacy quota audit log %d: %w", log.Id, err)
-		}
-		_, alreadyApplied := applied[int64(log.Id)]
-		candidates = append(candidates, LegacyUserQuotaAdjustmentCandidate{
-			SourceLogId:    int64(log.Id),
-			UserId:         targetUserId,
-			Username:       OrganizationBillingUsername(usernames[targetUserId], targetUserId),
-			OperatorUserId: payload.AdminInfo.AdminId,
-			DeltaQuota:     deltaQuota,
-			AmountUSD:      amount.StringFixed(6),
-			CreatedAt:      log.CreatedAt,
-			AlreadyApplied: alreadyApplied,
-		})
-	}
-	return candidates, nil
+	return previewLegacyUserQuotaAdjustmentsWithContext(context.Background(), scopes, period)
 }
 
 func parseLegacyQuotaAuditAmount(value string) (decimal.Decimal, int64, error) {
-	normalized := strings.TrimSpace(value)
-	switch {
-	case strings.HasPrefix(normalized, "＄"):
-		normalized = strings.TrimSpace(strings.TrimPrefix(normalized, "＄"))
-	case strings.HasPrefix(normalized, "$"):
-		normalized = strings.TrimSpace(strings.TrimPrefix(normalized, "$"))
-	default:
-		return decimal.Zero, 0, errors.New("legacy quota amount has no USD prefix")
-	}
-	if !strings.HasSuffix(normalized, "额度") {
-		return decimal.Zero, 0, errors.New("legacy quota amount has no quota suffix")
-	}
-	normalized = strings.TrimSpace(strings.TrimSuffix(normalized, "额度"))
-	if !legacyQuotaAmountPattern.MatchString(normalized) {
-		return decimal.Zero, 0, errors.New("legacy quota amount is not a plain positive decimal")
-	}
-	amount, err := decimal.NewFromString(normalized)
-	if err != nil || !amount.IsPositive() {
-		return decimal.Zero, 0, errors.New("legacy quota amount is not positive")
-	}
-	deltaQuota, err := common.QuotaBalanceFromDecimalStrict(
-		amount.Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-		1,
-		common.MaxWalletQuota,
-	)
+	amount, quota, err := parseLegacyQuotaAuditBalance(value)
 	if err != nil {
 		return decimal.Zero, 0, err
 	}
-	return amount, deltaQuota, nil
+	if !amount.IsPositive() || quota <= 0 {
+		return decimal.Zero, 0, errors.New("legacy quota amount is not positive")
+	}
+	return amount, quota, nil
 }
 
 func ApplyLegacyUserQuotaAdjustmentsForOrganization(
@@ -228,8 +106,9 @@ func applyLegacyUserQuotaAdjustments(
 		return 0, errors.New("invalid legacy quota adjustment verifier")
 	}
 	facts := make([]UserQuotaAdjustmentLegacyFact, 0, len(candidates))
+	maxDelta := common.MaxWalletQuota - common.MinWalletQuota
 	for _, candidate := range candidates {
-		if candidate.SourceLogId <= 0 || candidate.UserId <= 0 || candidate.OperatorUserId <= 0 || candidate.DeltaQuota <= 0 || candidate.CreatedAt <= 0 {
+		if candidate.SourceLogId <= 0 || candidate.UserId <= 0 || candidate.OperatorUserId <= 0 || candidate.DeltaQuota == 0 || candidate.DeltaQuota > maxDelta || candidate.DeltaQuota < -maxDelta || candidate.CreatedAt <= 0 {
 			return 0, fmt.Errorf("invalid legacy quota adjustment candidate for source log %d", candidate.SourceLogId)
 		}
 		facts = append(facts, UserQuotaAdjustmentLegacyFact{

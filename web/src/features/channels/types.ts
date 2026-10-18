@@ -91,6 +91,7 @@ export interface ChannelSettings {
   system_prompt_override?: boolean
   http_protocol?: 'auto' | 'http1' | string
   http2_connection_shards?: number
+  video_enhance?: { enabled: boolean; supplier: '' | 'volcengine' | 'runyyitd' }
   video_upstream_protocol?: 'ark' | 'openai_video' | string
   video_upstream_profile?:
     | 'standard'

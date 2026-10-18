@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -344,15 +345,17 @@ func TestGetOrganizationInvoiceGroupsNewCategoriesAndAppliesMonthlyRule(t *testi
 	assert.EqualValues(t, []string{"text-embedding-3-large", "text-embedding-v4"}, categoryByKey["vector"].Models)
 	assert.EqualValues(t, "向量", categoryByKey["vector"].CategoryName)
 
-	options, err := GetOrganizationSettlementRuleOptions(organizationId, 202607)
+	require.NoError(t, PrepareOrganizationInvoiceModelSetsNow(context.Background(), organizationId))
+	options, discovery, err := GetOrganizationSettlementRuleOptions(context.Background(), organizationId, 202607)
 	require.NoError(t, err)
+	assert.Equal(t, OrganizationInvoiceDiscoveryReady, discovery.Status)
 	require.Len(t, options, 3)
 	for _, option := range options {
 		assert.EqualValues(t, "1.0000", option.Factor)
 		assert.True(t, option.Inherited)
 	}
 
-	updated, err := UpdateOrganizationSettlementRule(organizationId, "glm", 202607, 10400, 0)
+	updated, err := UpdateOrganizationSettlementRule(context.Background(), organizationId, "glm", 202607, 10400, 0)
 	require.NoError(t, err)
 	assert.True(t, updated.Changed)
 
@@ -405,21 +408,22 @@ func TestGetOrganizationInvoiceRejectsNegativeConsumeQuota(t *testing.T) {
 func TestUpdateOrganizationSettlementRuleUsesVersionCASAndIdempotence(t *testing.T) {
 	setupOrganizationTestState(t)
 	organizationId := createOrganizationInvoiceTestFixture(t)
+	require.NoError(t, PrepareOrganizationInvoiceModelSetsNow(context.Background(), organizationId))
 	period, err := NewOrganizationInvoicePeriod("2026-07-01", "2026-07-31", time.Now())
 	require.NoError(t, err)
-	summary, claimed, err := prepareOrganizationInvoiceSummary(organizationId, period, false, period.EndTimestamp+1)
+	summary, claimed, err := RegisterOrganizationInvoiceSummary(organizationId, period, false, period.EndTimestamp+1)
 	require.NoError(t, err)
 	require.True(t, claimed)
-	require.NoError(t, CompleteOrganizationInvoiceSummary(summary, &OrganizationInvoice{
+	require.NoError(t, CompleteOrganizationInvoiceSummaryWithMetrics(summary, &OrganizationInvoice{
 		GenerationStatus: OrganizationInvoiceGenerationStatusReady,
 		Period:           period,
 		Currency:         "USD",
 		Accounts:         []OrganizationInvoiceAccount{},
 		CategoryRows:     []OrganizationInvoiceCategoryRow{},
 		ModelRows:        []OrganizationInvoiceModelRow{},
-	}))
+	}, ""))
 
-	created, err := UpdateOrganizationSettlementRule(organizationId, "gpt", 202607, 9000, 0)
+	created, err := UpdateOrganizationSettlementRule(context.Background(), organizationId, "gpt", 202607, 9000, 0)
 	require.NoError(t, err)
 	assert.True(t, created.Changed)
 	assert.EqualValues(t, 1, created.Rule.Version)
@@ -427,22 +431,24 @@ func TestUpdateOrganizationSettlementRuleUsesVersionCASAndIdempotence(t *testing
 	require.NoError(t, DB.First(&invalidated, summary.Id).Error)
 	assert.EqualValues(t, OrganizationInvoiceSummaryStatusInvalidated, invalidated.Status)
 
-	idempotent, err := UpdateOrganizationSettlementRule(organizationId, "gpt", 202607, 9000, 0)
+	idempotent, err := UpdateOrganizationSettlementRule(context.Background(), organizationId, "gpt", 202607, 9000, 0)
 	require.NoError(t, err)
 	assert.False(t, idempotent.Changed)
 	assert.EqualValues(t, 1, idempotent.Rule.Version)
 
-	_, err = UpdateOrganizationSettlementRule(organizationId, "gpt", 202607, 8000, 0)
+	_, err = UpdateOrganizationSettlementRule(context.Background(), organizationId, "gpt", 202607, 8000, 0)
 	var conflict *OrganizationSettlementVersionConflictError
 	require.ErrorAs(t, err, &conflict)
 	assert.EqualValues(t, 1, conflict.Actual)
 
-	updated, err := UpdateOrganizationSettlementRule(organizationId, "gpt", 202607, 8000, 1)
+	updated, err := UpdateOrganizationSettlementRule(context.Background(), organizationId, "gpt", 202607, 8000, 1)
 	require.NoError(t, err)
 	assert.True(t, updated.Changed)
 	assert.EqualValues(t, 2, updated.Rule.Version)
 
-	options, err := GetOrganizationSettlementRuleOptions(organizationId, 202608)
+	options, discovery, err := GetOrganizationSettlementRuleOptions(context.Background(), organizationId, 202608)
+	require.NoError(t, err)
+	assert.Equal(t, OrganizationInvoiceDiscoveryReady, discovery.Status)
 	require.NoError(t, err)
 	require.NotEmpty(t, options)
 	var gptOption OrganizationSettlementRuleOption
@@ -461,6 +467,7 @@ func TestUpdateOrganizationSettlementRuleUsesVersionCASAndIdempotence(t *testing
 func TestUpdateOrganizationSettlementRuleSerializesConcurrentFirstWrite(t *testing.T) {
 	setupOrganizationTestState(t)
 	organizationId := createOrganizationInvoiceTestFixture(t)
+	require.NoError(t, PrepareOrganizationInvoiceModelSetsNow(context.Background(), organizationId))
 
 	type updateResult struct {
 		result *OrganizationSettlementRuleUpdateResult
@@ -475,6 +482,7 @@ func TestUpdateOrganizationSettlementRuleSerializesConcurrentFirstWrite(t *testi
 			defer waitGroup.Done()
 			<-start
 			result, err := UpdateOrganizationSettlementRule(
+				context.Background(),
 				organizationId,
 				"gpt",
 				202607,

@@ -9,6 +9,8 @@ import (
 )
 
 func TestOrganizationInvoiceSummaryClaimPublishReuseAndRefresh(t *testing.T) {
+	setupOrganizationTestState(t)
+	require.NoError(t, DB.Create(&Organization{Id: 901, Name: "summary org", Status: OrganizationStatusEnabled}).Error)
 	require.NoError(t, DB.AutoMigrate(&OrganizationInvoicePeriodSummary{}))
 	require.NoError(t, DB.Where("organization_id = ?", 901).Delete(&OrganizationInvoicePeriodSummary{}).Error)
 	t.Cleanup(func() {
@@ -19,16 +21,17 @@ func TestOrganizationInvoiceSummaryClaimPublishReuseAndRefresh(t *testing.T) {
 	require.NoError(t, err)
 	now := period.EndTimestamp + 60
 
-	first, claimed, err := prepareOrganizationInvoiceSummary(901, period, false, now)
+	first, needsBuild, err := RegisterOrganizationInvoiceSummary(901, period, false, now)
 	require.NoError(t, err)
-	assert.True(t, claimed)
+	assert.True(t, needsBuild)
 	assert.EqualValues(t, OrganizationInvoiceSummaryStatusBuilding, first.Status)
+	assert.Equal(t, OrganizationInvoiceStagePending, first.Stage)
 	assert.EqualValues(t, 1, first.Revision)
 	assert.True(t, first.Finalized)
 
-	duplicate, claimed, err := prepareOrganizationInvoiceSummary(901, period, false, now+1)
+	duplicate, needsBuild, err := RegisterOrganizationInvoiceSummary(901, period, false, now+1)
 	require.NoError(t, err)
-	assert.False(t, claimed)
+	assert.True(t, needsBuild)
 	assert.EqualValues(t, first.Id, duplicate.Id)
 	assert.EqualValues(t, first.Revision, duplicate.Revision)
 
@@ -43,22 +46,27 @@ func TestOrganizationInvoiceSummaryClaimPublishReuseAndRefresh(t *testing.T) {
 		CategoryRows:       []OrganizationInvoiceCategoryRow{},
 		ModelRows:          []OrganizationInvoiceModelRow{},
 	}
-	require.NoError(t, CompleteOrganizationInvoiceSummary(first, invoice))
+	require.NoError(t, CompleteOrganizationInvoiceSummaryWithMetrics(first, invoice, ""))
 
-	ready, claimed, err := prepareOrganizationInvoiceSummary(901, period, false, now+2)
+	ready, needsBuild, err := RegisterOrganizationInvoiceSummary(901, period, false, now+2)
 	require.NoError(t, err)
-	assert.False(t, claimed)
+	assert.False(t, needsBuild)
 	assert.EqualValues(t, OrganizationInvoiceSummaryStatusReady, ready.Status)
-	decoded, err := DecodeOrganizationInvoiceSummary(ready)
+	assert.Empty(t, ready.Payload, "registration returns metadata without loading the invoice matrix")
+	loaded, err := LookupOrganizationInvoiceSummary(901, period, true)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	decoded, err := DecodeOrganizationInvoiceSummary(*loaded)
 	require.NoError(t, err)
 	assert.EqualValues(t, invoice, decoded)
 
-	refreshed, claimed, err := prepareOrganizationInvoiceSummary(901, period, true, now+3)
+	refreshed, needsBuild, err := RegisterOrganizationInvoiceSummary(901, period, true, now+3)
 	require.NoError(t, err)
-	assert.True(t, claimed)
+	assert.True(t, needsBuild)
 	assert.EqualValues(t, OrganizationInvoiceSummaryStatusBuilding, refreshed.Status)
 	assert.EqualValues(t, 2, refreshed.Revision)
 	assert.Empty(t, refreshed.Payload)
+	assert.Equal(t, OrganizationInvoiceStagePending, refreshed.Stage)
 }
 
 func TestOrganizationInvoiceSummaryDoesNotReusePreviousCalculationVersion(t *testing.T) {
@@ -83,14 +91,14 @@ func TestOrganizationInvoiceSummaryDoesNotReusePreviousCalculationVersion(t *tes
 		Payload:            []byte(`{"generation_status":"ready"}`),
 	}).Error)
 
-	summary, claimed, err := prepareOrganizationInvoiceSummary(
+	summary, needsBuild, err := RegisterOrganizationInvoiceSummary(
 		organizationId,
 		period,
 		false,
 		period.EndTimestamp+1,
 	)
 	require.NoError(t, err)
-	assert.True(t, claimed)
+	assert.True(t, needsBuild)
 	assert.EqualValues(t, OrganizationInvoiceSummaryCalculationVersion, summary.CalculationVersion)
 	assert.EqualValues(t, OrganizationInvoiceSummaryStatusBuilding, summary.Status)
 
@@ -101,7 +109,9 @@ func TestOrganizationInvoiceSummaryDoesNotReusePreviousCalculationVersion(t *tes
 	assert.EqualValues(t, int64(2), count)
 }
 
-func TestOrganizationInvoiceSummaryReclaimsStaleBuild(t *testing.T) {
+// A stale-looking building row belongs to the persistent worker: requests must
+// not bump its revision, because that would orphan resumable shard progress.
+func TestOrganizationInvoiceSummaryRegistrationLeavesBuildingRowsToWorker(t *testing.T) {
 	require.NoError(t, DB.AutoMigrate(&OrganizationInvoicePeriodSummary{}))
 	require.NoError(t, DB.Where("organization_id = ?", 902).Delete(&OrganizationInvoicePeriodSummary{}).Error)
 	t.Cleanup(func() {
@@ -110,18 +120,24 @@ func TestOrganizationInvoiceSummaryReclaimsStaleBuild(t *testing.T) {
 
 	period, err := NewOrganizationInvoicePeriod("2026-08-01", "2026-08-31", time.Now())
 	require.NoError(t, err)
-	first, claimed, err := prepareOrganizationInvoiceSummary(902, period, false, period.EndTimestamp+1)
+	first, needsBuild, err := RegisterOrganizationInvoiceSummary(902, period, false, period.EndTimestamp+1)
 	require.NoError(t, err)
-	require.True(t, claimed)
+	require.True(t, needsBuild)
+	first.UpdatedAt -= int64(organizationInvoiceSummaryStaleAfter/time.Second) + 10
+	require.NoError(t, DB.Model(&OrganizationInvoicePeriodSummary{}).
+		Where("id = ?", first.Id).
+		Update("updated_at", first.UpdatedAt).Error)
 
-	staleAt := first.UpdatedAt + int64(organizationInvoiceSummaryStaleAfter/time.Second)
-	reclaimed, claimed, err := prepareOrganizationInvoiceSummary(902, period, false, staleAt)
+	stale, needsBuild, err := RegisterOrganizationInvoiceSummary(902, period, false, first.UpdatedAt+int64(organizationInvoiceSummaryStaleAfter/time.Second))
 	require.NoError(t, err)
-	assert.True(t, claimed)
-	assert.EqualValues(t, first.Revision+1, reclaimed.Revision)
+	assert.True(t, needsBuild)
+	assert.EqualValues(t, OrganizationInvoiceSummaryStatusBuilding, stale.Status)
+	assert.EqualValues(t, first.Revision, stale.Revision)
 }
 
 func TestOrganizationInvoiceSummaryRebuildsOpenResultAfterPeriodCloses(t *testing.T) {
+	setupOrganizationTestState(t)
+	require.NoError(t, DB.Create(&Organization{Id: 903, Name: "summary org", Status: OrganizationStatusEnabled}).Error)
 	require.NoError(t, DB.AutoMigrate(&OrganizationInvoicePeriodSummary{}))
 	require.NoError(t, DB.Where("organization_id = ?", 903).Delete(&OrganizationInvoicePeriodSummary{}).Error)
 	t.Cleanup(func() {
@@ -131,22 +147,22 @@ func TestOrganizationInvoiceSummaryRebuildsOpenResultAfterPeriodCloses(t *testin
 	period, err := NewOrganizationInvoicePeriod("2026-08-01", "2026-08-31", time.Now())
 	require.NoError(t, err)
 	openNow := period.EndTimestamp - 60
-	openSummary, claimed, err := prepareOrganizationInvoiceSummary(903, period, false, openNow)
+	openSummary, needsBuild, err := RegisterOrganizationInvoiceSummary(903, period, false, openNow)
 	require.NoError(t, err)
-	require.True(t, claimed)
+	require.True(t, needsBuild)
 	assert.False(t, openSummary.Finalized)
-	require.NoError(t, CompleteOrganizationInvoiceSummary(openSummary, &OrganizationInvoice{
+	require.NoError(t, CompleteOrganizationInvoiceSummaryWithMetrics(openSummary, &OrganizationInvoice{
 		GenerationStatus: OrganizationInvoiceGenerationStatusReady,
 		Period:           period,
 		Currency:         "USD",
 		Accounts:         []OrganizationInvoiceAccount{},
 		CategoryRows:     []OrganizationInvoiceCategoryRow{},
 		ModelRows:        []OrganizationInvoiceModelRow{},
-	}))
+	}, ""))
 
-	finalSummary, claimed, err := prepareOrganizationInvoiceSummary(903, period, false, period.EndTimestamp+1)
+	finalSummary, needsBuild, err := RegisterOrganizationInvoiceSummary(903, period, false, period.EndTimestamp+1)
 	require.NoError(t, err)
-	assert.True(t, claimed)
+	assert.True(t, needsBuild)
 	assert.True(t, finalSummary.Finalized)
 	assert.EqualValues(t, openSummary.Revision+1, finalSummary.Revision)
 }
@@ -161,23 +177,50 @@ func TestOrganizationInvoiceSummaryFailureUsesBackoffAndExplicitRefresh(t *testi
 	period, err := NewOrganizationInvoicePeriod("2026-08-01", "2026-08-31", time.Now())
 	require.NoError(t, err)
 	now := time.Now().Unix()
-	summary, claimed, err := prepareOrganizationInvoiceSummary(904, period, false, now)
+	summary, needsBuild, err := RegisterOrganizationInvoiceSummary(904, period, false, now)
 	require.NoError(t, err)
-	require.True(t, claimed)
+	require.True(t, needsBuild)
 	require.NoError(t, FailOrganizationInvoiceSummary(summary, assert.AnError))
 
-	failed, claimed, err := prepareOrganizationInvoiceSummary(904, period, false, now+1)
+	failed, needsBuild, err := RegisterOrganizationInvoiceSummary(904, period, false, now+1)
 	require.NoError(t, err)
-	assert.False(t, claimed)
+	assert.False(t, needsBuild)
 	assert.EqualValues(t, OrganizationInvoiceSummaryStatusFailed, failed.Status)
+	assert.Equal(t, OrganizationInvoiceFailureKindTransient, failed.FailureKind)
 
-	refreshed, claimed, err := prepareOrganizationInvoiceSummary(904, period, true, now+2)
+	// Transient failures become eligible again after the backoff window.
+	retried, needsBuild, err := RegisterOrganizationInvoiceSummary(
+		904,
+		period,
+		false,
+		now+int64(organizationInvoiceSummaryFailureBackoff/time.Second)+1,
+	)
 	require.NoError(t, err)
-	assert.True(t, claimed)
-	assert.EqualValues(t, summary.Revision+1, refreshed.Revision)
+	assert.True(t, needsBuild)
+	assert.EqualValues(t, OrganizationInvoiceSummaryStatusBuilding, retried.Status)
+
+	require.NoError(t, FailOrganizationInvoiceSummary(retried, NewOrganizationInvoiceDataError(assert.AnError)))
+	dataFailed, needsBuild, err := RegisterOrganizationInvoiceSummary(
+		904,
+		period,
+		false,
+		now+int64(organizationInvoiceSummaryFailureBackoff/time.Second)*3,
+	)
+	require.NoError(t, err)
+	assert.False(t, needsBuild)
+	assert.EqualValues(t, OrganizationInvoiceSummaryStatusFailed, dataFailed.Status)
+	assert.Equal(t, OrganizationInvoiceFailureKindData, dataFailed.FailureKind)
+
+	refreshed, needsBuild, err := RegisterOrganizationInvoiceSummary(904, period, true, now+int64(organizationInvoiceSummaryFailureBackoff/time.Second)*4)
+	require.NoError(t, err)
+	assert.True(t, needsBuild)
+	assert.EqualValues(t, OrganizationInvoiceSummaryStatusBuilding, refreshed.Status)
+	assert.EqualValues(t, retried.Revision+1, refreshed.Revision)
 }
 
 func TestInvalidateOrganizationInvoicePeriodsInvalidatesEveryRequestedPeriod(t *testing.T) {
+	setupOrganizationTestState(t)
+	require.NoError(t, DB.Create(&Organization{Id: 905, Name: "summary org", Status: OrganizationStatusEnabled}).Error)
 	require.NoError(t, DB.AutoMigrate(&OrganizationInvoicePeriodSummary{}))
 	const organizationId = 905
 	require.NoError(t, DB.Where("organization_id = ?", organizationId).Delete(&OrganizationInvoicePeriodSummary{}).Error)
@@ -190,17 +233,17 @@ func TestInvalidateOrganizationInvoicePeriodsInvalidatesEveryRequestedPeriod(t *
 		period, err := NewOrganizationInvoicePeriod(dates[0], dates[1], time.Now())
 		require.NoError(t, err)
 		periods = append(periods, period)
-		summary, claimed, err := prepareOrganizationInvoiceSummary(organizationId, period, false, period.EndTimestamp+1)
+		summary, needsBuild, err := RegisterOrganizationInvoiceSummary(organizationId, period, false, period.EndTimestamp+1)
 		require.NoError(t, err)
-		require.True(t, claimed)
-		require.NoError(t, CompleteOrganizationInvoiceSummary(summary, &OrganizationInvoice{
+		require.True(t, needsBuild)
+		require.NoError(t, CompleteOrganizationInvoiceSummaryWithMetrics(summary, &OrganizationInvoice{
 			GenerationStatus: OrganizationInvoiceGenerationStatusReady,
 			Period:           period,
 			Currency:         "USD",
 			Accounts:         []OrganizationInvoiceAccount{},
 			CategoryRows:     []OrganizationInvoiceCategoryRow{},
 			ModelRows:        []OrganizationInvoiceModelRow{},
-		}))
+		}, ""))
 	}
 
 	require.NoError(t, InvalidateOrganizationInvoicePeriods(organizationId, periods))
@@ -210,5 +253,14 @@ func TestInvalidateOrganizationInvoicePeriodsInvalidatesEveryRequestedPeriod(t *
 	for _, summary := range summaries {
 		assert.EqualValues(t, OrganizationInvoiceSummaryStatusInvalidated, summary.Status)
 		assert.Empty(t, summary.Payload)
+	}
+
+	// Invalidation always starts a new generation on the next registration.
+	for _, period := range periods {
+		reclaimed, needsBuild, err := RegisterOrganizationInvoiceSummary(organizationId, period, false, period.EndTimestamp+100)
+		require.NoError(t, err)
+		assert.True(t, needsBuild)
+		assert.EqualValues(t, OrganizationInvoiceSummaryStatusBuilding, reclaimed.Status)
+		assert.EqualValues(t, 2, reclaimed.Revision)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 
@@ -17,15 +18,34 @@ import (
 
 // StageTaskUsageReconciliation runs before the terminal status CAS, so a crash
 // between persistence and settlement cannot orphan a successful video charge.
-func StageTaskUsageReconciliation(task *model.Task, result *relaycommon.TaskInfo) {
+func StageTaskUsageReconciliation(task *model.Task, result *relaycommon.TaskInfo, adaptors ...TaskPollingAdaptor) {
 	if task.Status != model.TaskStatusSuccess || result.Status != string(model.TaskStatusSuccess) {
 		return
 	}
-	if _, tracked := result.UsageFacts[UsagePendingFact]; !tracked {
-		return
+	state := &model.TaskUsageReconciliation{ReservedQuota: task.Quota, Facts: result.UsageFacts}
+	bc := task.PrivateData.BillingContext
+	if bc == nil || bc.TieredSnapshot == nil && !bc.PerCallBilling {
+		if len(adaptors) > 0 {
+			if actual := adaptors[0].AdjustBillingOnComplete(task, result); actual > 0 {
+				state.ActualQuota = &actual
+			}
+			state.Facts = result.UsageFacts
+		}
+		if _, tracked := result.UsageFacts[UsagePendingFact]; !tracked && state.ActualQuota == nil {
+			tokens := result.TotalTokens
+			if tokens == 0 {
+				tokens = result.CompletionTokens
+			}
+			if tokens <= 0 {
+				return
+			}
+			state.Facts = make(map[string]any, len(result.UsageFacts)+1)
+			maps.Copy(state.Facts, result.UsageFacts)
+			state.Facts["tokens"] = tokens
+		}
 	}
 	task.UsagePending = true
-	task.PrivateData.UsageReconciliation = &model.TaskUsageReconciliation{ReservedQuota: task.Quota, Facts: result.UsageFacts}
+	task.PrivateData.UsageReconciliation = state
 }
 
 func settleReconciledTaskUsage(ctx context.Context, task *model.Task) bool {
@@ -45,7 +65,12 @@ func settleReconciledTaskUsage(ctx context.Context, task *model.Task) bool {
 	// Preserve the reservation across a crash after journal commit but before
 	// queue acknowledgement. Every retry must use the same expected/final quota.
 	task.Quota = state.ReservedQuota
-	if bc != nil && bc.TieredSnapshot != nil {
+	if state.ActualQuota != nil {
+		if !RecalculateTaskQuota(ctx, task, *state.ActualQuota, "adaptor计费调整") {
+			_ = model.PersistTaskUsage(task, false)
+			return false
+		}
+	} else if bc != nil && bc.TieredSnapshot != nil {
 		result, facts, err := EvaluateTaskCompletionUsage(bc.TieredSnapshot, state.Facts)
 		if err != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("usage reconciliation task=%s: %v", task.TaskID, err))
@@ -63,7 +88,12 @@ func settleReconciledTaskUsage(ctx context.Context, task *model.Task) bool {
 			_ = model.PersistTaskUsage(task, false)
 			return false
 		}
-	} else if bc == nil || !bc.PerCallBilling {
+	} else if bc != nil && bc.PerCallBilling {
+		if !RecalculateTaskQuota(ctx, task, state.ReservedQuota, "任务按次费用确认") {
+			_ = model.PersistTaskUsage(task, false)
+			return false
+		}
+	} else {
 		// Older token-priced tasks keep the existing settlement path. Decode via
 		// the host codec so both JS integers and persisted JSON numbers are accepted.
 		encoded, err := common.Marshal(state.Facts["tokens"])
@@ -146,6 +176,9 @@ func RunTaskUsageReconciliationOnce(ctx context.Context) {
 		}
 		// Persist measured evidence before any money movement.
 		state.Facts = result.UsageFacts
+		// Fetch may have admitted an additional delivery reservation. Its quota
+		// is already paid; final confirmation must not describe it as a new charge.
+		state.ReservedQuota = task.Quota
 		task.Data = redactVideoResponseBody(body)
 		if len(result.PluginState) > 0 {
 			task.PrivateData.PluginState = result.PluginState

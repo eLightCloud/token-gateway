@@ -135,7 +135,7 @@ func TestGetOrganizationInvoiceExportFinancialsFiltersAndAlignsAccounts(t *testi
 
 	scopes, err := getOrganizationInvoiceAccountScopes(100, period)
 	require.NoError(t, err)
-	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, scopes, period)
+	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, scopes, period, nil)
 	require.NoError(t, err)
 	assert.EqualValues(t, "103.7500000000", financials[10].PaymentTopUpAmountUSD)
 	assert.EqualValues(t, "7.0000000000", financials[10].AdminIncreaseAmountUSD)
@@ -157,7 +157,7 @@ func TestGetOrganizationInvoiceExportFinancialsRejectsMissingAccount(t *testing.
 
 	_, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, []organizationInvoiceAccountScope{{
 		userId: 999,
-	}}, period)
+	}}, period, nil)
 	require.Error(t, err)
 }
 
@@ -184,7 +184,7 @@ func TestGetOrganizationInvoiceAccountFinancialsExcludesFactsAtAndAfterMembershi
 
 	scopes, err := getOrganizationInvoiceAccountScopes(200, period)
 	require.NoError(t, err)
-	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 200, scopes, period)
+	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 200, scopes, period, nil)
 	require.NoError(t, err)
 	assert.EqualValues(t, "30.0000000000", financials[20].PaymentTopUpAmountUSD)
 }
@@ -216,11 +216,11 @@ func TestOrganizationInvoiceFinancialFactHasSingleCrossOrganizationOwner(t *test
 
 	firstScopes, err := getOrganizationInvoiceAccountScopes(301, period)
 	require.NoError(t, err)
-	firstFinancials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 301, firstScopes, period)
+	firstFinancials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 301, firstScopes, period, nil)
 	require.NoError(t, err)
 	secondScopes, err := getOrganizationInvoiceAccountScopes(302, period)
 	require.NoError(t, err)
-	secondFinancials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 302, secondScopes, period)
+	secondFinancials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 302, secondScopes, period, nil)
 	require.NoError(t, err)
 
 	assert.EqualValues(t, "1.0000000000", firstFinancials[30].PaymentTopUpAmountUSD)
@@ -244,7 +244,7 @@ func TestOrganizationInvoiceIncludesBalanceSubscriptionAsOtherDeduction(t *testi
 
 	scopes, err := getOrganizationInvoiceAccountScopes(100, period)
 	require.NoError(t, err)
-	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, scopes, period)
+	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, scopes, period, nil)
 	require.NoError(t, err)
 	assert.EqualValues(t, "1.0000000000", financials[10].OtherDeductionAmountUSD)
 	assert.EqualValues(t, "1.0000000000", financials[10].TotalDeductionAmountUSD)
@@ -280,7 +280,7 @@ func TestOrganizationInvoiceFinancialsReconcileConfiguredZeroBaseline(t *testing
 
 	scopes, err := getOrganizationInvoiceAccountScopes(100, period)
 	require.NoError(t, err)
-	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, scopes, period)
+	financials, err := getOrganizationInvoiceAccountFinancials(context.Background(), 100, scopes, period, nil)
 	require.NoError(t, err)
 	account := financials[10]
 	assert.EqualValues(t, "0.0000000000", account.OpeningBalanceAmountUSD)
@@ -297,10 +297,10 @@ func TestOrganizationInvoiceOpeningCarriesForwardIncompleteSourceStatus(t *testi
 	configureOrganizationInvoiceTestZeroBaseline(t, 100, 202608, 10, 11)
 	august, err := NewOrganizationInvoicePeriod("2026-08-01", "2026-08-31", time.Now())
 	require.NoError(t, err)
-	summary, claimed, err := prepareOrganizationInvoiceSummary(100, august, false, august.EndTimestamp+1)
+	summary, claimed, err := RegisterOrganizationInvoiceSummary(100, august, false, august.EndTimestamp+1)
 	require.NoError(t, err)
 	require.True(t, claimed)
-	require.NoError(t, CompleteOrganizationInvoiceSummary(summary, &OrganizationInvoice{
+	require.NoError(t, CompleteOrganizationInvoiceSummaryWithMetrics(summary, &OrganizationInvoice{
 		GenerationStatus: OrganizationInvoiceGenerationStatusReady,
 		Period:           august,
 		Currency:         "USD",
@@ -313,7 +313,7 @@ func TestOrganizationInvoiceOpeningCarriesForwardIncompleteSourceStatus(t *testi
 		}},
 		CategoryRows: []OrganizationInvoiceCategoryRow{},
 		ModelRows:    []OrganizationInvoiceModelRow{},
-	}))
+	}, ""))
 	september, err := NewOrganizationInvoicePeriod("2026-09-01", "2026-09-30", time.Now())
 	require.NoError(t, err)
 	opening, complete, err := organizationInvoiceOpeningQuotas(

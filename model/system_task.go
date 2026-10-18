@@ -22,6 +22,23 @@ const (
 	SystemTaskTypeMidjourneyPoll  = "midjourney_poll"
 	SystemTaskTypeAsyncTaskPoll   = "async_task_poll"
 	SystemTaskTypeBillingRecovery = "billing_recovery"
+
+	// SystemTaskTypeOrganizationInvoiceBuild is the single global heavy
+	// organization-invoice builder: one task row of this type acts as the
+	// database lease that serializes all monthly summary builds across nodes,
+	// while the per-month work items live in the summaries table.
+	SystemTaskTypeOrganizationInvoiceBuild = "organization_invoice_build"
+	// SystemTaskTypeOrganizationInvoiceDaily registers fixed-cutoff snapshot
+	// work (month start through yesterday) for the gray-scaled organizations.
+	SystemTaskTypeOrganizationInvoiceDaily = "organization_invoice_daily"
+	// SystemTaskTypeOrganizationInvoiceModelDiscovery advances the persisted
+	// per-member model-name sets behind the settlement-rule options; the task
+	// row is the cross-node lease serializing every scan.
+	SystemTaskTypeOrganizationInvoiceModelDiscovery = "organization_invoice_model_discovery"
+	// SystemTaskTypeOrganizationUsageBuild drains pending organization usage
+	// snapshots (billing-page rollups). It shares the heavy statistics permit
+	// with the invoice builders so only one heavy scan runs per database.
+	SystemTaskTypeOrganizationUsageBuild = "organization_usage_build"
 )
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")

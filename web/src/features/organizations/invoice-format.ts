@@ -7,6 +7,7 @@ export function formatOrganizationInvoiceUSD(
   value: string,
   emptyForZero = false
 ): string {
+  if (value.trim() === '') return '—'
   const amount = Number(value)
   if (!Number.isFinite(amount)) return '-'
   if (emptyForZero && amount === 0) return '-'

@@ -25,6 +25,8 @@ export type VerificationMethod =
   | 'oauth'
   | 'session'
 export type SecurityProofScope =
+  | 'vantage.integration.settings.write'
+  | 'video.enhance.settings.write'
   | 'channel.key.read'
   | 'passkey.register'
   | 'passkey.delete'

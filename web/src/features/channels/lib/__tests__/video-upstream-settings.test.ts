@@ -18,13 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
+import type { Channel } from '../../types'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   buildSettingJSON,
   channelFormSchema,
   transformChannelToFormDefaults,
 } from '../channel-form'
-import type { Channel } from '../../types'
 
 function doubaoChannel(setting: Record<string, unknown>): Channel {
   return {

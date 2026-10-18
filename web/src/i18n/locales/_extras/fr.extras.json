@@ -1,0 +1,7 @@
+{
+  "translation.DoubaoVideo": "DoubaoVideo",
+  "translation.Pass request body directly to upstream": "Transmettre le corps de la requête directement à l'upstream",
+  "translation.Single .js file, up to 1 MiB. Its source is shown below before upload.": "Un seul fichier .js, jusqu’à 1 Mio. Sa source est affichée ci-dessous avant l’envoi.",
+  "translation.Plugin source exceeds the 1 MiB limit.": "Le code du plugin dépasse la limite de 1 Mio.",
+  "translation.Selecting a plugin fills its declared models.": "La sélection remplit les modèles déclarés."
+}

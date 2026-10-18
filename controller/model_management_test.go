@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/seedanceenhance"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -29,6 +31,104 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestSeedanceEnhanceModelLifecycleDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
+		t.Run(dialect.kind, func(t *testing.T) {
+			if dialect.env != "" && os.Getenv(dialect.env) == "" {
+				t.Skip("set " + dialect.env + " to run this database")
+			}
+			db := modelManagementDB(t, dialect.kind, os.Getenv(dialect.env))
+			require.NoError(t, db.AutoMigrate(&model.SeedanceEnhanceConfig{}))
+			t.Setenv("CRYPTO_SECRET", "seedance-routing-test-key-at-least-32-bytes")
+			_, err := model.SaveSeedanceEnhanceSettings(model.SeedanceEnhanceSettings{Enabled: true, MediaKitKey: "test-key", Region: "cn-hangzhou", Bucket: "test-bucket", AccessKeyID: "test-id", AccessKeySecret: "test-secret"})
+			require.NoError(t, err)
+			mini, fast := seedanceenhance.Models[2], seedanceenhance.Models[1]
+			miniEnhanced, fastEnhanced := mini+seedanceenhance.Suffix, fast+seedanceenhance.Suffix
+			modes, err := common.Marshal(map[string]string{miniEnhanced: "tiered_expr", fastEnhanced: "tiered_expr"})
+			require.NoError(t, err)
+			expressions, err := common.Marshal(map[string]string{miniEnhanced: `tier("seconds", u("seconds") * 0.02)`, fastEnhanced: `tier("seconds", u("seconds") * 0.02)`})
+			require.NoError(t, err)
+			config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": string(modes), "billing_expr": string(expressions)})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"data":[{"id":%q},{"id":%q}]}`, mini, fast)
+			}))
+			defer server.Close()
+			for _, cached := range []bool{false, true} {
+				t.Run(fmt.Sprintf("memory_cache_%t", cached), func(t *testing.T) {
+					common.MemoryCacheEnabled = cached
+					enabled := `{"video_enhance":{"enabled":true,"supplier":"volcengine"}}`
+					disabled := `{"video_enhance":{"enabled":false,"supplier":"volcengine"}}`
+					group := fmt.Sprintf("seedance-%t", cached)
+					ch := model.Channel{Type: constant.ChannelTypeDoubaoVideo, Name: group, Models: mini, Group: group, Key: "test-key", BaseURL: &server.URL, Status: common.ChannelStatusEnabled, Setting: &enabled}
+					require.NoError(t, ch.Insert())
+					assertModels := func(want []string) {
+						t.Helper()
+						model.InitChannelCache()
+						var abilities []string
+						require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", ch.Id).Pluck("model", &abilities).Error)
+						assert.ElementsMatch(t, want, abilities)
+						for _, name := range want {
+							selected, err := model.GetRandomSatisfiedChannel(group, name, 0, nil)
+							require.NoError(t, err)
+							require.NotNil(t, selected, name)
+							assert.Equal(t, ch.Id, selected.Id)
+						}
+						for _, name := range []string{mini, miniEnhanced, fast, fastEnhanced} {
+							if slices.Contains(want, name) {
+								continue
+							}
+							selected, err := model.GetRandomSatisfiedChannel(group, name, 0, nil)
+							require.NoError(t, err)
+							assert.Nil(t, selected, "removed capability must not remain routable: %s", name)
+						}
+					}
+					assertModels([]string{mini, miniEnhanced})
+					ch.Models = mini + "," + fast
+					require.NoError(t, ch.Update())
+					assertModels([]string{mini, miniEnhanced, fast, fastEnhanced})
+					ch.Models = mini
+					require.NoError(t, ch.Update())
+					assertModels([]string{mini, miniEnhanced})
+					ch.Setting = &disabled
+					require.NoError(t, ch.Update())
+					assertModels([]string{mini})
+					ch.Setting = &enabled
+					require.NoError(t, ch.Update())
+					settings := ch.GetOtherSettings()
+					settings.UpstreamModelUpdateAutoSyncEnabled = true
+					changed, added, err := checkAndPersistChannelUpstreamModelUpdates(&ch, &settings, true, true)
+					require.NoError(t, err)
+					assert.True(t, changed)
+					assert.Equal(t, 1, added)
+					assert.Empty(t, ch.GetOtherSettings().UpstreamModelUpdateLastRemovedModels)
+					require.NoError(t, db.First(&ch, ch.Id).Error)
+					assert.Equal(t, mini+","+fast, ch.Models, "upstream synchronization must persist only base models")
+					assertModels([]string{mini, miniEnhanced, fast, fastEnhanced})
+					settings = ch.GetOtherSettings()
+					settings.UpstreamModelUpdateLastRemovedModels = []string{fast}
+					ch.SetOtherSettings(settings)
+					_, _, _, _, changed, err = applyChannelUpstreamModelUpdates(&ch, nil, nil, []string{fast})
+					require.NoError(t, err)
+					assert.True(t, changed)
+					require.NoError(t, db.First(&ch, ch.Id).Error)
+					assert.Equal(t, mini, ch.Models)
+					assertModels([]string{mini, miniEnhanced})
+					ch.Models = mini + "," + fast
+					require.NoError(t, ch.Update())
+					metadata := model.Model{ModelName: fast, NameRule: model.NameRuleExact}
+					require.NoError(t, metadata.Insert())
+					_, err = model.DeleteModelMetadata([]int{metadata.Id}, true, false)
+					require.NoError(t, err)
+					assertModels([]string{mini, miniEnhanced})
+					require.NoError(t, db.First(&ch, ch.Id).Error)
+					assert.Equal(t, mini, ch.Models)
+				})
+			}
+		})
+	}
+}
 
 func modelManagementDB(t *testing.T, kind, dsn string) *gorm.DB {
 	t.Helper()

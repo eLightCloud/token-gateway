@@ -40,6 +40,10 @@ import {
 } from '@/components/ui/form'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import {
@@ -84,6 +88,7 @@ function VantageIntegrationForm(props: {
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const verification = useSecureVerification()
   const [pending, setPending] = useState<VantageIntegrationUpdate | null>(null)
   const form = useForm({
     resolver: zodResolver(
@@ -96,10 +101,17 @@ function VantageIntegrationForm(props: {
     },
   })
   const save = useMutation({
-    mutationFn: saveVantageIntegrationSettings,
+    mutationFn: async (values: VantageIntegrationUpdate) => {
+      const proof = await verification.requestVerification({
+        scope: 'vantage.integration.settings.write',
+      })
+      if (!proof) return null
+      return saveVantageIntegrationSettings(values, proof.proof_token)
+    },
     gcTime: 0,
     meta: { errorToast: false },
     onSuccess: (settings) => {
+      if (!settings) return
       queryClient.setQueryData(vantageIntegrationQueryKey, settings)
       form.reset({
         enabled: settings.enabled,
@@ -268,6 +280,7 @@ function VantageIntegrationForm(props: {
           })
         }}
       />
+      <SecureVerificationDialog {...verification.dialogProps} />
     </SettingsSection>
   )
 }

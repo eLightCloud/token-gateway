@@ -13,18 +13,8 @@ BACKEND_APP_LOG_DIR="${BACKEND_APP_LOG_DIR:-${ROOT_DIR}/logs/backend}"
 BACKEND_LOG="${LOG_ROOT}/backend.log"
 FRONTEND_LOG="${LOG_ROOT}/frontend.log"
 
-START_DEPS="${START_DEPS:-0}"
-POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-new-api-local-postgres}"
-POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:15-alpine}"
-POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-POSTGRES_USER="${POSTGRES_USER:-root}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-123456}"
-POSTGRES_DB="${POSTGRES_DB:-new-api}"
-POSTGRES_VOLUME="${POSTGRES_VOLUME:-new-api-local-pg-data}"
-REDIS_CONTAINER="${REDIS_CONTAINER:-new-api-local-redis}"
-REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
-REDIS_PORT="${REDIS_PORT:-6379}"
-REDIS_PASSWORD="${REDIS_PASSWORD:-123456}"
+START_DEPS="${START_DEPS:-1}"
+POSTGRES_CONTAINER="new-api-dev-pg"
 
 BACKEND_PID=""
 FRONTEND_PID=""
@@ -40,9 +30,8 @@ Environment:
   FRONTEND_PORT=3201             Frontend dev-server port.
   PORT_KILL_GRACE_SECONDS=10     Seconds to wait before force-killing port listeners.
   LOG_ROOT=./logs/dev            Combined dev log directory.
-  START_DEPS=1                   Start local Docker PostgreSQL and Redis once.
-  POSTGRES_PORT=5432             Host port for START_DEPS PostgreSQL.
-  REDIS_PORT=6379                Host port for START_DEPS Redis.
+  START_DEPS=1                   Start the Compose PostgreSQL (default); new-api runs locally.
+  POSTGRES_PORT=54329            Compose PostgreSQL host port (configure in .env).
 
 Examples:
   ./start.sh
@@ -171,70 +160,13 @@ EOF
 ensure_frontend_dependencies() {
   if [[ ! -d "${ROOT_DIR}/web/node_modules" && ! -d "${ROOT_DIR}/web/default/node_modules" ]]; then
     log "installing frontend dependencies"
-    (cd "${ROOT_DIR}/web" && bun install --filter ./default)
+    (cd "${ROOT_DIR}/web" && bun install)
   fi
-}
-
-container_exists() {
-  docker ps -a --format '{{.Names}}' | grep -Fxq "$1"
-}
-
-container_running() {
-  docker ps --format '{{.Names}}' | grep -Fxq "$1"
-}
-
-ensure_container_running() {
-  local name="$1"
-
-  if container_running "$name"; then
-    return
-  fi
-
-  if container_exists "$name"; then
-    log "starting existing container ${name}"
-    docker start "$name" >/dev/null
-    return
-  fi
-
-  return 1
 }
 
 start_deps_once() {
   require_command docker
-
-  if ! ensure_container_running "${POSTGRES_CONTAINER}"; then
-    log "creating PostgreSQL container ${POSTGRES_CONTAINER}"
-    docker run -d \
-      --name "${POSTGRES_CONTAINER}" \
-      -e "POSTGRES_USER=${POSTGRES_USER}" \
-      -e "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}" \
-      -e "POSTGRES_DB=${POSTGRES_DB}" \
-      -p "127.0.0.1:${POSTGRES_PORT}:5432" \
-      -v "${POSTGRES_VOLUME}:/var/lib/postgresql/data" \
-      "${POSTGRES_IMAGE}" >/dev/null
-  fi
-
-  if ! ensure_container_running "${REDIS_CONTAINER}"; then
-    log "creating Redis container ${REDIS_CONTAINER}"
-    docker run -d \
-      --name "${REDIS_CONTAINER}" \
-      -p "127.0.0.1:${REDIS_PORT}:6379" \
-      "${REDIS_IMAGE}" \
-      redis-server --requirepass "${REDIS_PASSWORD}" >/dev/null
-  fi
-
-  log "waiting for PostgreSQL"
-  for _ in $(seq 1 30); do
-    if docker exec "${POSTGRES_CONTAINER}" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 1
-  done
-  docker exec "${POSTGRES_CONTAINER}" pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1 ||
-    fail "PostgreSQL did not become ready"
-
-  export SQL_DSN="${SQL_DSN:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${POSTGRES_PORT}/${POSTGRES_DB}}"
-  export REDIS_CONN_STRING="${REDIS_CONN_STRING:-redis://:${REDIS_PASSWORD}@127.0.0.1:${REDIS_PORT}}"
+  bash "${ROOT_DIR}/scripts/start-local-postgres.sh"
 }
 
 start_backend() {
@@ -242,6 +174,8 @@ start_backend() {
   log "backend log: ${BACKEND_LOG}"
   (
     cd "${ROOT_DIR}"
+    local_postgres_dsn="$(bun run "${ROOT_DIR}/scripts/local-postgres-dsn.ts")"
+    export SQL_DSN="${local_postgres_dsn}"
     export SQLITE_PATH="${SQLITE_PATH:-one-api.db?_busy_timeout=30000}"
     export TZ="${TZ:-Asia/Shanghai}"
     export ERROR_LOG_ENABLED="${ERROR_LOG_ENABLED:-true}"
@@ -256,7 +190,7 @@ start_frontend() {
   : >"${FRONTEND_LOG}"
   log "frontend log: ${FRONTEND_LOG}"
   (
-    cd "${ROOT_DIR}/web/default"
+    cd "${ROOT_DIR}/web"
     export VITE_REACT_APP_SERVER_URL="${VITE_REACT_APP_SERVER_URL:-http://localhost:${BACKEND_PORT}}"
     exec bun run dev -- --host "${FRONTEND_HOST}" --port "${FRONTEND_PORT}" --strict-port
   ) >"${FRONTEND_LOG}" 2>&1 &
@@ -287,7 +221,7 @@ cleanup() {
   wait "${FRONTEND_PID:-}" >/dev/null 2>&1 || true
 
   if [[ "${START_DEPS}" == "1" ]]; then
-    log "dependency containers were left running: ${POSTGRES_CONTAINER}, ${REDIS_CONTAINER}"
+    log "dependency containers were left running: ${POSTGRES_CONTAINER}"
   fi
 
   exit "${code}"

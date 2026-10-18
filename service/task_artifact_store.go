@@ -11,8 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// StoredArtifactRef describes a persisted artifact object. No reference is
-// produced until a concrete storage backend is implemented.
+// StoredArtifactRef describes a persisted object and stays server-side; public
+// task responses use authenticated artifact content URLs.
 type StoredArtifactRef struct {
 	Backend   string
 	Bucket    string
@@ -32,32 +32,14 @@ type TaskArtifactStore interface {
 
 var ErrTaskArtifactStoreDisabled = errors.New("task artifact store is disabled")
 
-type disabledArtifactStore struct{}
-
-func (disabledArtifactStore) Enabled() bool {
-	return false
-}
-
-func (disabledArtifactStore) Resolve(*model.Task, string) (*StoredArtifactRef, error) {
-	return nil, nil
-}
-
-func (disabledArtifactStore) Persist(context.Context, *model.Task, types.TaskArtifact, io.Reader) (*StoredArtifactRef, error) {
-	return nil, ErrTaskArtifactStoreDisabled
-}
-
-func (disabledArtifactStore) Serve(*gin.Context, *model.Task, *StoredArtifactRef) error {
-	return ErrTaskArtifactStoreDisabled
-}
-
-var taskArtifactStore TaskArtifactStore = &disabledArtifactStore{}
+var taskArtifactStore TaskArtifactStore = &seedanceArtifactStore{}
 
 func init() {
 	_ = system_setting.LoadTaskArtifactStoreConfig()
 }
 
 // GetTaskArtifactStore returns the process-wide artifact storage backend. This
-// release always returns the disabled implementation.
+// backend resolves persisted Seedance generated videos and enhanced final objects.
 func GetTaskArtifactStore() TaskArtifactStore {
 	return taskArtifactStore
 }

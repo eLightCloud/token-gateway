@@ -139,7 +139,7 @@ func taskPluginViewMaps(tasks []*model.Task) ([]map[string]any, error) {
 // renderTaskPluginList serves a list route: the user's persisted tasks for the
 // executing plugin, paged and filtered, shaped by the plugin's renderer into
 // the vendor collection envelope. Tasks discarded by a completed delete stay
-// hidden from the items; the total reflects the persisted rows.
+// hidden by the same query used for both items and total.
 func renderTaskPluginList(c *gin.Context, pinned pluginruntime.PinnedRoute, requestContext pluginruntime.RouteRequestContext) {
 	pageNum, pageSize, query, parseErr := parseTaskListQuery(c)
 	if parseErr != nil {

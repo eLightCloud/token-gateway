@@ -26,10 +26,12 @@ import { PluginIcon } from '@/features/task-plugins/components/plugin-icon'
 
 import type { TaskPluginOption } from '../../api'
 import { UpstreamModelSelection } from '../upstream-model-selection'
+import { VideoEnhanceModels } from '../video-enhance-models'
 
 type ConfigureModelsDialogProps = {
   open: boolean
   models: string[]
+  enhancementEnabled?: boolean
   plugins?: TaskPluginOption[]
   initialPluginKey?: string
   onOpenChange: (open: boolean) => void
@@ -121,6 +123,10 @@ export function ConfigureModelsDialog(props: ConfigureModelsDialogProps) {
         </>
       }
     >
+      <VideoEnhanceModels
+        models={selected}
+        enabled={props.enhancementEnabled === true}
+      />
       {plugins.length > 0 ? (
         <Tabs
           value={plugin ? `plugin:${plugin.key}` : 'all'}

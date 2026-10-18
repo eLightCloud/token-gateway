@@ -26,7 +26,7 @@ func ModelMappedHelper(c *gin.Context, info *relaycommon.RelayInfo, request dto.
 		}
 
 		// 支持链式模型重定向，最终使用链尾的模型
-		currentModel := info.OriginModelName
+		currentModel := seedanceEnhanceMappingStart(info.OriginModelName, modelMap)
 		visitedModels := map[string]bool{
 			currentModel: true,
 		}

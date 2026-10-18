@@ -17,12 +17,22 @@ const billingRecoverySweepLimit = 100
 // are an idempotent outbox step and never cause the money transaction to run
 // twice.
 func applyTaskSettlementJournal(ctx context.Context, journal *model.TaskSettlementJournal, logParams *model.RecordTaskBillingLogParams) error {
+	attachOrganizationInvoiceTaskIntent(ctx, journal)
 	if err := prepareTaskSettlementJournalLog(journal, logParams); err != nil {
 		return err
 	}
 
-	stored, err := model.EnsureTaskSettlementJournal(journal)
+	var stored *model.TaskSettlementJournal
+	var err error
+	if journal.Operation == model.TaskSettlementOperationReserve {
+		stored, err = model.ReserveTaskSettlementJournal(journal)
+	} else {
+		stored, err = model.EnsureTaskSettlementJournal(journal)
+	}
 	if err != nil {
+		if journal.Operation == model.TaskSettlementOperationReserve {
+			return err
+		}
 		requestBillingRecovery(ctx, journal.RequestId, err)
 		return err
 	}
@@ -59,6 +69,14 @@ func prepareTaskSettlementJournalLog(journal *model.TaskSettlementJournal, logPa
 		return nil
 	}
 	logParams.OperationId = journal.RequestId
+	if logParams.Other == nil {
+		logParams.Other = model.NewLogOther()
+	}
+	source := journal.BillingSource
+	if source == "" {
+		source = BillingSourceWallet
+	} // The existing funding handler's legacy default.
+	logParams.Other.SetPublic("billing_source", source)
 	payload, err := common.Marshal(logParams)
 	if err != nil {
 		return err
@@ -69,11 +87,17 @@ func prepareTaskSettlementJournalLog(journal *model.TaskSettlementJournal, logPa
 
 func applyPersistedTaskSettlementJournal(ctx context.Context, stored *model.TaskSettlementJournal) error {
 	operationId := stored.RequestId
-	var err error
-	stored, _, err = model.ApplyTaskSettlementJournal(stored.RequestId)
-	if err != nil {
+	if err := model.InvalidateOrganizationInvoicePendingLog(stored); err != nil {
 		requestBillingRecovery(ctx, operationId, err)
 		return err
+	}
+	var err error
+	if !stored.Applied {
+		stored, _, err = model.ApplyTaskSettlementJournal(stored.RequestId)
+		if err != nil {
+			requestBillingRecovery(ctx, operationId, err)
+			return err
+		}
 	}
 	if err := completeTaskSettlementJournalLog(stored); err != nil {
 		requestBillingRecovery(ctx, stored.RequestId, err)
@@ -97,6 +121,14 @@ func completeTaskSettlementJournalLog(journal *model.TaskSettlementJournal) erro
 		return err
 	}
 	params.OperationId = journal.RequestId
+	if params.Other == nil {
+		params.Other = model.NewLogOther()
+	}
+	source := journal.BillingSource
+	if source == "" {
+		source = BillingSourceWallet
+	}
+	params.Other.SetPublic("billing_source", source)
 	if err := model.RecordTaskBillingLog(params); err != nil {
 		return err
 	}

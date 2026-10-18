@@ -157,6 +157,7 @@ func taskBillingOther(task *model.Task) *model.LogOther {
 		other.SetPublic("is_model_mapped", true)
 		other.SetPublic("upstream_model_name", props.UpstreamModelName)
 	}
+	AppendSeedanceEnhanceLogInfo(task, other)
 	appendTaskLogInfo(task, other)
 	return other
 }
@@ -205,7 +206,7 @@ func taskModelName(task *model.Task) string {
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
 	quota := task.Quota
 	if quota == 0 {
-		return true
+		return model.ConfirmTaskInvoiceExpense(model.TaskSettlementEntityTask, task.ID, 0, fmt.Sprintf("task-refund:%d", task.ID)) == nil
 	}
 	other := taskBillingOther(task)
 	other.SetPublic("task_id", task.TaskID)
@@ -261,7 +262,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	if quotaDelta == 0 {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 预扣费准确（%s，%s）",
 			task.TaskID, logger.LogQuota(actualQuota), reason))
-		return true
+		return model.ConfirmTaskInvoiceExpense(model.TaskSettlementEntityTask, task.ID, actualQuota, fmt.Sprintf("task-recalculate:%d", task.ID)) == nil
 	}
 
 	logger.LogInfo(ctx, fmt.Sprintf("任务 %s 差额结算：delta=%s（实际：%s，预扣：%s，%s）",
@@ -414,83 +415,6 @@ func resolveTokenKey(ctx context.Context, tokenId int, taskID string) string {
 }
 
 // taskIsSubscription 判断任务是否通过订阅计费。
-
-func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model.Task) {
-	tokenName := c.GetString("token_name")
-	logContent := fmt.Sprintf("操作 %s", info.Action)
-	// 支持任务仅按次计费
-	if common.StringsContains(constant.TaskPricePatches, info.OriginModelName) {
-		logContent = fmt.Sprintf("%s，按次计费", logContent)
-	} else {
-		var contents []string
-		if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
-			for key, ra := range otherRatios {
-				if 1.0 != ra {
-					contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
-				}
-			}
-		}
-		if snap := info.TieredBillingSnapshot; snap != nil {
-			for key, value := range snap.UsageFacts {
-				contents = append(contents, fmt.Sprintf("%s: %v", key, value))
-			}
-		}
-		if len(contents) > 0 {
-			logContent = fmt.Sprintf("%s, 计算参数：%s", logContent, strings.Join(contents, ", "))
-		}
-	}
-	other := model.NewLogOther()
-	other.SetPublic("is_task", true)
-	other.SetPublic("request_path", c.Request.URL.Path)
-	if taskDeliveredInline(c, task) {
-		other.SetPublic("task_sync", true)
-	}
-	other.SetPublic("model_price", info.PriceData.ModelPrice)
-	if info.PriceData.ModelRatio > 0 {
-		other.SetPublic("model_ratio", info.PriceData.ModelRatio)
-	}
-	other.SetPublic("group_ratio", info.PriceData.GroupRatioInfo.GroupRatio)
-	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
-		other.SetPublic("user_group_ratio", info.PriceData.GroupRatioInfo.GroupSpecialRatio)
-	}
-	if info.IsModelMapped {
-		other.SetPublic("is_model_mapped", true)
-		other.SetPublic("upstream_model_name", info.UpstreamModelName)
-	}
-	if snap := info.TieredBillingSnapshot; snap != nil {
-		other.SetPublic("billing_mode", "tiered_expr")
-		other.SetPublic("expr_b64", base64.StdEncoding.EncodeToString([]byte(snap.ExprString)))
-		other.SetPublic("matched_tier", snap.EstimatedTier)
-		if len(snap.UsageFacts) > 0 {
-			other.SetPublic("usage_facts", snap.UsageFacts)
-		}
-		setTaskImageCount(other, snap.UsageFacts["image_count"])
-	} else {
-		setTaskImageCount(other, info.PriceData.OtherRatios()["image_count"])
-	}
-	appendTaskLogInfo(task, other)
-	AppendOrganizationDiscountBillingInfo(info, other)
-	attachQuotaSaturation(c, info, other)
-	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
-		ChannelId: info.ChannelId,
-		ModelName: info.OriginModelName,
-		TokenName: tokenName,
-		Quota:     info.PriceData.Quota,
-		Content:   logContent,
-		TokenId:   info.TokenId,
-		Group:     info.UsingGroup,
-		Other:     other,
-	})
-	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
-	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
-}
-
-// ---------------------------------------------------------------------------
-// 异步任务计费辅助函数
-// ---------------------------------------------------------------------------
-
-// resolveTokenKey 通过 TokenId 运行时获取令牌 Key（用于 Redis 缓存操作）。
-// 如果令牌已被删除或查询失败，返回空字符串。
 
 // setTaskImageCount publishes the billed image quantity of an image task as
 // other.image_count, the same field the HTTP image relay writes, so the log

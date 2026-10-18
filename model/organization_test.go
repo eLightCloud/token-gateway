@@ -15,6 +15,7 @@ func setupOrganizationTestState(t *testing.T) {
 	t.Helper()
 	require.NoError(t, DB.Exec("DELETE FROM logs").Error)
 	require.NoError(t, DB.Exec("DELETE FROM organization_billing_settlement_rules").Error)
+	require.NoError(t, DB.Exec("DELETE FROM organization_invoice_model_sets").Error)
 	require.NoError(t, DB.Exec("DELETE FROM organization_members").Error)
 	require.NoError(t, DB.Exec("DELETE FROM organizations").Error)
 	require.NoError(t, DB.Exec("DELETE FROM users").Error)
@@ -25,6 +26,7 @@ func insertOrganizationTestUser(t *testing.T, id int, username string) {
 	t.Helper()
 	require.NoError(t, DB.Create(&User{
 		Id:          id,
+		CreatedAt:   1, // Historical invoice facts belong to an already existing account.
 		Username:    username,
 		DisplayName: username + " display",
 		Email:       username + "@example.com",

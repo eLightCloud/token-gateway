@@ -1,0 +1,7 @@
+{
+  "translation.DoubaoVideo": "DoubaoVideo",
+  "translation.Pass request body directly to upstream": "リクエストボディを直接アップストリームに渡す",
+  "translation.Single .js file, up to 1 MiB. Its source is shown below before upload.": "単一の .js ファイル、最大 1 MiB。アップロード前に下部でソースを確認できます。",
+  "translation.Plugin source exceeds the 1 MiB limit.": "プラグインのソースが 1 MiB の上限を超えています。",
+  "translation.Selecting a plugin fills its declared models.": "プラグインを選択すると宣言済みモデルが入力されます。"
+}

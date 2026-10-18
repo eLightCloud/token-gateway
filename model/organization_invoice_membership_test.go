@@ -41,7 +41,7 @@ func currentMonthInvoiceTestPeriod(t *testing.T) OrganizationInvoicePeriod {
 
 func publishReadyInvoiceSummaryForTest(t *testing.T, organizationId int, period OrganizationInvoicePeriod) {
 	t.Helper()
-	summary, claimed, err := prepareOrganizationInvoiceSummary(
+	summary, claimed, err := RegisterOrganizationInvoiceSummary(
 		organizationId,
 		period,
 		false,
@@ -59,7 +59,7 @@ func publishReadyInvoiceSummaryForTest(t *testing.T, organizationId int, period 
 		CategoryRows:       []OrganizationInvoiceCategoryRow{},
 		ModelRows:          []OrganizationInvoiceModelRow{},
 	}
-	require.NoError(t, CompleteOrganizationInvoiceSummary(summary, invoice))
+	require.NoError(t, CompleteOrganizationInvoiceSummaryWithMetrics(summary, invoice, ""))
 }
 
 func requireInvalidatedSummaryReason(t *testing.T, organizationId int, reason string) {

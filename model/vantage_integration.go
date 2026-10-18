@@ -73,7 +73,7 @@ type VantageAccountBinding struct {
 	GrantCNY          string `json:"grant_cny" gorm:"type:varchar(32)"`
 	GrantExchangeRate string `json:"grant_exchange_rate" gorm:"type:varchar(32)"`
 	GrantQuota        int64  `json:"grant_quota" gorm:"type:bigint;default:0"`
-	GrantTime         int64  `json:"grant_time" gorm:"bigint;default:0"`
+	GrantTime         int64  `json:"grant_time" gorm:"type:bigint;default:0"`
 	GrantOpId         string `json:"grant_op_id" gorm:"type:varchar(64)"`
 
 	CreatedAt int64 `json:"created_at" gorm:"autoCreateTime"`
@@ -97,7 +97,7 @@ type VantageCredentialBinding struct {
 	Status           string `json:"status" gorm:"type:varchar(16)"`
 
 	CreatedAt int64 `json:"created_at" gorm:"autoCreateTime"`
-	EndedAt   int64 `json:"ended_at" gorm:"bigint;default:0"` // 轮换或撤销时间，0 表示仍有效
+	EndedAt   int64 `json:"ended_at" gorm:"type:bigint;default:0"` // 轮换或撤销时间，0 表示仍有效
 }
 
 func (VantageCredentialBinding) TableName() string { return "vantage_credential_bindings" }
@@ -532,6 +532,7 @@ func VantageEnsureMemberCredential(tenant, subject, membershipRef string) (acct 
 			if terr != nil {
 				return terr
 			}
+			initializeVantageEnterpriseTokenQuota(token)
 			if err := tx.Create(token).Error; err != nil {
 				return err
 			}
@@ -615,6 +616,9 @@ func vantageRotationRecovery(reader *gorm.DB, op *VantageCredentialRotation, cre
 // Token、旧绑定转 rotated，并以操作标识持久保存恢复依据。
 // 响应丢失的重试恢复同一结果；旧代次重放不能重新激活或再开一个 Key。
 func VantageRotateCredential(credentialRef, opId, intentDigest string, expectedGeneration int) (*VantageRotationOutcome, error) {
+	if err := validateVantageCredentialRotation(credentialRef); err != nil {
+		return nil, err
+	}
 	if op, err := GetVantageRotationOp(opId); err == nil {
 		return vantageRotationRecovery(DB, op, credentialRef, intentDigest, expectedGeneration)
 	} else if !errors.Is(err, ErrVantageRotationNotFound) {

@@ -41,6 +41,11 @@ import {
   validateAdvancedCustomConfig,
 } from './advanced-custom'
 import { readTaskExtendPluginKeys } from './channel-plugin-extensions'
+import {
+  readVideoEnhanceConfig,
+  validateVideoEnhanceChannel,
+  videoEnhanceChannelSupported,
+} from './video-enhance'
 
 // ============================================================================
 // Form Validation Schema
@@ -104,9 +109,7 @@ export type VideoUpstreamProfile = (typeof VIDEO_UPSTREAM_PROFILES)[number]
 export function normalizeVideoUpstreamProfile(
   value: string | undefined | null
 ): VideoUpstreamProfile {
-  return VIDEO_UPSTREAM_PROFILES.includes(
-    (value ?? '') as VideoUpstreamProfile
-  )
+  return VIDEO_UPSTREAM_PROFILES.includes((value ?? '') as VideoUpstreamProfile)
     ? (value as VideoUpstreamProfile)
     : 'standard'
 }
@@ -285,6 +288,12 @@ export const channelFormSchema = z
       .refine(isOptionalProxyURL, ERROR_MESSAGES.INVALID_PROXY),
     http_protocol: z.enum(['auto', 'http1']).optional(),
     http2_connection_shards: z.number().int().optional(),
+    video_enhance: z
+      .object({
+        enabled: z.boolean(),
+        supplier: z.enum(['', 'volcengine', 'runyyitd']),
+      })
+      .optional(),
     video_upstream_protocol: z.enum(['ark', 'openai_video']).optional(),
     video_upstream_profile: z
       .enum(['standard', 'seedance_codeyy', 'seedance_zapgogo'])
@@ -314,6 +323,7 @@ export const channelFormSchema = z
     upstream_model_update_ignored_models: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    validateVideoEnhanceChannel(data, ctx)
     if (
       [
         3,
@@ -490,6 +500,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   proxy: '',
   http_protocol: HTTP_PROTOCOL_AUTO,
   http2_connection_shards: 1,
+  video_enhance: readVideoEnhanceConfig(undefined),
   video_upstream_protocol: 'ark',
   video_upstream_profile: 'standard',
   pass_through_body_enabled: false,
@@ -536,6 +547,7 @@ export function transformChannelToFormDefaults(
     proxy: '',
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
     http2_connection_shards: 1,
+    video_enhance: readVideoEnhanceConfig(undefined),
     video_upstream_protocol: 'ark' as 'ark' | 'openai_video',
     video_upstream_profile: 'standard' as
       | 'standard'
@@ -555,6 +567,7 @@ export function transformChannelToFormDefaults(
         parsed.http2_connection_shards
       )
       extraSettings = {
+        video_enhance: readVideoEnhanceConfig(parsed.video_enhance),
         task_plugin_key: parsed.task_plugin_key || '',
         task_extend_plugin_keys: readTaskExtendPluginKeys(channel.type, parsed),
         force_format: parsed.force_format || false,
@@ -688,6 +701,13 @@ export function transformChannelToFormDefaults(
  */
 export function buildSettingJSON(formData: ChannelFormValues): string {
   const settingObj: Record<string, unknown> = {
+    video_enhance: videoEnhanceChannelSupported(
+      formData.type,
+      formData.task_plugin_key,
+      formData.task_extend_plugin_keys
+    )
+      ? formData.video_enhance
+      : undefined,
     task_plugin_key:
       formData.type === CHANNEL_TYPE_TASK_PLUGIN
         ? formData.task_plugin_key?.trim() || ''

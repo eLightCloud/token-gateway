@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { CalendarDays, Download, RefreshCw, Settings2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -68,10 +68,13 @@ import {
   getOrganizationSelf,
   organizationKeys,
 } from './api'
-import { getBeijingMonthDateRange } from './beijing-time'
+import {
+  getBeijingInvoiceDefaultRange,
+  getBeijingMonthDateRange,
+} from './beijing-time'
+import { FilterDraftNotice } from './filter-draft-notice'
 import {
   buildOrganizationInvoiceExportUrl,
-  getOrganizationInvoice,
   getOrganizationSettlementRules,
   organizationInvoiceKeys,
   updateOrganizationSettlementRule,
@@ -79,15 +82,20 @@ import {
 import { organizationInvoiceCategoryName } from './invoice-category'
 import { OrganizationInvoiceFinancialSummary } from './invoice-financial-summary'
 import { formatOrganizationInvoiceUSD } from './invoice-format'
+import { organizationInvoiceNeedsExpenseReview } from './invoice-presentation'
+import { OrganizationInvoiceReconciliation } from './invoice-reconciliation'
 import type {
   OrganizationInvoice,
-  OrganizationInvoiceAccountAmount,
-  OrganizationInvoiceParams,
   OrganizationSettlementRuleOption,
   OrganizationSettlementRuleUpdatePayload,
 } from './invoice-types'
+import { OrganizationRecalculateButton } from './organization-recalculate-button'
+import { UsageDateRangeFields } from './usage-date-range'
+import { useOrganizationInvoiceQuery } from './use-organization-invoice-query'
+import { useUsageDateRange } from './use-usage-date-range'
 
 type OrganizationInvoicePanelProps = {
+  enabled?: boolean
   organizationId?: number
   currentOrganizationId?: number
 }
@@ -105,15 +113,6 @@ function factorLabel(
   return rule.factor_segments
     .map((segment) => `${segment.period_month}: ${segment.factor}`)
     .join(', ')
-}
-
-function accountAmount(
-  amounts: OrganizationInvoiceAccountAmount[],
-  userId: number
-): string {
-  return (
-    amounts.find((amount) => amount.user_id === userId)?.gross_amount_usd ?? '0'
-  )
 }
 
 function InvoiceTableSkeleton() {
@@ -182,47 +181,55 @@ function CategoryInvoiceTable(props: {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {props.invoice.category_rows.map((row) => (
-            <TableRow key={row.category_key}>
-              <TableCell className='bg-background sticky left-0 z-10 font-medium'>
-                <span>
-                  {organizationInvoiceCategoryName(
-                    row.category_key,
-                    row.category_name,
-                    row.fallback,
-                    t
-                  )}
-                </span>
-                <span className='text-muted-foreground mt-1 block max-w-56 truncate text-xs'>
-                  {row.models.join(', ')}
-                </span>
-              </TableCell>
-              {props.invoice?.accounts.map((account) => (
-                <TableCell
-                  key={account.user_id}
-                  className='text-right tabular-nums'
-                >
-                  {formatOrganizationInvoiceUSD(
-                    accountAmount(row.account_amounts, account.user_id),
-                    true
+          {props.invoice.category_rows.map((row) => {
+            const amounts = new Map(
+              row.account_amounts.map((amount) => [
+                amount.user_id,
+                amount.gross_amount_usd,
+              ])
+            )
+            return (
+              <TableRow key={row.category_key}>
+                <TableCell className='bg-background sticky left-0 z-10 font-medium'>
+                  <span>
+                    {organizationInvoiceCategoryName(
+                      row.category_key,
+                      row.category_name,
+                      row.fallback,
+                      t
+                    )}
+                  </span>
+                  <span className='text-muted-foreground mt-1 block max-w-56 truncate text-xs'>
+                    {row.models.join(', ')}
+                  </span>
+                </TableCell>
+                {props.invoice?.accounts.map((account) => (
+                  <TableCell
+                    key={account.user_id}
+                    className='text-right tabular-nums'
+                  >
+                    {formatOrganizationInvoiceUSD(
+                      amounts.get(account.user_id) ?? '0',
+                      true
+                    )}
+                  </TableCell>
+                ))}
+                <TableCell className='text-right font-medium tabular-nums'>
+                  {formatOrganizationInvoiceUSD(row.gross_amount_usd)}
+                </TableCell>
+                <TableCell className='text-right tabular-nums'>
+                  {row.factor === '0.0000' ? (
+                    <Badge variant='secondary'>{t('Free / exempt')}</Badge>
+                  ) : (
+                    factorLabel(row)
                   )}
                 </TableCell>
-              ))}
-              <TableCell className='text-right font-medium tabular-nums'>
-                {formatOrganizationInvoiceUSD(row.gross_amount_usd)}
-              </TableCell>
-              <TableCell className='text-right tabular-nums'>
-                {row.factor === '0.0000' ? (
-                  <Badge variant='secondary'>{t('Free / exempt')}</Badge>
-                ) : (
-                  factorLabel(row)
-                )}
-              </TableCell>
-              <TableCell className='text-right font-medium tabular-nums'>
-                {formatOrganizationInvoiceUSD(row.settled_amount_usd)}
-              </TableCell>
-            </TableRow>
-          ))}
+                <TableCell className='text-right font-medium tabular-nums'>
+                  {formatOrganizationInvoiceUSD(row.settled_amount_usd)}
+                </TableCell>
+              </TableRow>
+            )
+          })}
         </TableBody>
         <TableFooter>
           <TableRow>
@@ -281,30 +288,38 @@ function ModelInvoiceTable(props: {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {props.invoice.model_rows.map((row) => (
-            <TableRow key={row.model_name}>
-              <TableCell className='bg-background sticky left-0 z-10 font-medium'>
-                {row.model_name}
-              </TableCell>
-              {props.invoice?.accounts.map((account) => (
-                <TableCell
-                  key={account.user_id}
-                  className='text-right tabular-nums'
-                >
-                  {formatOrganizationInvoiceUSD(
-                    accountAmount(row.account_amounts, account.user_id),
-                    true
-                  )}
+          {props.invoice.model_rows.map((row) => {
+            const amounts = new Map(
+              row.account_amounts.map((amount) => [
+                amount.user_id,
+                amount.gross_amount_usd,
+              ])
+            )
+            return (
+              <TableRow key={row.model_name}>
+                <TableCell className='bg-background sticky left-0 z-10 font-medium'>
+                  {row.model_name}
                 </TableCell>
-              ))}
-              <TableCell className='text-right font-medium tabular-nums'>
-                {formatOrganizationInvoiceUSD(row.gross_amount_usd)}
-              </TableCell>
-              <TableCell className='text-right tabular-nums'>
-                {row.share_percent}%
-              </TableCell>
-            </TableRow>
-          ))}
+                {props.invoice?.accounts.map((account) => (
+                  <TableCell
+                    key={account.user_id}
+                    className='text-right tabular-nums'
+                  >
+                    {formatOrganizationInvoiceUSD(
+                      amounts.get(account.user_id) ?? '0',
+                      true
+                    )}
+                  </TableCell>
+                ))}
+                <TableCell className='text-right font-medium tabular-nums'>
+                  {formatOrganizationInvoiceUSD(row.gross_amount_usd)}
+                </TableCell>
+                <TableCell className='text-right tabular-nums'>
+                  {row.share_percent}%
+                </TableCell>
+              </TableRow>
+            )
+          })}
         </TableBody>
         <TableFooter>
           <TableRow>
@@ -443,7 +458,7 @@ function SettlementRuleRow(props: SettlementRuleRowProps) {
   )
 }
 
-function SettlementRulesSheet(props: {
+export function SettlementRulesSheet(props: {
   open: boolean
   onOpenChange: (open: boolean) => void
   organizationId?: number
@@ -462,17 +477,74 @@ function SettlementRulesSheet(props: {
   }
   const rulesQuery = useQuery({
     queryKey: organizationInvoiceKeys.rules(scope, effectiveMonth),
-    queryFn: () =>
-      getOrganizationSettlementRules(effectiveMonth, props.organizationId),
+    queryFn: ({ signal }) =>
+      getOrganizationSettlementRules(
+        effectiveMonth,
+        props.organizationId,
+        signal
+      ),
     enabled:
       props.open && Boolean(props.authenticatedUserId) && effectiveMonthValid,
+    // The GET is main-database-only and light; this poll just follows the
+    // shared background preparation without triggering any scan.
+    refetchInterval: (query) =>
+      query.state.data?.discovery &&
+      query.state.data.discovery.status !== 'ready'
+        ? 5000
+        : false,
   })
+  useEffect(() => {
+    if (!props.open) {
+      void queryClient.cancelQueries({
+        queryKey: organizationInvoiceKeys.rules(
+          {
+            mode: props.organizationId ? 'admin' : 'current',
+            organizationId: props.organizationId ?? props.currentOrganizationId,
+            authenticatedUserId: props.authenticatedUserId,
+          },
+          effectiveMonth
+        ),
+        exact: true,
+      })
+    }
+  }, [
+    props.open,
+    props.organizationId,
+    props.currentOrganizationId,
+    props.authenticatedUserId,
+    effectiveMonth,
+    queryClient,
+  ])
+  const discovery = rulesQuery.data?.discovery
   const updateMutation = useMutation({
     mutationFn: (payload: OrganizationSettlementRuleUpdatePayload) =>
       updateOrganizationSettlementRule(payload, props.organizationId),
     onSuccess: (response) => {
-      if (!response.success) return
-      toast.success(t('Settlement factor updated'))
+      if (response.code === 'settlement_category_preparing') {
+        toast.info(
+          t(
+            'Settlement basis is still updating. Please try saving again shortly.'
+          )
+        )
+        void rulesQuery.refetch()
+        return
+      }
+      if (response.code === 'settlement_category_discovery_failed') {
+        toast.error(
+          t(
+            'Settlement category discovery failed. Retry the preparation, then save again.'
+          )
+        )
+        void rulesQuery.refetch()
+        return
+      }
+      if (!response.success) {
+        if (response.message) toast.error(response.message)
+        return
+      }
+      toast.success(
+        t('Settlement factor saved. Affected invoices are updating.')
+      )
       void queryClient.invalidateQueries({
         queryKey: organizationInvoiceKeys.rules(scope, effectiveMonth),
       })
@@ -528,6 +600,35 @@ function SettlementRulesSheet(props: {
         <ScrollArea className='min-h-0 flex-1'>
           <div className='space-y-3 px-4 pb-6'>
             {rulesQuery.isLoading ? <InvoiceTableSkeleton /> : null}
+            {discovery?.status === 'preparing' &&
+            !rulesQuery.data?.data?.length ? (
+              <div className='bg-muted text-muted-foreground space-y-1 rounded-md border p-3 text-sm'>
+                <p>{t('Preparing used model categories...')}</p>
+                <p className='text-xs'>
+                  {t(
+                    'The first preparation scans usage history in the background and finishes on its own.'
+                  )}
+                </p>
+              </div>
+            ) : null}
+            {discovery?.status === 'updating' ||
+            (discovery?.status === 'preparing' &&
+              Boolean(rulesQuery.data?.data?.length)) ? (
+              <p className='text-warning text-xs'>
+                {t('Category list is updating in the background.')}
+              </p>
+            ) : null}
+            {discovery?.status === 'failed' ? (
+              <ErrorState
+                title={t(
+                  'Settlement category discovery failed. Retry the preparation, then save again.'
+                )}
+                onRetry={() => {
+                  void rulesQuery.refetch()
+                }}
+                className='min-h-24'
+              />
+            ) : null}
             {rulesError ? (
               <ErrorState
                 title={t('Failed to load settlement factors')}
@@ -556,6 +657,7 @@ function SettlementRulesSheet(props: {
               ))}
             {!rulesError &&
             !rulesQuery.isLoading &&
+            discovery?.status === 'ready' &&
             !rulesQuery.data?.data?.length ? (
               <p className='text-muted-foreground py-12 text-center text-sm'>
                 {t('No used model categories are available to configure.')}
@@ -568,51 +670,68 @@ function SettlementRulesSheet(props: {
   )
 }
 
+// Backend build-stage keys mapped to i18n labels for the generating card.
+const organizationInvoiceBuildStageLabels: Record<string, string> = {
+  pending: 'Waiting for the invoice builder',
+  baseline: 'Preparing opening balances',
+  usage: 'Aggregating model usage',
+  financials: 'Computing fund flows',
+  publish: 'Publishing snapshot',
+}
+
+function organizationInvoiceBuildStageLabel(stage: string): string {
+  return (
+    organizationInvoiceBuildStageLabels[stage] ?? 'Building invoice snapshot'
+  )
+}
+
 export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
+  const userId = useAuthStore((state) => state.auth.user?.id)
+  return (
+    <OrganizationInvoiceContent
+      key={`${props.organizationId ?? props.currentOrganizationId}:${userId}`}
+      {...props}
+    />
+  )
+}
+
+function OrganizationInvoiceContent(props: OrganizationInvoicePanelProps) {
   const { t } = useTranslation()
-  const queryClient = useQueryClient()
   const authenticatedUserId = useAuthStore((state) => state.auth.user?.id)
-  const currentRange = getBeijingMonthDateRange()
+  // Default snapshot range: month start through yesterday (Beijing), or the
+  // previous full month on the first day of a month when no complete day
+  // exists yet.
+  const currentRange = getBeijingInvoiceDefaultRange()
   const previousRange = getBeijingMonthDateRange(Date.now(), -1)
-  const [draftStartDate, setDraftStartDate] = useState(currentRange.startDate)
-  const [draftEndDate, setDraftEndDate] = useState(currentRange.endDate)
-  const [params, setParams] = useState<OrganizationInvoiceParams>({
-    start_date: currentRange.startDate,
-    end_date: currentRange.endDate,
+  const dateRange = useUsageDateRange({
+    initialRange: currentRange,
+    required: true,
   })
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const scope = {
-    mode: props.organizationId ? ('admin' as const) : ('current' as const),
-    organizationId: props.organizationId ?? props.currentOrganizationId,
+  const submitted = useOrganizationInvoiceQuery({
+    ...props,
     authenticatedUserId,
-  }
-  const invoiceQueryKey = organizationInvoiceKeys.invoice(scope, params)
-  const invoiceQuery = useQuery({
-    queryKey: invoiceQueryKey,
-    queryFn: () => getOrganizationInvoice(params, props.organizationId),
-    enabled: Boolean(authenticatedUserId),
-    refetchInterval: (query) =>
-      query.state.data?.data?.generation_status === 'generating' ? 1500 : false,
+    initialParams: {
+      start_date: currentRange.startDate,
+      end_date: currentRange.endDate,
+    },
+    dateRange,
   })
+  const { invoiceQuery, params } = submitted
   const invoice = invoiceQuery.data?.data
+  const expenseNeedsReview = organizationInvoiceNeedsExpenseReview(invoice)
   const invoiceGenerating = invoice?.generation_status === 'generating'
-  const invoiceLoading = invoiceQuery.isLoading || invoiceGenerating
+  const invoiceLoading =
+    invoiceQuery.isLoading ||
+    (invoiceGenerating && !invoice?.previous_publication)
   const sourceAsOf = invoice?.source_as_of
     ? new Intl.DateTimeFormat(undefined, {
         dateStyle: 'medium',
         timeStyle: 'medium',
         timeZone: 'Asia/Shanghai',
-      }).format(invoice.source_as_of * 1000)
+      }).format((invoice.evidence_as_of || invoice.source_as_of) * 1000)
     : undefined
-  const refreshMutation = useMutation({
-    mutationFn: () =>
-      getOrganizationInvoice(params, props.organizationId, true),
-    onSuccess: (result) => {
-      queryClient.setQueryData(invoiceQueryKey, result)
-    },
-  })
-  const invalidRange =
-    !draftStartDate || !draftEndDate || draftStartDate > draftEndDate
+  const invalidRange = !dateRange.isDateRangeValid
   let invoiceError: string | undefined
   if (invoiceQuery.error instanceof Error) {
     invoiceError = invoiceQuery.error.message
@@ -620,70 +739,66 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
     invoiceError = invoiceQuery.data.message || t('Failed to load')
   }
 
-  const applyRange = (range: { startDate: string; endDate: string }) => {
-    setDraftStartDate(range.startDate)
-    setDraftEndDate(range.endDate)
-    setParams({
-      start_date: range.startDate,
-      end_date: range.endDate,
-    })
+  const selectRange = (range: { startDate: string; endDate: string }) => {
+    dateRange.setStartDate(range.startDate)
+    dateRange.setEndDate(range.endDate)
   }
 
   return (
     <div className='space-y-4'>
       <Card>
-        <CardContent className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'>
+        <CardContent className='flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between'>
           <div className='flex flex-1 flex-wrap items-end gap-2'>
-            <label className='space-y-1'>
-              <span className='text-muted-foreground text-xs'>
-                {t('Start date')}
-              </span>
-              <Input
-                type='date'
-                value={draftStartDate}
-                onChange={(event) => setDraftStartDate(event.target.value)}
-              />
-            </label>
-            <label className='space-y-1'>
-              <span className='text-muted-foreground text-xs'>
-                {t('End date')}
-              </span>
-              <Input
-                type='date'
-                value={draftEndDate}
-                onChange={(event) => setDraftEndDate(event.target.value)}
-              />
-            </label>
-            <Button variant='outline' onClick={() => applyRange(currentRange)}>
+            <UsageDateRangeFields
+              range={dateRange}
+              className='grid w-full grid-cols-2 gap-2 sm:w-96 sm:shrink-0'
+            />
+            <Button variant='outline' onClick={() => selectRange(currentRange)}>
               {t('Current month')}
             </Button>
-            <Button variant='outline' onClick={() => applyRange(previousRange)}>
-              {t('Previous month')}
-            </Button>
             <Button
-              disabled={invalidRange}
-              onClick={() =>
-                setParams({
-                  start_date: draftStartDate,
-                  end_date: draftEndDate,
-                })
-              }
+              variant='outline'
+              onClick={() => selectRange(previousRange)}
             >
-              {t('Apply')}
+              {t('Previous month')}
             </Button>
           </div>
           <div className='flex flex-wrap gap-2'>
             <Button
               variant='outline'
-              disabled={refreshMutation.isPending || invoiceGenerating}
-              onClick={() => refreshMutation.mutate()}
+              disabled={invalidRange || submitted.isRefreshing}
+              onClick={submitted.refresh}
+              aria-busy={submitted.isRefreshing}
             >
               <RefreshCw data-icon='inline-start' />
-              {t('Refresh')}
+              {t('Query')}
             </Button>
+            <OrganizationRecalculateButton
+              kind='invoice'
+              coveredUntil={invoice?.source_as_of}
+              organizationId={
+                props.organizationId ?? props.currentOrganizationId
+              }
+              scope={`${params.start_date} – ${params.end_date}`}
+              pending={submitted.isRecalculating}
+              disabled={
+                invalidRange ||
+                submitted.hasChanges ||
+                submitted.isRefreshing ||
+                invoiceGenerating ||
+                !invoice?.recalculation_token
+              }
+              onConfirm={submitted.recalculate}
+            />
             <Button
               variant='outline'
-              disabled={invoiceGenerating || !invoice}
+              disabled={
+                invalidRange ||
+                submitted.hasChanges ||
+                submitted.isRefreshing ||
+                invoiceGenerating ||
+                !invoice
+              }
               onClick={() =>
                 void downloadOrganizationExport(
                   buildOrganizationInvoiceExportUrl(
@@ -702,6 +817,20 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
             </Button>
           </div>
         </CardContent>
+        {submitted.hasChanges ? (
+          <CardContent className='pt-0'>
+            <FilterDraftNotice visible />
+          </CardContent>
+        ) : null}
+        {currentRange.currentMonthPending ? (
+          <CardContent className='pt-0'>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'The current month has no completed day yet; the previous month invoice is shown.'
+              )}
+            </p>
+          </CardContent>
+        ) : null}
       </Card>
 
       {invoiceError ? (
@@ -709,9 +838,7 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
           <ErrorState
             title={t('Failed to load organization invoice')}
             description={invoiceError}
-            onRetry={() => {
-              void invoiceQuery.refetch()
-            }}
+            onRetry={submitted.retry}
             className='min-h-64'
           />
         </Card>
@@ -719,15 +846,42 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
         <>
           {invoiceGenerating ? (
             <Card>
-              <CardContent className='text-muted-foreground py-10 text-center text-sm'>
-                {t('Generating...')}
+              <CardContent className='text-muted-foreground space-y-1 py-10 text-center text-sm'>
+                <p>
+                  {invoice?.build?.period?.start_date &&
+                  invoice?.build?.period?.end_date
+                    ? t('Building {{start}} – {{end}} invoice', {
+                        start: invoice.build.period.start_date,
+                        end: invoice.build.period.end_date,
+                      })
+                    : t('Generating...')}
+                  {invoice?.previous_publication
+                    ? ` · ${t('Showing the last published result')}`
+                    : ''}
+                </p>
+                <p>{t('Use Query to check the latest progress.')}</p>
+                {invoice?.build?.stage ? (
+                  <p className='text-xs'>
+                    {t(organizationInvoiceBuildStageLabel(invoice.build.stage))}
+                    {invoice.build.progress
+                      ? ` · ${invoice.build.progress}%`
+                      : ''}
+                  </p>
+                ) : null}
               </CardContent>
             </Card>
           ) : null}
+          <OrganizationInvoiceReconciliation invoice={invoice} />
           <div className='grid gap-4 md:grid-cols-3'>
             <Card size='sm'>
               <CardHeader>
-                <CardDescription>{t('Gross amount')}</CardDescription>
+                <CardDescription>
+                  {t(
+                    expenseNeedsReview
+                      ? 'Confirmed usage subtotal'
+                      : 'Gross amount'
+                  )}
+                </CardDescription>
                 <CardTitle className='text-2xl tabular-nums'>
                   {invoiceLoading ? (
                     <Skeleton className='h-8 w-28' />
@@ -739,7 +893,13 @@ export function OrganizationInvoicePanel(props: OrganizationInvoicePanelProps) {
             </Card>
             <Card size='sm'>
               <CardHeader>
-                <CardDescription>{t('Settled amount')}</CardDescription>
+                <CardDescription>
+                  {t(
+                    expenseNeedsReview
+                      ? 'Calculated settlement subtotal'
+                      : 'Calculated settlement amount'
+                  )}
+                </CardDescription>
                 <CardTitle className='text-2xl tabular-nums'>
                   {invoiceLoading ? (
                     <Skeleton className='h-8 w-28' />

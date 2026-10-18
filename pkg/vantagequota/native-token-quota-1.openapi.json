@@ -1,0 +1,979 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Lighting native User/Token quota integration",
+    "version": "native-token-quota-1",
+    "description": "Server-to-server adapter over native User wallets and Token quotas. Vantage owns enterprise/employee business identities; employees never receive keys. New dedicated enterprise Tokens are finite with zero quota in their creation transaction; existing Tokens and personal provisioning are preserved. Policy revisions track native (unlimited,total quota) changes, including observed out-of-band native edits, and do not advance for consumption. Lower limits below current native UsedQuota (which includes pre-consume) are rejected. Exhausted Tokens may be restored only when the new remaining quota is positive; disabled, deleted and expired Tokens are never restored by quota adjustment. Operations are synchronous and retained indefinitely without automatic purge. Identical operation UUID and canonical input recover the original outcome before checking stale revisions or mutable monetary conversion; different intent conflicts. UUIDs are normalized to lowercase. HTTP 200 with status=rejected is a committed rejection, not an applied change. Operation reads use the primary database; 404 does not prove an in-flight PUT was never delivered. Amounts use native USD, six decimals with half-away-from-zero output rounding and the explicit quota_per_unit source scale. Inputs require exact native representation (normally multiples of 0.000002 USD). UI display currency and exchange rates are irrelevant to native USD. Monetary scale for an applied operation is retained in its result. Accounted usage includes pre-consume; final spent/reserved splits are not available and stay null with usage_state=unknown. Available amounts are native balance snapshots, not guarantees against future cost. All existing relay behavior, trust bypass, retries, actual-cost settlement, debt, refunds and reconciliation remain unchanged. Native zero Token authentication retains existing gateway error behavior. Usage pages show existing consume/refund log records only (refund amounts signed negative), not invoices, final usage or an upstream-attempt ledger. Disabled consumption logging, retention, outbox delay and unavailable unknown upstream costs can make logs incomplete; no zero cost is inferred from absent records. Attempt references are unavailable and null. Pagination binds filters and account with server HMAC and bounded increasing IDs; values remain live and deleted/late/corrected rows require a new walk. start_time inclusive, end_time exclusive, whole-second RFC3339. Enterprise credential rotation, including recovery of legacy rotation operations, is rejected with HTTP 409 enterprise_rotation_unsupported before delivering a replacement Key; personal rotation remains supported. Inactive-account mutations use HTTP 409 account_not_active consistently with provisioning. Existing provisioning responses append quota_setup for enterprise credential results; legacy unlimited Tokens are not_ready until explicitly adjusted. Dedicated integration Bearer authentication plus TCP-source allowlist is mandatory for every route; deployments must supply HTTPS. ClickHouse queries require positive unique native log IDs; missing or ambiguous IDs produce usage_unavailable rather than skipped charges. No credentials or client content appear in quota/usage responses."
+  },
+  "servers": [
+    {
+      "url": "/api/integrations/vantage/v1"
+    }
+  ],
+  "security": [
+    {
+      "VantageIntegration": []
+    }
+  ],
+  "paths": {
+    "/enterprise-accounts/{tenant}/funds": {
+      "get": {
+        "operationId": "getFundsResponse",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inspect operation.status; a recorded rejection has no policy effect.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Controlled error, never a fabricated zero.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enterprise-accounts/{tenant}/token-quotas": {
+      "get": {
+        "operationId": "getQuotasResponse",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inspect operation.status; a recorded rejection has no policy effect.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotasResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Controlled error, never a fabricated zero.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enterprise-accounts/{tenant}/credentials/{credentialRef}/quota": {
+      "get": {
+        "operationId": "getQuotaResponse",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          {
+            "name": "credentialRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inspect operation.status; a recorded rejection has no policy effect.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Controlled error, never a fabricated zero.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putOperationResponse",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          {
+            "name": "credentialRef",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inspect operation.status; a recorded rejection has no policy effect.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Controlled error, never a fabricated zero.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Adjustment"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enterprise-accounts/{tenant}/quota-operations/{operationID}": {
+      "get": {
+        "operationId": "getOperationResponse",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          {
+            "name": "operationID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inspect operation.status; a recorded rejection has no policy effect.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Controlled error, never a fabricated zero.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/enterprise-accounts/{tenant}/usage": {
+      "get": {
+        "operationId": "getUsageResponse",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "credential_ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            }
+          },
+          {
+            "name": "start_time",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "end_time",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inspect operation.status; a recorded rejection has no policy effect.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Controlled error, never a fabricated zero.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/quota-contract": {
+      "get": {
+        "operationId": "getNativeQuotaContract",
+        "responses": {
+          "200": {
+            "description": "This OpenAPI 3.1 document"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "VantageIntegration": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "Quota": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "const": "USD"
+          },
+          "quota_per_unit": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)?$"
+          },
+          "tenant_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "credential_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "not_ready"
+            ]
+          },
+          "config_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "limit_mode": {
+            "const": "cumulative"
+          },
+          "unlimited_quota": {
+            "type": "boolean"
+          },
+          "limit_amount": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?(0|[1-9][0-9]*)\\.[0-9]{6}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "accounted_amount": {
+            "type": "string",
+            "pattern": "^-?(0|[1-9][0-9]*)\\.[0-9]{6}$"
+          },
+          "spent_amount": {
+            "type": "null"
+          },
+          "reserved_amount": {
+            "type": "null"
+          },
+          "available_amount": {
+            "type": "string",
+            "pattern": "^-?(0|[1-9][0-9]*)\\.[0-9]{6}$"
+          },
+          "usage_state": {
+            "const": "unknown"
+          },
+          "usage_scope": {
+            "const": "native_token_accounting_including_preconsume"
+          },
+          "admission_status": {
+            "enum": [
+              "available",
+              "account_not_active",
+              "credential_not_active",
+              "credential_expired",
+              "insufficient_token_quota",
+              "insufficient_user_quota"
+            ]
+          },
+          "reset_at": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "currency",
+          "quota_per_unit",
+          "tenant_ref",
+          "credential_ref",
+          "status",
+          "config_revision",
+          "limit_mode",
+          "unlimited_quota",
+          "limit_amount",
+          "accounted_amount",
+          "spent_amount",
+          "reserved_amount",
+          "available_amount",
+          "usage_state",
+          "usage_scope",
+          "admission_status",
+          "reset_at"
+        ],
+        "additionalProperties": false
+      },
+      "Funds": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "const": "USD"
+          },
+          "quota_per_unit": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)?$"
+          },
+          "tenant_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "balance_amount": {
+            "type": "string",
+            "pattern": "^-?(0|[1-9][0-9]*)\\.[0-9]{6}$"
+          },
+          "available_amount": {
+            "type": "string",
+            "pattern": "^-?(0|[1-9][0-9]*)\\.[0-9]{6}$"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "scope": {
+            "const": "native_user_wallet_snapshot"
+          }
+        },
+        "required": [
+          "currency",
+          "quota_per_unit",
+          "tenant_ref",
+          "balance_amount",
+          "available_amount",
+          "status",
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "Adjustment": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 499999999999999
+          },
+          "currency": {
+            "const": "USD"
+          },
+          "limit_amount": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,6})?$",
+            "description": "Absolute cumulative quota, not a wallet transfer. Must be exactly representable in native units and no greater than MaxTokenQuota."
+          },
+          "actor_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          }
+        },
+        "required": [
+          "operation_id",
+          "expected_revision",
+          "currency",
+          "limit_amount",
+          "actor_ref"
+        ],
+        "additionalProperties": false
+      },
+      "Operation": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "const": "USD"
+          },
+          "quota_per_unit": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)?$"
+          },
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "credential_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "actor_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "request_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "limit_amount": {
+            "type": "string",
+            "pattern": "^-?(0|[1-9][0-9]*)\\.[0-9]{6}$"
+          },
+          "status": {
+            "enum": [
+              "applied",
+              "rejected"
+            ]
+          },
+          "applied_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "reason_code": {
+            "enum": [
+              null,
+              "revision_conflict",
+              "credential_not_active",
+              "limit_below_accounted_usage"
+            ]
+          },
+          "created_at": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "currency",
+          "quota_per_unit",
+          "operation_id",
+          "tenant_ref",
+          "credential_ref",
+          "actor_ref",
+          "request_digest",
+          "expected_revision",
+          "limit_amount",
+          "status",
+          "applied_revision",
+          "reason_code",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "Usage": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "const": "USD"
+          },
+          "quota_per_unit": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)?$"
+          },
+          "tenant_ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "credential_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "record_ref": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^-?(0|[1-9][0-9]*)\\.[0-9]{6}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "enum": [
+              "consume",
+              "refund"
+            ]
+          },
+          "state": {
+            "enum": [
+              "recorded",
+              "unknown"
+            ]
+          },
+          "request_ref": {
+            "type": "string"
+          },
+          "billing_operation_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attempt_ref": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "currency",
+          "quota_per_unit",
+          "tenant_ref",
+          "credential_ref",
+          "record_ref",
+          "model",
+          "occurred_at",
+          "amount",
+          "kind",
+          "state",
+          "request_ref",
+          "billing_operation_ref",
+          "attempt_ref"
+        ],
+        "additionalProperties": false
+      },
+      "QuotaSetup": {
+        "type": "object",
+        "properties": {
+          "contract_revision": {
+            "const": "native-token-quota-1"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "not_ready"
+            ]
+          },
+          "quota": {
+            "$ref": "#/components/schemas/Quota"
+          }
+        },
+        "required": [
+          "contract_revision",
+          "status",
+          "quota"
+        ],
+        "additionalProperties": false
+      },
+      "QuotaResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "contract_revision": {
+            "const": "native-token-quota-1"
+          },
+          "source": {
+            "const": "lighting"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/Quota"
+          }
+        },
+        "required": [
+          "success",
+          "contract_revision",
+          "source",
+          "observed_at",
+          "request_id",
+          "quota"
+        ],
+        "additionalProperties": false
+      },
+      "FundsResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "contract_revision": {
+            "const": "native-token-quota-1"
+          },
+          "source": {
+            "const": "lighting"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "funds": {
+            "$ref": "#/components/schemas/Funds"
+          }
+        },
+        "required": [
+          "success",
+          "contract_revision",
+          "source",
+          "observed_at",
+          "request_id",
+          "funds"
+        ],
+        "additionalProperties": false
+      },
+      "OperationResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "contract_revision": {
+            "const": "native-token-quota-1"
+          },
+          "source": {
+            "const": "lighting"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/Operation"
+          }
+        },
+        "required": [
+          "success",
+          "contract_revision",
+          "source",
+          "observed_at",
+          "request_id",
+          "operation"
+        ],
+        "additionalProperties": false
+      },
+      "QuotasResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "contract_revision": {
+            "const": "native-token-quota-1"
+          },
+          "source": {
+            "const": "lighting"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "quotas": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/Quota"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "consistency": {
+            "const": "bounded_ids_live_values"
+          }
+        },
+        "required": [
+          "success",
+          "contract_revision",
+          "source",
+          "observed_at",
+          "request_id",
+          "quotas",
+          "next_cursor",
+          "consistency"
+        ],
+        "additionalProperties": false
+      },
+      "UsageResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": true
+          },
+          "contract_revision": {
+            "const": "native-token-quota-1"
+          },
+          "source": {
+            "const": "lighting"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "usage": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/Usage"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "consistency": {
+            "const": "bounded_ids_live_values"
+          },
+          "completeness": {
+            "const": "recorded_logs_only"
+          },
+          "consumption_logging_enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "contract_revision",
+          "source",
+          "observed_at",
+          "request_id",
+          "usage",
+          "next_cursor",
+          "consistency",
+          "completeness",
+          "consumption_logging_enabled"
+        ],
+        "additionalProperties": false
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "const": false
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "code",
+          "message",
+          "request_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

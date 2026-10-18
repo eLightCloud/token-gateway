@@ -361,12 +361,15 @@ func AddOrganizationMember(organizationId int, userId int, role string) (*Organi
 		if err := tx.Create(&member).Error; err != nil {
 			return err
 		}
-		return invalidateOrganizationInvoiceSummariesFrom(
+		if err := invalidateOrganizationInvoiceSummariesFrom(
 			tx,
 			organizationId,
 			organizationInvoiceMonthStartContaining(member.BillingStartAt),
 			"invalidated by membership addition",
-		)
+		); err != nil {
+			return err
+		}
+		return InvalidateOrganizationUsageFromTx(tx, organizationId, effectiveBillingStart(member))
 	})
 	if err != nil {
 		return nil, err
@@ -424,12 +427,15 @@ func RemoveOrganizationMember(organizationId int, userId int) error {
 		}).Error; err != nil {
 			return err
 		}
-		return invalidateOrganizationInvoiceSummariesFrom(
+		if err := invalidateOrganizationInvoiceSummariesFrom(
 			tx,
 			organizationId,
 			organizationInvoiceMonthStartContaining(now),
 			"invalidated by membership removal",
-		)
+		); err != nil {
+			return err
+		}
+		return InvalidateOrganizationUsageFromTx(tx, organizationId, now)
 	})
 }
 
@@ -1349,6 +1355,9 @@ func UpdateOrganizationMemberBillingStart(organizationId, userId int, candidate,
 			organizationInvoiceMonthStartContaining(billingChangeStart),
 			"invalidated by billing start change",
 		); err != nil {
+			return err
+		}
+		if err := InvalidateOrganizationUsageFromTx(tx, organizationId, billingChangeStart); err != nil {
 			return err
 		}
 		updated.BillingStartAt = candidate

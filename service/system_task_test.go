@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -127,7 +128,9 @@ func TestSystemTaskClaimPassDispatchesByType(t *testing.T) {
 	_, err := model.CreateSystemTask(handler.taskType, nil, nil)
 	require.NoError(t, err)
 
-	runSystemTaskClaimPass("runner-dispatch")
+	var workers sync.WaitGroup
+	runSystemTaskClaimPass(context.Background(), "runner-dispatch", &workers)
+	workers.Wait()
 
 	select {
 	case got := <-ran:
@@ -184,7 +187,9 @@ func TestSystemTaskClaimPassDispatchesEarliestPendingByType(t *testing.T) {
 	firstB, err := model.CreateSystemTask(handlerB.taskType, nil, nil)
 	require.NoError(t, err)
 
-	runSystemTaskClaimPass("runner-dispatch")
+	var workers sync.WaitGroup
+	runSystemTaskClaimPass(context.Background(), "runner-dispatch", &workers)
+	workers.Wait()
 
 	got := map[string]bool{}
 	for range 2 {

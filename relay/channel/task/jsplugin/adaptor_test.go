@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"math"
 	"mime/multipart"
@@ -29,6 +31,40 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSeedanceQueryCancellationCoversHeadersAndBody(t *testing.T) {
+	service.InitHttpClient()
+	plugin, err := pluginruntime.NewRegistry().Register(mockPlugin, pluginruntime.Options{})
+	require.NoError(t, err)
+	for _, flushHeaders := range []bool{false, true} {
+		t.Run(fmt.Sprint("flush_headers_", flushHeaders), func(t *testing.T) {
+			entered := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if flushHeaders {
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+				}
+				close(entered)
+				<-r.Context().Done()
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			finished := make(chan error, 1)
+			go func() {
+				response, err := New(plugin).doFetchDescriptor(ctx, server.URL, "", map[string]any{"url": server.URL})
+				if err == nil {
+					_, err = io.ReadAll(response.Body)
+					response.Body.Close()
+				}
+				finished <- err
+			}()
+			<-entered
+			cancel()
+			assert.True(t, errors.Is(<-finished, context.Canceled))
+		})
+	}
+}
 
 const mockPlugin = `
 export const meta = {

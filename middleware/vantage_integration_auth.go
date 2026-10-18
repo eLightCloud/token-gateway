@@ -35,17 +35,17 @@ func VantageIntegrationAuth() gin.HandlerFunc {
 		}
 		peer, _, peerErr := net.SplitHostPort(c.Request.RemoteAddr)
 		ip, ipErr := netip.ParseAddr(peer)
+		if peerErr != nil || ipErr != nil || !config.SourceAllowed(ip) {
+			common.SysLog(fmt.Sprintf("vantage integration auth denied: source %s not allowed request_id=%s", peer, c.GetString(common.RequestIdKey)))
+			vantageAbort(c, http.StatusForbidden, "source_not_allowed", "source is not allowed")
+			return
+		}
 		presented, hasBearer := strings.CutPrefix(c.GetHeader("Authorization"), "Bearer ")
 		if !hasBearer || presented == "" || !config.SecretMatches(presented) {
 			// 低敏拒绝事件：只记录来源 IP 与原因，不记录所提交的口令内容。
 			common.SysLog(fmt.Sprintf("vantage integration auth denied: invalid credential from %s request_id=%s", peer, c.GetString(common.RequestIdKey)))
 			c.Header("WWW-Authenticate", `Bearer realm="vantage-integration"`)
 			vantageAbort(c, http.StatusUnauthorized, "invalid_credential", "invalid integration credential")
-			return
-		}
-		if peerErr != nil || ipErr != nil || !config.SourceAllowed(ip) {
-			common.SysLog(fmt.Sprintf("vantage integration auth denied: source %s not allowed request_id=%s", peer, c.GetString(common.RequestIdKey)))
-			vantageAbort(c, http.StatusForbidden, "source_not_allowed", "source is not allowed")
 			return
 		}
 		// 状态及秘密交付响应一律不可缓存，密钥不进入共享缓存或代理。

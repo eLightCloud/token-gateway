@@ -47,11 +47,13 @@ export async function getVantageIntegrationSettings() {
 }
 
 export async function saveVantageIntegrationSettings(
-  values: VantageIntegrationUpdate
+  values: VantageIntegrationUpdate,
+  proof: string
 ) {
   const response = await api.put<SettingsResponse>(
     '/api/option/vantage_integration',
-    values
+    values,
+    { headers: { 'X-Security-Proof': proof } }
   )
   return requireServerSuccess(response.data).data
 }

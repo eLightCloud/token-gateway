@@ -1,17 +1,29 @@
 package plugins_test
 
 import (
+	"fmt"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/seedanceenhance"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/relay/channel"
 	taskplugin "github.com/QuantumNous/new-api/relay/channel/task/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -314,6 +326,40 @@ func callHookPath(t *testing.T, plugin *jsplugin.LoadedPlugin, member string, ar
 	return value
 }
 
+func TestDoubaoSeedanceOSSDelivery(t *testing.T) {
+	_, plugin := newDoubaoPlugin(t)
+	const storedURL = "https://seedance-test.oss-cn-hangzhou.aliyuncs.com/sd/stored/video.mp4?x-oss-signature=task-bound"
+	for _, protocol := range []string{"ark", "openai_video"} {
+		t.Run(protocol, func(t *testing.T) {
+			state := map[string]any{"video_upstream": map[string]any{"protocol": protocol, "profile": "standard"}, "seedance_storage": map[string]any{"config_id": 1, "video_url": storedURL}}
+			data := map[string]any{"id": "private", "status": "succeeded", "content": map[string]any{"video_url": "https://upstream.example/original.mp4"}, "usage": map[string]any{"completion_tokens": 12345}}
+			if protocol == "openai_video" {
+				data = map[string]any{"id": "private", "object": "video", "status": "completed", "usage": map[string]any{"completion_tokens": 12345}}
+			}
+			view := map[string]any{"task_id": "stored", "status": "SUCCESS", "state": state, "data": data}
+			got := hookObject(t, callHookPath(t, plugin, "taskStatus", map[string]any{}, view))
+			assert.Equal(t, storedURL, got["content"].(map[string]any)["video_url"])
+			assert.EqualValues(t, 12345, got["usage"].(map[string]any)["completion_tokens"])
+			page := hookObject(t, callHookPath(t, plugin, "taskList", map[string]any{}, map[string]any{"tasks": []any{view}, "total": 1}))
+			assert.Equal(t, storedURL, page["items"].([]any)[0].(map[string]any)["content"].(map[string]any)["video_url"])
+			view["status"] = "IN_PROGRESS"
+			pending := hookObject(t, callHookPath(t, plugin, "taskStatus", map[string]any{}, view))
+			assert.NotContains(t, pending["content"].(map[string]any), "video_url", "upstream completion must not expose a video before storage succeeds")
+		})
+	}
+	adaptor, info := newVideoSubmitAdaptor(t, plugin, "https://ai.codeyy.cn", codeyySetting(), "doubao-seedance-2-0-260128")
+	info.ApiKey = "private-source-key"
+	state, err := common.Marshal(map[string]any{"video_upstream": map[string]any{"protocol": "openai_video", "profile": "seedance_codeyy"}})
+	require.NoError(t, err)
+	task := &model.Task{TaskID: "stored", Platform: "doubao", PrivateData: model.TaskPrivateData{PluginState: state}}
+	sourceURL, headers, err := adaptor.SeedanceVideoSource(task, []byte(`{"id":"vid-private","object":"video","status":"completed","metadata":{"url":"https://ai.codeyy.cn/v1/videos/vid-private/content"}}`))
+	require.NoError(t, err)
+	assert.Equal(t, "https://ai.codeyy.cn/v1/videos/vid-private/content", sourceURL)
+	assert.Equal(t, "Bearer private-source-key", headers["Authorization"])
+	_, _, err = adaptor.SeedanceVideoSource(task, []byte(`{"id":"vid-private","object":"video","status":"completed","metadata":{"url":"https://foreign.example/v1/videos/vid-private/content"}}`))
+	require.Error(t, err)
+}
+
 func TestDoubaoTaskListProjection(t *testing.T) {
 	_, plugin := newDoubaoPlugin(t)
 	page := map[string]any{
@@ -475,5 +521,271 @@ func TestDoubaoVideoUsageRejectsMalformedMeasuredCounts(t *testing.T) {
 			assert.Equal(t, true, facts["usage_pending"])
 			assert.NotContains(t, facts, "tokens")
 		}
+	}
+}
+
+func TestSeedanceEnhanceUsesIndependentSecondsContractAcrossChannelTypes(t *testing.T) {
+	previousDB := model.DB
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "enhance-contract.db")), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB; sqlDB, _ := db.DB(); sqlDB.Close() })
+	require.NoError(t, db.AutoMigrate(&model.SeedanceEnhanceConfig{}, &model.Option{}))
+	t.Setenv("CRYPTO_SECRET", "seedance-contract-test-stable-key-32-bytes")
+	settings, err := model.SaveSeedanceEnhanceSettings(model.SeedanceEnhanceSettings{Enabled: true, MediaKitKey: "test-media-key", Region: "cn-hangzhou", Bucket: "test-enhance", AccessKeyID: "test-oss-id", AccessKeySecret: "test-oss-secret"})
+	require.NoError(t, err)
+	require.True(t, settings.MediaKitConfigured)
+	previousAddress := system_setting.TaskPublicAddress
+	system_setting.TaskPublicAddress = "https://gateway.example"
+	t.Cleanup(func() { system_setting.TaskPublicAddress = previousAddress })
+	prices := config.GlobalConfig.Get("billing_setting").(*billing_setting.BillingSetting)
+	previousModes, previousExpr := prices.BillingMode, prices.BillingExpr
+	prices.BillingMode = map[string]string{}
+	prices.BillingExpr = map[string]string{}
+	t.Cleanup(func() { prices.BillingMode, prices.BillingExpr = previousModes, previousExpr })
+	registry, plugin := newDoubaoPlugin(t)
+	channelConfig := `{"video_enhance":{"enabled":true,"supplier":"volcengine"}}`
+	declaredChannel := model.Channel{Models: strings.Join(seedanceenhance.Models, ","), Setting: &channelConfig}
+	var routedEnhancements, declaredEnhancements []string
+	for _, name := range declaredChannel.GetRoutingModels() {
+		if strings.HasSuffix(name, seedanceenhance.Suffix) {
+			routedEnhancements = append(routedEnhancements, name)
+		}
+	}
+	for _, name := range plugin.Meta.Models {
+		if strings.HasSuffix(name, seedanceenhance.Suffix) {
+			declaredEnhancements = append(declaredEnhancements, name)
+		}
+	}
+	assert.ElementsMatch(t, routedEnhancements, declaredEnhancements, "published plugin models and channel capabilities must agree in both directions")
+	for _, base := range seedanceenhance.Models {
+		enhanced := base + seedanceenhance.Suffix
+		prices.BillingMode[enhanced] = billing_setting.BillingModeTieredExpr
+		prices.BillingExpr[enhanced] = `tier("1080p", u("seconds") * 0.02)`
+		schema, _ := plugin.Meta.UsageForModel(enhanced)
+		assert.Equal(t, "second", schema["seconds"].Unit)
+		assert.NotContains(t, schema, "tokens")
+		for _, channelType := range []int{constant.ChannelTypeVolcEngine, constant.ChannelTypeDoubaoVideo, constant.ChannelTypeNewAPI, constant.ChannelTypeTaskPlugin} {
+			t.Run(fmt.Sprintf("%s/type_%d", base, channelType), func(t *testing.T) {
+				setting := kitdto.ChannelSettings{VideoEnhance: &kitdto.VideoEnhanceSettings{Enabled: true, Supplier: "volcengine"}, TaskPluginKey: "doubao"}
+				info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: channelType, ChannelBaseUrl: "https://generation.example", ChannelSetting: setting, UpstreamModelName: enhanced}, OriginModelName: enhanced, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "public-enhance", Action: "text_to_video"}}
+				adaptor := taskplugin.New(plugin)
+				adaptor.Init(info)
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/doubao/api/v3/contents/generations/tasks", nil)
+				c.Set("task_request", map[string]any{"model": enhanced, "prompt": "a cat", "seconds": 5, "metadata": map[string]any{"resolution": "2k"}})
+				require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
+				bodyReader, err := adaptor.BuildRequestBody(c, info)
+				require.NoError(t, err)
+				var body map[string]any
+				require.NoError(t, common.DecodeJson(bodyReader, &body))
+				assert.Equal(t, base, body["model"])
+				assert.Equal(t, "720p", body["resolution"])
+				assert.Equal(t, enhanced, info.UpstreamModelName, "base schema must never replace enhancement pricing")
+				facts, err := adaptor.ExtractUsageFactsValidated(c, info)
+				require.NoError(t, err)
+				assert.Equal(t, "2k", facts["output_resolution"])
+				assert.EqualValues(t, 5, facts["seconds"])
+				assert.NotContains(t, facts, "tokens")
+				url, err := adaptor.BuildRequestURL(info)
+				require.NoError(t, err)
+				expected := "https://generation.example/api/v3/contents/generations/tasks"
+				if channelType == 60 {
+					expected = "https://generation.example/doubao/api/v3/contents/generations/tasks"
+				}
+				assert.Equal(t, expected, url)
+				response := &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"id":"source-private","content":{"video_url":"https://source.example/private.mp4"}}`))}
+				parsed, taskErr := adaptor.ParseResponse(c, response, info)
+				require.Nil(t, taskErr)
+				assert.NotContains(t, string(parsed.TaskData), "source.example")
+				assert.Equal(t, "source-private", parsed.UpstreamTaskID)
+				_, err = adaptor.BuildContentRequest(&model.Task{Platform: "doubao", Properties: model.Properties{OriginModelName: enhanced}}, "video", channel.TaskArtifactClientRequest{})
+				require.Error(t, err, "an unavailable OSS object must never fall back to a source or recursive host fetch")
+				_, found := registry.Generation().LookupEndpoint("POST", "/v1/videos", enhanced)
+				assert.True(t, found)
+			})
+		}
+	}
+	for _, channelType := range []int{45, 54, 60, 61} {
+		base := seedanceenhance.Models[2]
+		enhanced := base + seedanceenhance.Suffix
+		for _, tc := range []struct {
+			name    string
+			mapping map[string]string
+			want    string
+			invalid bool
+		}{
+			{"unmapped", map[string]string{}, base, false},
+			{"base_identity", map[string]string{base: base}, base, false},
+			{"enhanced_identity", map[string]string{base: "ep-base", enhanced: enhanced}, base, false},
+			{"base_endpoint", map[string]string{base: "ep-base"}, "ep-base", false},
+			{"base_chain", map[string]string{base: "source-alias", "source-alias": "ep-chain"}, "ep-chain", false},
+			{"enhanced_override", map[string]string{base: "ep-base", enhanced: "ep-enhanced"}, "ep-enhanced", false},
+			{"enhanced_to_base", map[string]string{enhanced: base, base: "ep-base"}, "ep-base", false},
+			{"base_cycle", map[string]string{base: "loop", "loop": base}, "", true},
+			{"enhanced_cycle", map[string]string{enhanced: base, base: enhanced}, "", true},
+		} {
+			t.Run(fmt.Sprintf("mapped_source/type_%d/%s", channelType, tc.name), func(t *testing.T) {
+				setting := kitdto.ChannelSettings{VideoEnhance: &kitdto.VideoEnhanceSettings{Enabled: true, Supplier: "volcengine"}, TaskPluginKey: "doubao"}
+				info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: channelType, ChannelBaseUrl: "https://generation.example", ChannelSetting: setting, UpstreamModelName: enhanced}, OriginModelName: enhanced, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "mapped-enhance", Action: "text_to_video"}}
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+				mapping, err := common.Marshal(tc.mapping)
+				require.NoError(t, err)
+				c.Set("model_mapping", string(mapping))
+				c.Set("task_request", map[string]any{"model": enhanced, "prompt": "a cat", "seconds": 5})
+				err = helper.ModelMappedHelper(c, info, nil)
+				if tc.invalid {
+					require.ErrorContains(t, err, "model_mapping_contains_cycle")
+					return
+				}
+				require.NoError(t, err)
+				adaptor := taskplugin.New(plugin)
+				adaptor.Init(info)
+				require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
+				reader, err := adaptor.BuildRequestBody(c, info)
+				require.NoError(t, err)
+				var body map[string]any
+				require.NoError(t, common.DecodeJson(reader, &body))
+				assert.Equal(t, tc.want, body["model"])
+				assert.Equal(t, enhanced, info.OriginModelName)
+				assert.Equal(t, enhanced, info.UpstreamModelName, "pricing must keep the enhanced identity")
+				facts, err := adaptor.ExtractUsageFactsValidated(c, info)
+				require.NoError(t, err)
+				assert.EqualValues(t, 5, facts["seconds"])
+				assert.NotContains(t, facts, "tokens")
+			})
+		}
+	}
+	for _, tc := range []struct {
+		name         string
+		request      map[string]any
+		missingPrice bool
+	}{
+		{"zero_duration", map[string]any{"seconds": 0}, false},
+		{"automatic_duration_without_bound", map[string]any{"seconds": -1}, false},
+		{"metadata_duration_overflow", map[string]any{"metadata": map[string]any{"duration": 1e30}}, false},
+		{"invalid_output_resolution", map[string]any{"resolution": "4k"}, false},
+		{"pixel_size_is_not_target_resolution", map[string]any{"size": "1920x1080"}, false},
+		{"missing_enhancement_price", map[string]any{"seconds": 5}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enhanced := seedanceenhance.Models[0] + seedanceenhance.Suffix
+			if tc.missingPrice {
+				delete(prices.BillingExpr, enhanced)
+				defer func() { prices.BillingExpr[enhanced] = `tier("1080p",u("seconds") * 0.02)` }()
+			}
+			setting := kitdto.ChannelSettings{VideoEnhance: &kitdto.VideoEnhanceSettings{Enabled: true, Supplier: "volcengine"}}
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: 54, ChannelBaseUrl: "https://generation.example", ChannelSetting: setting, UpstreamModelName: enhanced}, OriginModelName: enhanced, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "public-rejected", Action: "text_to_video"}}
+			adaptor := taskplugin.New(plugin)
+			adaptor.Init(info)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+			tc.request["model"], tc.request["prompt"] = enhanced, "a cat"
+			c.Set("task_request", tc.request)
+			require.NotNil(t, adaptor.ValidateRequestAndSetAction(c, info), "reject before billing or paid generation")
+		})
+	}
+
+	for _, entry := range []struct {
+		name, group string
+		path        []string
+		body        map[string]any
+	}{
+		{"native", "native", []string{"createTask"}, map[string]any{"content": []any{map[string]any{"type": "text", "text": "a cat"}}, "duration": 5, "resolution": "2k"}},
+		{"videos", "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"prompt": "a cat", "seconds": 5, "resolution": "2k"}},
+		{"responses", "protocols", []string{"openai_responses", "decodeRequest"}, map[string]any{"input": "a cat", "seconds": 5, "resolution": "2k"}},
+		{"videos_multipart", "protocols", []string{"openai_video", "decodeRequest"}, map[string]any{"prompt": "a cat", "seconds": 5, "resolution": "2k"}},
+	} {
+		for _, withVideo := range []bool{false, true} {
+			t.Run(fmt.Sprintf("customer_entry_%s/reference_video_%t", entry.name, withVideo), func(t *testing.T) {
+				enhanced := seedanceenhance.Models[2] + seedanceenhance.Suffix
+				encoded, err := common.Marshal(entry.body)
+				require.NoError(t, err)
+				var request map[string]any
+				require.NoError(t, common.Unmarshal(encoded, &request))
+				request["model"] = enhanced
+				if withVideo {
+					reference := map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://reference.example/video.mp4"}, "role": "reference_video"}
+					if entry.name == "native" {
+						request["content"] = append(request["content"].([]any), reference)
+					} else {
+						request["metadata"] = map[string]any{"content": []any{reference}}
+					}
+				}
+				bodyEnvelope := map[string]any{"kind": "json", "value": request}
+				if entry.name == "videos_multipart" {
+					fields := map[string]any{}
+					for key, value := range request {
+						text := fmt.Sprint(value)
+						if key == "metadata" {
+							data, err := common.Marshal(value)
+							require.NoError(t, err)
+							text = string(data)
+						}
+						fields[key] = []string{text}
+					}
+					bodyEnvelope = map[string]any{"kind": "multipart", "fields": fields, "files": []any{}}
+				}
+				value, err := plugin.Engine.CallPath(t.Context(), entry.group, entry.path, map[string]any{"model": enhanced, "body": bodyEnvelope})
+				require.NoError(t, err)
+				intent := hookObject(t, value)
+				info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: 54, ChannelBaseUrl: "https://generation.example", ChannelSetting: kitdto.ChannelSettings{VideoEnhance: &kitdto.VideoEnhanceSettings{Enabled: true, Supplier: "volcengine"}}, UpstreamModelName: enhanced}, OriginModelName: enhanced, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "public-" + entry.name, Action: "text_to_video"}}
+				adaptor := taskplugin.New(plugin)
+				adaptor.Init(info)
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+				c.Set("task_request", intent["requestBody"])
+				require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
+				bodyReader, err := adaptor.BuildRequestBody(c, info)
+				require.NoError(t, err)
+				var body map[string]any
+				require.NoError(t, common.DecodeJson(bodyReader, &body))
+				assert.Equal(t, "720p", body["resolution"])
+				assert.Equal(t, seedanceenhance.Models[2], body["model"])
+				facts, err := adaptor.ExtractUsageFactsValidated(c, info)
+				require.NoError(t, err)
+				wantVideo, wantCost := "none", 0.1
+				if withVideo {
+					wantVideo, wantCost = "video", 0.15
+					content, _ := body["content"].([]any)
+					assert.Contains(t, content, map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://reference.example/video.mp4"}, "role": "reference_video"})
+				}
+				assert.Equal(t, wantVideo, facts["video_input"])
+				cost, _, err := billingexpr.RunExprWithRequest(`u("video_input") == "video" ? tier("video", u("seconds") * 0.03) : tier("none", u("seconds") * 0.02)`, billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: facts})
+				require.NoError(t, err)
+				assert.InDelta(t, wantCost, cost, 1e-12)
+			})
+		}
+	}
+
+}
+
+func TestDoubaoArkPreservesContentOrderAndClientModel(t *testing.T) {
+	_, plugin := newDoubaoPlugin(t)
+	content := []any{
+		map[string]any{"type": "text", "text": "before"},
+		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://media.example/image.png"}},
+		map[string]any{"type": "text", "text": "after"},
+	}
+	body, _, _, err := submitVideoRequest(t, plugin, "https://ark.example", kitdto.ChannelSettings{}, "vendor-model", map[string]any{"model": "client-alias", "prompt": "before\nafter", "metadata": map[string]any{"content": content, "generate_audio": false, "seed": 0}})
+	require.NoError(t, err)
+	assert.Equal(t, content, body["content"])
+	assert.Equal(t, false, body["generate_audio"])
+	assert.EqualValues(t, 0, body["seed"])
+	assert.Equal(t, "vendor-model", body["model"])
+	for _, state := range []any{nil, videosState()} {
+		persisted := &model.Task{TaskID: "public-alias", Status: model.TaskStatusSuccess, Properties: model.Properties{OriginModelName: "client-alias", UpstreamModelName: "vendor-model"}}
+		persisted.Data = []byte(`{"id":"vendor-id","model":"vendor-model","status":"completed"}`)
+		if state != nil {
+			persisted.PrivateData.PluginState, err = common.Marshal(state)
+			require.NoError(t, err)
+		}
+		view, err := service.BuildTaskPluginView(persisted)
+		require.NoError(t, err)
+		got := hookObject(t, callHookPath(t, plugin, "taskStatus", map[string]any{}, hookObject(t, view)))
+		assert.Equal(t, "client-alias", got["model"])
+		page := hookObject(t, callHookPath(t, plugin, "taskList", map[string]any{}, map[string]any{"tasks": []any{hookObject(t, view)}, "total": 1, "pageNum": 1, "pageSize": 20}))
+		assert.Equal(t, "client-alias", page["items"].([]any)[0].(map[string]any)["model"])
 	}
 }

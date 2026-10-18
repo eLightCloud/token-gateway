@@ -14,6 +14,7 @@ func BuildTaskPluginView(task *model.Task) (dto.TaskView, error) {
 		createdAt = task.SubmitTime
 	}
 	view := dto.TaskView{
+		Model:      task.Properties.OriginModelName,
 		TaskID:     task.TaskID,
 		Platform:   string(task.Platform),
 		Status:     string(task.Status),
@@ -33,6 +34,11 @@ func BuildTaskPluginView(task *model.Task) (dto.TaskView, error) {
 		if err := common.Unmarshal(task.PrivateData.PluginState, &view.State); err != nil {
 			return dto.TaskView{}, err
 		}
+	}
+	var deliveryErr error
+	view.State, deliveryErr = refreshSeedanceVideoDelivery(task, view.State)
+	if deliveryErr != nil {
+		return dto.TaskView{}, deliveryErr
 	}
 	if task.PrivateData.Execution != nil && task.PrivateData.Execution.TaskPlugin != nil {
 		view.ProducerVersion = task.PrivateData.Execution.TaskPlugin.Version

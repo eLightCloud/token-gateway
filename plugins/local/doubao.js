@@ -580,6 +580,7 @@ function modelArkTask(task) {
   if (pinnedUpstreamOf(task).protocol === VIDEO_PROTOCOL_OPENAI_VIDEO) return modelArkTaskFromVideos(task);
   const data = task.data && typeof task.data === "object" && !Array.isArray(task.data) ? task.data : {};
   const output = Object.assign({}, data, { id: task.task_id, status: modelArkTaskStatus(task, data) });
+  if (trimmed(task.model)) output.model = trimmed(task.model);
   if (["failed", "cancelled", "expired"].includes(output.status) && !output.error && task.fail_reason)
     output.error = { code: output.status, message: task.fail_reason };
   return output;
@@ -593,7 +594,7 @@ function modelArkTask(task) {
 function modelArkTaskFromVideos(task) {
   const data = task.data && typeof task.data === "object" && !Array.isArray(task.data) ? task.data : {};
   const output = { id: task.task_id, status: modelArkTaskStatus(task, data) };
-  if (trimmed(data.model)) output.model = trimmed(data.model);
+  if (trimmed(task.model)) output.model = trimmed(task.model);
   const created = Number(data.created_at);
   if (Number.isFinite(created) && created > 0) output.created_at = Math.floor(created);
   const completed = Number(data.completed_at);
@@ -1193,9 +1194,10 @@ export function buildSubmitRequest(ctx) {
   const images = Array.isArray(req.images) ? req.images : [];
   for (const url of images) imageContent.push({ type: "image_url", image_url: { url: url } });
   const metadataContent = Array.isArray(body.content) ? body.content : [];
-  body.content = imageContent.concat(metadataContent).filter((item) => item && item.type !== "text");
-  const hasReference = body.content.length > 0;
-  if (trimmed(req.prompt) || !hasReference) body.content.push({ type: "text", text: req.prompt || "" });
+  body.content = imageContent.concat(metadataContent).filter((item) => item);
+  const hasReference = body.content.some((item) => item.type !== "text");
+  const hasText = body.content.some((item) => item.type === "text");
+  if (!hasText && (trimmed(req.prompt) || !hasReference)) body.content.push({ type: "text", text: req.prompt || "" });
   if (Array.isArray(body.content)) body.content = rewriteDraftTaskContent(body.content, ctx.originTasks);
   const duration = videoDurationSeconds(req, metadata, true);
   if (duration !== null) body.duration = duration;

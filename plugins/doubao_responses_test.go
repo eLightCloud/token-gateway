@@ -291,11 +291,11 @@ func TestDoubaoSeedanceUsageFacts(t *testing.T) {
 	}
 	videoModels := make([]string, 0, len(profiled))
 	for _, name := range plugin.Meta.Models {
-		if strings.Contains(name, "seedance") {
+		if strings.Contains(name, "seedance") && !strings.HasSuffix(name, "-enhance") {
 			videoModels = append(videoModels, name)
 		}
 	}
-	assert.ElementsMatch(t, videoModels, profiled, "every Seedance model selects a capability profile")
+	assert.ElementsMatch(t, videoModels, profiled, "every base Seedance model selects a generation capability profile")
 
 	for _, tc := range []struct {
 		name    string

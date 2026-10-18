@@ -28,4 +28,4 @@ func TestDisabledTaskArtifactStoreHasNoStorageBehavior(t *testing.T) {
 	assert.Same(t, store, GetTaskArtifactStore())
 }
 
-var _ TaskArtifactStore = disabledArtifactStore{}
+var _ TaskArtifactStore = seedanceArtifactStore{}

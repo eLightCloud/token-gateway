@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"gorm.io/gorm"
 	"io"
 	"net/http"
 	"strings"
@@ -1133,4 +1135,83 @@ func TestTaskUsageReconciliationSurvivesRestartAndJournalReplay(t *testing.T) {
 			assert.EqualValues(t, wantLogs, logs)
 		})
 	}
+}
+
+func TestTaskFinalExpenseConfirmationRecoversWithoutAnotherPoll(t *testing.T) {
+	for _, mode := range []string{"per-call", "zero-delta", "zero-actual", "positive-delta", "token-zero-delta", "adaptor-zero-delta"} {
+		t.Run(mode, func(t *testing.T) {
+			truncate(t)
+			seedUser(t, 980, 10000)
+			task := makeTask(980, 0, 100, 0, BillingSourceWallet, 0)
+			task.TaskID = "final-confirmation-" + mode
+			task.Status = model.TaskStatusSuccess
+			facts := map[string]any{}
+			actual := 100
+			if mode == "per-call" {
+				task.PrivateData.BillingContext.PerCallBilling = true
+			} else if mode == "token-zero-delta" || mode == "adaptor-zero-delta" {
+				task.PrivateData.BillingContext.ModelRatio = 100
+				task.PrivateData.BillingContext.GroupRatio = 1
+			} else {
+				if mode == "zero-actual" {
+					actual = 0
+				}
+				if mode == "positive-delta" {
+					actual = 205
+				}
+				expr := `tier("actual", u("amount"))`
+				task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{ExprString: expr, ExprHash: billingexpr.ExprHashString(expr), GroupRatio: 1, QuotaPerUnit: 1, TaskUsageBilling: true}
+				facts["amount"] = actual
+			}
+			result := &relaycommon.TaskInfo{Status: string(task.Status), UsageFacts: facts}
+			adaptor := &mockAdaptor{}
+			if mode == "token-zero-delta" {
+				result.TotalTokens = 1
+			}
+			if mode == "adaptor-zero-delta" {
+				adaptor.adjustReturn = 100
+			}
+			StageTaskUsageReconciliation(task, result, adaptor)
+			require.True(t, task.UsagePending)
+			require.NoError(t, model.DB.Create(task).Error)
+			// The terminal transaction committed, but the expense transaction is down.
+			require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("final-expense-unavailable", func(tx *gorm.DB) {
+				if tx.Statement.Table == "tasks" {
+					if fields, ok := tx.Statement.Dest.(map[string]any); ok {
+						if _, confirming := fields["invoice_expense_quota"]; confirming {
+							tx.AddError(fmt.Errorf("expense confirmation unavailable"))
+						}
+					}
+				}
+			}))
+			require.False(t, settleReconciledTaskUsage(t.Context(), task))
+			var pending model.Task
+			require.NoError(t, model.DB.First(&pending, task.ID).Error)
+			assert.True(t, pending.UsagePending)
+			assert.Nil(t, pending.InvoiceExpenseQuota)
+			require.NoError(t, model.DB.Callback().Update().Remove("final-expense-unavailable"))
+			// A restart needs only persisted evidence, never another paid generation.
+			pending.PrivateData.UsageReconciliation.NextAttemptAt = 0
+			require.NoError(t, model.PersistTaskUsage(&pending, false))
+			RunTaskUsageReconciliationOnce(t.Context())
+			require.NoError(t, model.DB.First(&pending, task.ID).Error)
+			assert.False(t, pending.UsagePending)
+			require.NotNil(t, pending.InvoiceExpenseQuota)
+			assert.EqualValues(t, actual, *pending.InvoiceExpenseQuota)
+			assert.True(t, pending.InvoiceExpenseApplied)
+			assert.EqualValues(t, 10100-actual, getUserQuota(t, 980))
+			RunTaskUsageReconciliationOnce(t.Context())
+			assert.EqualValues(t, 10100-actual, getUserQuota(t, 980))
+		})
+	}
+}
+
+func TestTaskPollDiagnosticsRemoveSignedMediaCredentials(t *testing.T) {
+	detail := unrecognizedPollDetail("invalid https://operator:password@media.example/private-token/video?sig=reason-secret", []byte(`{"video_url":"https://media.example/private-object?signature=body-secret","status":"odd"}`))
+	assert.NotContains(t, detail, "password")
+	assert.NotContains(t, detail, "private-token")
+	assert.NotContains(t, detail, "reason-secret")
+	assert.NotContains(t, detail, "body-secret")
+	assert.Contains(t, detail, "media.example/[redacted]")
+	assert.Contains(t, detail, "odd")
 }

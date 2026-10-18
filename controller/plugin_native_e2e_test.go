@@ -191,7 +191,7 @@ func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 		},
 	}
 
-	outcome, taskErr := executeTaskSubmissionWith(submitContext, relayInfo, relay.RelayTaskSubmit)
+	outcome, taskErr := executeTaskSubmissionTestWith(submitContext, relayInfo, relay.RelayTaskSubmit)
 	require.Nil(t, taskErr)
 	require.NotNil(t, outcome)
 	require.Equal(t, []string{"reserve", "reserve", "settle"}, billing.events)

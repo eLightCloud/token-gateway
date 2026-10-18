@@ -26,8 +26,14 @@ import { UpdateCheckerSection } from '../maintenance/update-checker-section'
 import type { OperationsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { VantageIntegrationSettingsSection } from '../vantage-integration/settings-section'
+import { VideoEnhanceSettingsSection } from '../video-enhance/settings-section'
 
 const OPERATIONS_SECTIONS = [
+  {
+    id: 'video-enhance',
+    titleKey: 'Video enhancement and OSS',
+    build: () => <VideoEnhanceSettingsSection />,
+  },
   {
     id: 'vantage',
     titleKey: 'Vantage Integration',

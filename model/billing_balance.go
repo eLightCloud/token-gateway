@@ -79,11 +79,16 @@ type BillingBalanceReserveParams struct {
 // ReserveBillingBalances extends an existing pre-consume atomically. Wallet
 // reserve keeps the established behavior of allowing debt; subscription and
 // limited-token bounds remain enforced by their existing rules.
-func ReserveBillingBalances(params BillingBalanceReserveParams) error {
+// A supplied transaction owns the final commit and cache invalidation.
+func ReserveBillingBalances(params BillingBalanceReserveParams, transaction ...*gorm.DB) error {
+	database := DB
+	if len(transaction) > 0 {
+		database = transaction[0]
+	}
 	if params.UserId <= 0 || params.Amount <= 0 {
 		return errors.New("invalid billing reserve params")
 	}
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		switch params.BillingSource {
 		case "subscription":
 			if err := postConsumeUserSubscriptionDeltaTx(tx, params.SubscriptionId, params.Amount); err != nil {
@@ -109,7 +114,9 @@ func ReserveBillingBalances(params BillingBalanceReserveParams) error {
 	if err != nil {
 		return err
 	}
-	invalidateBillingBalanceCaches(params.UserId, params.TokenId, params.BillingSource, params.ApplyToken)
+	if len(transaction) == 0 {
+		invalidateBillingBalanceCaches(params.UserId, params.TokenId, params.BillingSource, params.ApplyToken)
+	}
 	return nil
 }
 

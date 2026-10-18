@@ -41,11 +41,10 @@ import type {
   OrganizationSummary,
   OrganizationTrendRow,
   OrganizationUsageParams,
-  OrganizationUsageRow,
   PaginatedResponse,
 } from './types'
 
-function buildQuery(params: object) {
+export function buildQuery(params: object) {
   const query = new URLSearchParams()
   Object.entries(params as Record<string, unknown>).forEach(([key, value]) => {
     if (value === undefined || value === '') return
@@ -60,8 +59,27 @@ export const organizationKeys = {
     ['organization', 'members', includeHistory] as const,
   summary: (params: OrganizationUsageParams) =>
     ['organization', 'billing', 'summary', params] as const,
-  logs: (params: OrganizationUsageParams) =>
-    ['organization', 'billing', 'logs', params] as const,
+  usageSnapshot: (params: OrganizationUsageParams, organizationId?: number) =>
+    [
+      'organization',
+      organizationId,
+      'billing',
+      'usage-snapshot',
+      params,
+    ] as const,
+  usageLogsCursor: (
+    params: OrganizationUsageParams,
+    cursor: string,
+    organizationId?: number
+  ) =>
+    [
+      'organization',
+      organizationId,
+      'billing',
+      'logs-cursor',
+      params,
+      cursor,
+    ] as const,
   trend: (params: OrganizationUsageParams) =>
     ['organization', 'billing', 'trend', params] as const,
   models: (params: OrganizationUsageParams) =>
@@ -83,8 +101,29 @@ export const organizationKeys = {
     ['admin', 'organizations', id, 'billing', 'channels', params] as const,
   adminBillingTrend: (id: number, params: OrganizationUsageParams) =>
     ['admin', 'organizations', id, 'billing', 'trend', params] as const,
-  adminLogs: (id: number, params: OrganizationUsageParams) =>
-    ['admin', 'organizations', id, 'billing', 'logs', params] as const,
+  adminUsageSnapshot: (id: number, params: OrganizationUsageParams) =>
+    [
+      'admin',
+      'organizations',
+      id,
+      'billing',
+      'usage-snapshot',
+      params,
+    ] as const,
+  adminUsageLogsCursor: (
+    id: number,
+    params: OrganizationUsageParams,
+    cursor: string
+  ) =>
+    [
+      'admin',
+      'organizations',
+      id,
+      'billing',
+      'logs-cursor',
+      params,
+      cursor,
+    ] as const,
   filterOptions: (includeChannels: boolean) =>
     ['organization', 'billing', 'filter-options', includeChannels] as const,
   adminFilterOptions: (id: number) =>
@@ -179,14 +218,6 @@ export async function getOrganizationBillingSummary(
   const res = await api.get(
     `/api/organization/current/billing/summary?${query}`
   )
-  return res.data
-}
-
-export async function getOrganizationBillingLogs(
-  params: OrganizationUsageParams
-): Promise<ApiResponse<PaginatedResponse<OrganizationUsageRow>>> {
-  const query = buildQuery(params)
-  const res = await api.get(`/api/organization/current/billing/logs?${query}`)
   return res.data
 }
 
@@ -450,17 +481,6 @@ export async function getAdminOrganizationBillingSummary(
   const query = buildQuery(params)
   const res = await api.get(
     `/api/admin/organizations/${id}/billing/summary?${query}`
-  )
-  return res.data
-}
-
-export async function getAdminOrganizationBillingLogs(
-  id: number,
-  params: OrganizationUsageParams
-): Promise<ApiResponse<PaginatedResponse<OrganizationUsageRow>>> {
-  const query = buildQuery(params)
-  const res = await api.get(
-    `/api/admin/organizations/${id}/billing/logs?${query}`
   )
   return res.data
 }

@@ -110,6 +110,8 @@ func Distribute() func(c *gin.Context) {
 			if selectErr != nil {
 				if selectErr.FilterKind == taskdto.FilterTaskPluginIdentity {
 					logTaskPluginChannelDecision(c, selectErr.Channel, modelRequest.Model, "channel_rejected", "identity_mismatch")
+				} else if selectErr.FilterKind == taskdto.FilterVideoEnhance {
+					logTaskPluginChannelDecision(c, selectErr.Channel, modelRequest.Model, "channel_rejected", "enhancement_unavailable")
 				}
 				message := selectErr.Message
 				if selectErr.NoAvailableChannel {
