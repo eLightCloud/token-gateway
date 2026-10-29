@@ -13,6 +13,7 @@ import (
 )
 
 type TopUp struct {
+	MoneySnapshot   string  `json:"-" gorm:"type:text"`
 	Id              int     `json:"id"`
 	UserId          int     `json:"user_id" gorm:"index"`
 	Amount          int64   `json:"amount"`
@@ -279,6 +280,10 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		topUp.CreditedQuota = quota
+		topUp.MoneySnapshot, err = BillingMoneyFact(quota)
+		if err != nil {
+			return err
+		}
 		err = tx.Save(topUp).Error
 		if err != nil {
 			return err
@@ -508,6 +513,10 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		topUp.CreditedQuota = quotaToAdd
+		topUp.MoneySnapshot, quotaErr = BillingMoneyFact(quotaToAdd)
+		if quotaErr != nil {
+			return quotaErr
+		}
 		if err := tx.Save(topUp).Error; err != nil {
 			return err
 		}
@@ -567,6 +576,10 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		topUp.CreditedQuota = quota
+		topUp.MoneySnapshot, err = BillingMoneyFact(quota)
+		if err != nil {
+			return err
+		}
 		err = tx.Save(topUp).Error
 		if err != nil {
 			return err
@@ -655,6 +668,10 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		topUp.CreditedQuota = quotaToAdd
+		topUp.MoneySnapshot, err = BillingMoneyFact(quotaToAdd)
+		if err != nil {
+			return err
+		}
 		if err := tx.Save(topUp).Error; err != nil {
 			return err
 		}
@@ -722,6 +739,10 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		topUp.CreditedQuota = quotaToAdd
+		topUp.MoneySnapshot, err = BillingMoneyFact(quotaToAdd)
+		if err != nil {
+			return err
+		}
 		if err := tx.Save(topUp).Error; err != nil {
 			return err
 		}

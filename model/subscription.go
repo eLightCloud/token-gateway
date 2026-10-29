@@ -212,11 +212,12 @@ func (p *SubscriptionPlan) NormalizeDefaults() {
 
 // Subscription order (payment -> webhook -> create UserSubscription)
 type SubscriptionOrder struct {
-	Id           int     `json:"id"`
-	UserId       int     `json:"user_id" gorm:"index"`
-	PlanId       int     `json:"plan_id" gorm:"index"`
-	Money        float64 `json:"money"`
-	ChargedQuota int64   `json:"charged_quota" gorm:"bigint;not null;default:0"`
+	MoneySnapshot string  `json:"-" gorm:"type:text"`
+	Id            int     `json:"id"`
+	UserId        int     `json:"user_id" gorm:"index"`
+	PlanId        int     `json:"plan_id" gorm:"index"`
+	Money         float64 `json:"money"`
+	ChargedQuota  int64   `json:"charged_quota" gorm:"bigint;not null;default:0"`
 
 	TradeNo         string `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod   string `json:"payment_method" gorm:"type:varchar(50)"`
@@ -500,10 +501,10 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			return nil, err
 		}
 		if count >= int64(plan.MaxPurchasePerUser) {
-			return nil, errors.New("已达到该套餐购买上限")
+			return nil, ErrSubscriptionPurchaseLimitReached
 		}
 	}
-	nowUnix := GetDBTimestamp()
+	nowUnix := GetDBTimestamp(tx)
 	now := time.Unix(nowUnix, 0)
 	endUnix, err := calcPlanEndTime(now, plan)
 	if err != nil {
@@ -758,90 +759,34 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 	if userId <= 0 || planId <= 0 {
 		return errors.New("invalid userId or planId")
 	}
-
 	var logPlanTitle string
-	var logMoney float64
-	var chargedQuota int64
-	var upgradeGroup string
+	var order *SubscriptionOrder
+	var subscription *UserSubscription
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
 		plan, err := getSubscriptionPlanByIdTx(tx, planId)
 		if err != nil {
 			return err
 		}
-		if !plan.Enabled {
-			return errors.New("套餐未启用")
-		}
-		if plan.PriceAmount < 0 {
-			return errors.New("套餐价格不能为负数")
-		}
-		if plan.AllowBalancePay != nil && !*plan.AllowBalancePay {
-			return errors.New("该套餐不允许使用余额兑换")
-		}
-
-		requiredQuota, err := calcSubscriptionBalanceQuota(plan.PriceAmount)
-		if err != nil {
-			return err
-		}
-
-		var user User
-		if err := lockForUpdate(tx).Where("id = ?", userId).First(&user).Error; err != nil {
-			return err
-		}
-		if requiredQuota > 0 && user.Quota < requiredQuota {
-			return errors.New("余额不足")
-		}
-		if requiredQuota > 0 {
-			if err := adjustUserWalletInTx(tx, userId, -requiredQuota); err != nil {
-				return err
-			}
-		}
-
-		subscription, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, PaymentMethodBalance)
-		if err != nil {
-			return err
-		}
-
-		now := common.GetTimestamp()
-		tradeNo := fmt.Sprintf("SUBBALUSR%dNO%s%d", userId, common.GetRandomString(6), time.Now().UnixNano())
-		order := &SubscriptionOrder{
-			UserId:          userId,
-			PlanId:          plan.Id,
-			Money:           plan.PriceAmount,
-			ChargedQuota:    requiredQuota,
-			TradeNo:         tradeNo,
-			PaymentMethod:   PaymentMethodBalance,
-			PaymentProvider: PaymentProviderBalance,
-			Status:          common.TopUpStatusSuccess,
-			CreateTime:      now,
-			CompleteTime:    now,
-			ProviderPayload: fmt.Sprintf("charged_quota=%d", requiredQuota),
-		}
-		if err := tx.Create(order).Error; err != nil {
-			return err
-		}
-
 		logPlanTitle = plan.Title
-		logMoney = plan.PriceAmount
-		chargedQuota = requiredQuota
-		if subscription.PrevUserGroup != "" {
-			upgradeGroup = strings.TrimSpace(subscription.UpgradeGroup)
+		conversion, err := CurrentBillingMoneySnapshot()
+		if err != nil {
+			return err
 		}
-		return nil
+		order, subscription, err = purchaseSubscriptionWithBalanceTx(tx, userId, plan, conversion)
+		return err
 	})
 	if err != nil {
+		if errors.Is(err, ErrBillingWalletQuotaInsufficient) {
+			return errors.New("余额不足")
+		}
 		return err
 	}
-
-	if chargedQuota > 0 {
-		if err := cacheDecrUserQuota(userId, chargedQuota); err != nil {
-			common.SysLog("failed to decrease user quota cache after subscription balance purchase: " + err.Error())
-		}
-	}
-	if upgradeGroup != "" {
+	invalidateBillingBalanceCaches(userId, 0, "wallet", false)
+	if subscription.PrevUserGroup != "" {
 		refreshSubscriptionUserGroupCache(userId, "subscription balance purchase")
 	}
-	msg := fmt.Sprintf("使用余额购买订阅成功，套餐: %s，支付金额: %.2f，扣除额度: %d", logPlanTitle, logMoney, chargedQuota)
-	RecordLog(userId, LogTypeTopup, msg)
+	RecordLog(userId, LogTypeTopup, fmt.Sprintf("使用余额购买订阅成功，套餐: %s，支付金额: %.2f，扣除额度: %d", logPlanTitle, order.Money, order.ChargedQuota))
 	return nil
 }
 

@@ -246,6 +246,12 @@ func validateOptionValue(key string, value string) error {
 		if err != nil || parsed <= 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
 			return fmt.Errorf("%s must be a finite number greater than 0", key)
 		}
+		if key == "QuotaPerUnit" || key == "USDExchangeRate" {
+			if err := ValidateBillingMoneySetting(parsed); err != nil {
+				common.SysLog("billing.money_setting rejected field=" + key + " reason=precision_or_range")
+				return err
+			}
+		}
 		return nil
 	}
 	if key == operation_setting.ToolPriceOptionKey {

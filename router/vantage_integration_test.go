@@ -1,10 +1,14 @@
 package router
 
 import (
+	"fmt"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -327,4 +331,149 @@ func TestVantageIntegrationHTTPContract(t *testing.T) {
 		assert.NotContains(t, string(encoded), rootToken)
 	})
 
+}
+
+// Optional consumer-driven integration: real Gin HTTP plus the adjacent Vantage typed client.
+func TestVantageModelServiceConsumer(t *testing.T) {
+	clientScript := os.Getenv("VANTAGE_MODEL_SERVICE_CLIENT_TEST")
+	if clientScript == "" {
+		t.Skip("set VANTAGE_MODEL_SERVICE_CLIENT_TEST to run the Vantage consumer")
+	}
+	gin.SetMode(gin.TestMode)
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "billing.db")), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Log{}, &model.Option{}, &model.VantageAccountBinding{}, &model.VantageCredentialBinding{}, &model.VantageCredentialRotation{}, &model.VantageTokenQuotaConfig{}, &model.VantageTokenQuotaOperation{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.TaskSettlementJournal{}, &model.SystemTask{}, &model.SystemTaskLock{}))
+	require.NoError(t, model.MigrateVantageModelService(db))
+	priorDB, priorLog, redis := model.DB, model.LOG_DB, common.RedisEnabled
+	model.DB, model.LOG_DB, common.RedisEnabled = db, db, false
+	priorMain, priorLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	priorMaster := common.IsMasterNode
+	common.IsMasterNode = false
+	require.NoError(t, model.InitLogDB())
+	common.IsMasterNode = priorMaster
+	priorRate, priorScale := operation_setting.USDExchangeRate, common.QuotaPerUnit
+	operation_setting.USDExchangeRate, common.QuotaPerUnit = 7.3, 500000
+	priorPayments := *operation_setting.GetPaymentSetting()
+	operation_setting.GetPaymentSetting().ComplianceConfirmed = true
+	operation_setting.GetPaymentSetting().ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB, common.RedisEnabled = priorDB, priorLog, redis
+		common.SetDatabaseTypes(priorMain, priorLogType)
+		operation_setting.USDExchangeRate, common.QuotaPerUnit = priorRate, priorScale
+		*operation_setting.GetPaymentSetting() = priorPayments
+	})
+	key := strings.Repeat("fixture-billing-", 4)
+	_, err = model.SaveVantageIntegrationSettings(true, []string{"127.0.0.1"}, key)
+	require.NoError(t, err)
+	plan := model.SubscriptionPlan{Title: "Integration plan", Enabled: true, PriceAmount: 2, TotalAmount: 500000, DurationUnit: "month", DurationValue: 1, QuotaResetPeriod: "never"}
+	require.NoError(t, db.Create(&plan).Error)
+	engine := gin.New()
+	require.NoError(t, common.ConfigureTrustedProxies(engine, nil))
+	SetVantageIntegrationRouter(engine)
+	// Fixture-only billing stimulus, never registered by production routers.
+	engine.POST("/__fixture__/settle", func(c *gin.Context) {
+		var body struct {
+			Step int `json:"step"`
+		}
+		if c.ShouldBindJSON(&body) != nil || (body.Step != 1 && body.Step != 2) {
+			c.AbortWithStatus(400)
+			return
+		}
+		_, user, err := model.VantageServiceAccount(db, "personal", "7e02da00-28fc-49dc-96fd-c18c67cf0001")
+		if err != nil {
+			c.AbortWithStatus(500)
+			return
+		}
+		var token model.Token
+		if db.Where("user_id = ?", user.Id).First(&token).Error != nil {
+			c.AbortWithStatus(500)
+			return
+		}
+		quota := 500000
+		if body.Step == 2 {
+			quota = 100000
+		}
+		info := &relaycommon.RelayInfo{RequestId: fmt.Sprintf("fixture-native-settle-%d", body.Step), UserId: user.Id, TokenId: token.Id, TokenKey: token.Key, TokenUnlimited: token.UnlimitedQuota, ForcePreConsume: true, OriginModelName: "fixture-model", ChannelMeta: &relaycommon.ChannelMeta{}, UserSetting: user.GetSetting()}
+		if service.PreConsumeBilling(c, quota, info) != nil {
+			c.AbortWithStatus(500)
+			return
+		}
+		if body.Step == 1 {
+			operation_setting.USDExchangeRate = 9
+		}
+		if service.SettleBillingAndRecordConsumeLog(c, info, quota, model.RecordConsumeLogParams{Quota: quota, TokenId: token.Id, ModelName: "fixture-model"}, false) != nil {
+			c.AbortWithStatus(500)
+			return
+		}
+		c.JSON(200, gin.H{"success": true})
+	})
+	// Isolated fixture stimulus uses native recharge and BillingSession writers.
+	engine.POST("/__fixture__/activity", func(c *gin.Context) {
+		var body struct {
+			Kind          string `json:"kind"`
+			AccountType   string `json:"account_type"`
+			AccountRef    string `json:"account_ref"`
+			CredentialRef string `json:"credential_ref"`
+			Quota         int    `json:"quota"`
+			RequestRef    string `json:"request_ref"`
+		}
+		if c.ShouldBindJSON(&body) != nil || body.Quota <= 0 || body.Quota > 5000000 || body.RequestRef == "" {
+			c.AbortWithStatus(400)
+			return
+		}
+		_, user, err := model.VantageServiceAccount(db, body.AccountType, body.AccountRef)
+		if err != nil {
+			c.AbortWithStatus(404)
+			return
+		}
+		if body.Kind == "recharge" {
+			_, err = model.AdjustUserQuota(user.Id, common.RoleRootUser, "add", int64(body.Quota), 999)
+			if err != nil {
+				c.AbortWithStatus(500)
+				return
+			}
+			c.JSON(200, gin.H{"success": true})
+			return
+		}
+		var token model.Token
+		query := db.Where("user_id = ?", user.Id)
+		if body.CredentialRef != "" {
+			binding, err := model.GetVantageCredentialBinding(body.CredentialRef)
+			if err != nil || binding.TokenId == nil {
+				c.AbortWithStatus(404)
+				return
+			}
+			query = query.Where("id = ?", *binding.TokenId)
+		}
+		if query.First(&token).Error != nil {
+			c.AbortWithStatus(404)
+			return
+		}
+		info := &relaycommon.RelayInfo{RequestId: body.RequestRef, UserId: user.Id, TokenId: token.Id, TokenKey: token.Key, TokenUnlimited: token.UnlimitedQuota, ForcePreConsume: true, OriginModelName: "fixture-model", ChannelMeta: &relaycommon.ChannelMeta{}, UserSetting: user.GetSetting()}
+		if service.PreConsumeBilling(c, body.Quota, info) != nil {
+			c.AbortWithStatus(403)
+			return
+		}
+		if body.Kind == "cancel" {
+			info.Billing.Refund(c)
+		} else if body.Kind == "consume" {
+			if service.SettleBillingAndRecordConsumeLog(c, info, body.Quota, model.RecordConsumeLogParams{Quota: body.Quota, TokenId: token.Id, ModelName: "fixture-model"}, false) != nil {
+				c.AbortWithStatus(500)
+				return
+			}
+		} else {
+			c.AbortWithStatus(400)
+			return
+		}
+		c.JSON(200, gin.H{"success": true})
+	})
+	server := httptest.NewServer(engine)
+	defer server.Close()
+	cmd := exec.Command("uv", "run", "python", clientScript)
+	cmd.Dir = filepath.Dir(filepath.Dir(filepath.Dir(clientScript)))
+	cmd.Env = append(os.Environ(), "VANTAGE_BILLING_FIXTURE_URL="+server.URL, "VANTAGE_BILLING_FIXTURE_KEY="+key)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", string(output))
+	t.Log(string(output))
 }

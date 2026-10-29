@@ -502,7 +502,7 @@ func VantageEnsureEnterpriseAccount(tenant, displayName string) (acct *VantageAc
 // VantageEnsureMemberCredential 为当前成员关系幂等确保一个员工 Key。
 // 关系已撤销（含撤销先于开通到达的占位事实）时拒绝开户；
 // 已存在有效凭据时恢复同一凭据，响应丢失的重试不会生成新 Key。
-func VantageEnsureMemberCredential(tenant, subject, membershipRef string) (acct *VantageAccountBinding, cred *VantageCredentialBinding, token *Token, created bool, err error) {
+func VantageEnsureMemberCredential(tenant, subject, membershipRef string, initialUnlimited ...bool) (acct *VantageAccountBinding, cred *VantageCredentialBinding, token *Token, created bool, err error) {
 	for attempt := range 2 {
 		err = DB.Transaction(func(tx *gorm.DB) error {
 			existing, found, terr := vantageAccountForUpdate(tx, VantageAccountTypeEnterprise, tenant)
@@ -533,6 +533,9 @@ func VantageEnsureMemberCredential(tenant, subject, membershipRef string) (acct 
 				return terr
 			}
 			initializeVantageEnterpriseTokenQuota(token)
+			if len(initialUnlimited) > 0 && initialUnlimited[0] {
+				token.UnlimitedQuota = true
+			}
 			if err := tx.Create(token).Error; err != nil {
 				return err
 			}

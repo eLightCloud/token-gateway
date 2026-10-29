@@ -51,6 +51,11 @@ func PrepareMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.
 		return false, errors.New("legacy Midjourney billing does not support subscriptions")
 	}
 
+	snapshot, err := requestMoneySnapshot(relayInfo)
+	if err != nil {
+		return false, err
+	}
+	task.PrivateData.MoneySnapshot = snapshot
 	task.Quota = quota
 	task.BillingChannelId = task.ChannelId
 	if relayInfo.ChannelMeta != nil && relayInfo.ChannelId > 0 {
@@ -120,7 +125,7 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 	other.SetPublic("billing_source", BillingSourceWallet)
 	other.SetPublic("task_id", task.MjId)
 	other.SetPublic("reason", reason)
-	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+	logParams := model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   model.LogTypeRefund,
 		Content:   "",
@@ -129,7 +134,11 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 		Quota:     quota,
 		TokenId:   task.TokenId,
 		Other:     other,
-	})
+	}
+	if err := attachBillingMoney(&logParams, task.PrivateData.MoneySnapshot); err != nil {
+		logger.LogWarn(ctx, "Midjourney refund monetary evidence is invalid")
+	}
+	model.RecordTaskBillingLog(logParams)
 
 	task.Quota = 0
 	if err := task.UpdateBillingState(); err != nil {

@@ -49,3 +49,31 @@ relaykit/relayconvert/chat_responses_live_local_test.go
 service/openaicompat/chat_responses_live_local_test.go
 go.work
 go.work.sum
+
+# Claude 兼容本地测试证据（含原始报文，仅本地保留）
+docs/70-research/claude 兼容/2026-10-18-原始报文/
+docs/70-research/claude 兼容/lighting-补测证据-2026-10-22-190202/
+docs/70-research/claude 兼容/lighting-测试证据-2026-10-22-184205/
+docs/70-research/claude 兼容/numspirit-补测证据-2026-10-22-190202/
+docs/70-research/claude 兼容/numspirit-测试证据-2026-10-22-180827/
+docs/70-research/claude 兼容/lighting-API补测证据-2026-10-22-232155/
+docs/70-research/claude 兼容/numspirit-API补测证据-2026-10-22-232155/
+
+# 本地运行工作区（PID、本地构建二进制、运行日志）
+/.local/
+
+# 环境变量文件（保留示例文件）
+.env*
+!.env.example
+
+# 本地构建/测试产物
+*.pid
+*.log
+coverage.out
+*.coverprofile
+*.prof
+*.test
+
+# 生成合同所用的 Python 工具缓存
+__pycache__/
+*.py[cod]

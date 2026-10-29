@@ -113,6 +113,7 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
+	MoneySnapshot       *BillingMoneySnapshot    `json:"money_snapshot,omitempty"`
 	UsageReconciliation *TaskUsageReconciliation `json:"usage_reconciliation,omitempty"`
 
 	Key            string `json:"key,omitempty"`

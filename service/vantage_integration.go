@@ -285,7 +285,7 @@ func VantageProvisionEnterpriseAccount(tenant, displayName string) (*VantageProv
 
 // VantageProvisionMemberCredential 为当前成员关系确保一个员工 Key。
 // 员工创建和凭据轮换从不触发赠送；关系已撤销时拒绝。
-func VantageProvisionMemberCredential(tenant, subject, membershipRef string) (*VantageProvisionResult, error) {
+func VantageProvisionMemberCredential(tenant, subject, membershipRef string, initialUnlimited ...bool) (*VantageProvisionResult, error) {
 	if err := validateVantageRef("tenant", tenant); err != nil {
 		return nil, err
 	}
@@ -295,7 +295,7 @@ func VantageProvisionMemberCredential(tenant, subject, membershipRef string) (*V
 	if err := validateVantageRef("membership_ref", membershipRef); err != nil {
 		return nil, err
 	}
-	acct, cred, token, created, err := model.VantageEnsureMemberCredential(tenant, subject, membershipRef)
+	acct, cred, token, created, err := model.VantageEnsureMemberCredential(tenant, subject, membershipRef, initialUnlimited...)
 	if err != nil {
 		return nil, vantageErrorFromModel(err)
 	}

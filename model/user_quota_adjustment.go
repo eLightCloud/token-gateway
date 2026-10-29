@@ -71,6 +71,10 @@ func AdjustUserQuota(userID, operatorRole int, mode string, value int64, operato
 		}
 		adjustment = UserQuotaAdjustmentResult{UserID: user.Id, Username: user.Username, Before: user.Quota, After: after}
 		fact := UserQuotaAdjustment{UserId: user.Id, OperatorUserId: operatorUserID, DeltaQuota: after - user.Quota, BalanceBefore: user.Quota, BalanceAfter: after, Mode: mode, CreatedAt: common.GetTimestamp()}
+		fact.MoneySnapshot, err = BillingMoneyFact(fact.DeltaQuota)
+		if err != nil {
+			return err
+		}
 		if err := tx.Create(&fact).Error; err != nil {
 			return err
 		}

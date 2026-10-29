@@ -54,6 +54,14 @@ func SettleBillingAndRecordConsumeLog(ctx *gin.Context, relayInfo *relaycommon.R
 		return fmt.Errorf("relayInfo is nil")
 	}
 	logParams := model.BuildConsumeBillingLogParams(ctx, relayInfo.UserId, params)
+	snapshot, err := requestMoneySnapshot(relayInfo)
+	if err != nil {
+		return err
+	}
+	if err := attachBillingMoney(&logParams, snapshot); err != nil {
+		return err
+	}
+
 	requestCtx := context.Background()
 	if ctx != nil && ctx.Request != nil {
 		requestCtx = ctx.Request.Context()
@@ -105,6 +113,14 @@ func SettleTaskSubmissionBilling(ctx *gin.Context, relayInfo *relaycommon.RelayI
 		return fmt.Errorf("invalid task billing submission")
 	}
 	logParams := model.BuildConsumeBillingLogParams(ctx, relayInfo.UserId, params)
+	snapshot, err := requestMoneySnapshot(relayInfo)
+	if err != nil {
+		return err
+	}
+	if err := attachBillingMoney(&logParams, snapshot); err != nil {
+		return err
+	}
+
 	requestCtx := context.Background()
 	if ctx != nil && ctx.Request != nil {
 		requestCtx = ctx.Request.Context()
@@ -127,6 +143,7 @@ func SettleTaskSubmissionBilling(ctx *gin.Context, relayInfo *relaycommon.RelayI
 	if billingSource == "" {
 		billingSource = BillingSourceWallet
 	}
+	task.PrivateData.MoneySnapshot = snapshot
 	task.Quota = 0
 	journal := &model.TaskSettlementJournal{
 		RequestId:           "settle:" + relayInfo.RequestId,
@@ -160,6 +177,14 @@ func SettleMidjourneySubmissionBilling(ctx *gin.Context, relayInfo *relaycommon.
 		return fmt.Errorf("invalid midjourney billing submission")
 	}
 	logParams := model.BuildConsumeBillingLogParams(ctx, relayInfo.UserId, params)
+	snapshot, err := requestMoneySnapshot(relayInfo)
+	if err != nil {
+		return err
+	}
+	if err := attachBillingMoney(&logParams, snapshot); err != nil {
+		return err
+	}
+
 	requestCtx := context.Background()
 	if ctx != nil && ctx.Request != nil {
 		requestCtx = ctx.Request.Context()
@@ -171,6 +196,7 @@ func SettleMidjourneySubmissionBilling(ctx *gin.Context, relayInfo *relaycommon.
 	if billingSource == "" {
 		billingSource = BillingSourceWallet
 	}
+	task.PrivateData.MoneySnapshot = snapshot
 	task.Quota = 0
 	journal := &model.TaskSettlementJournal{
 		RequestId:           "settle:" + relayInfo.RequestId,
@@ -223,6 +249,14 @@ func ApplyOneShotBillingAndRecordConsumeLog(ctx *gin.Context, relayInfo *relayco
 		billingSource = BillingSourceWallet
 	}
 	logParams := model.BuildConsumeBillingLogParams(ctx, relayInfo.UserId, params)
+	snapshot, err := requestMoneySnapshot(relayInfo)
+	if err != nil {
+		return err
+	}
+	if err := attachBillingMoney(&logParams, snapshot); err != nil {
+		return err
+	}
+
 	requestCtx := context.Background()
 	if ctx != nil && ctx.Request != nil {
 		requestCtx = ctx.Request.Context()

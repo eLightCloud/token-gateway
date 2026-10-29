@@ -13,6 +13,7 @@ import (
 //
 // Routes are always registered; each request checks the current database policy.
 func SetVantageIntegrationRouter(router *gin.Engine) {
+	setVantageModelServiceRouter(router)
 	group := router.Group("/api/integrations/vantage/v1")
 	group.Use(middleware.VantageIntegrationAuth())
 	group.Use(middleware.AnonymousRequestBodyLimit())

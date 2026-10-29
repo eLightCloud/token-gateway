@@ -8,7 +8,7 @@ DEV_POSTGRES_DB = new-api
 DEV_POSTGRES_USER = root
 DEV_SQLITE_PATH ?= one-api.db
 
-.PHONY: all build-web build-all-web start-api dev dev-api dev-api-rebuild dev-web reset-setup test
+.PHONY: all build-web build-all-web start-api dev dev-api dev-api-rebuild dev-web reset-setup test contracts-check
 
 all: build-all-web start-api
 
@@ -40,7 +40,16 @@ dev-web:
 dev: dev-api dev-web
 
 # The main package embeds the ignored web/dist output and is covered after build-web.
-test:
+contracts-check:
+	@python3 scripts/generate_vantage_model_service.py --check
+
+test-model-service-matrix: contracts-check
+	@test -n "$${VANTAGE_BILLING_MYSQL_DSN:-}" || (echo 'VANTAGE_BILLING_MYSQL_DSN is required'; exit 1)
+	@test -n "$${VANTAGE_BILLING_POSTGRES_DSN:-}" || (echo 'VANTAGE_BILLING_POSTGRES_DSN is required'; exit 1)
+	@test -n "$${VANTAGE_BILLING_CLICKHOUSE_DSN:-}" || (echo 'VANTAGE_BILLING_CLICKHOUSE_DSN is required'; exit 1)
+	@go test ./service -run 'TestVantageModelService(DatabaseMatrix|ClickHouse)$$' -count=1 -v
+
+test: contracts-check
 	@echo "Testing root Go module..."
 	@root_module=$$(GOWORK=off go list -m); \
 		root_packages=$$(GOWORK=off go list -e ./... | grep -vxF "$$root_module"); \

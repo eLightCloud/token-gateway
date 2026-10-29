@@ -125,6 +125,9 @@ func appendTaskBillingContextInfo(other *model.LogOther, bc *model.TaskBillingCo
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
 func taskBillingOther(task *model.Task) *model.LogOther {
 	other := model.NewLogOther()
+	if task.PrivateData.MoneySnapshot != nil {
+		other.SetPublic("money_snapshot", task.PrivateData.MoneySnapshot)
+	}
 	if bc := task.PrivateData.BillingContext; bc != nil {
 		other.SetPublic("model_price", bc.ModelPrice)
 		if bc.ModelRatio > 0 {

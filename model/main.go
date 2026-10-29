@@ -404,6 +404,7 @@ func migrateDB() error {
 		&VantageCredentialRotation{},
 		&VantageTokenQuotaConfig{},
 		&VantageTokenQuotaOperation{},
+		&VantageServiceOperation{},
 	)
 	if err != nil {
 		return err

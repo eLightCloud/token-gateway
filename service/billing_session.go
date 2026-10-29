@@ -27,6 +27,7 @@ import (
 // BillingSession 封装单次请求的预扣费/结算/退款生命周期。
 // 实现 relaycommon.BillingSettler 接口。
 type BillingSession struct {
+	moneySnapshot    *model.BillingMoneySnapshot
 	relayInfo        *relaycommon.RelayInfo
 	funding          FundingSource
 	preConsumedQuota int  // 实际预扣额度（信任用户可能为 0）
@@ -80,6 +81,9 @@ func (s *BillingSession) settle(ctx context.Context, actualQuota int, channelId 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := attachBillingMoney(logParams, s.moneySnapshot); err != nil {
+		return err
+	}
 	if err := applyTaskSettlementJournal(ctx, journal, logParams); err != nil {
 		return err
 	}
@@ -122,6 +126,10 @@ func (s *BillingSession) settleTaskSubmission(ctx context.Context, actualQuota i
 	task.Quota = 0
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	task.PrivateData.MoneySnapshot = s.moneySnapshot
+	if err := attachBillingMoney(logParams, s.moneySnapshot); err != nil {
+		return err
 	}
 	if err := applyTaskSettlementJournalWithTask(ctx, journal, task, logParams); err != nil {
 		return err
@@ -392,6 +400,10 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
+	moneySnapshot, err := model.CurrentBillingMoneySnapshot()
+	if err != nil {
+		return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+	}
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
 
 	// 钱包路径需要先检查用户额度
@@ -415,8 +427,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		relayInfo.UserQuota = userQuota
 
 		session := &BillingSession{
-			relayInfo: relayInfo,
-			funding:   &WalletFunding{userId: relayInfo.UserId},
+			moneySnapshot: moneySnapshot,
+			relayInfo:     relayInfo,
+			funding:       &WalletFunding{userId: relayInfo.UserId},
 		}
 		if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
 			return nil, apiErr
@@ -430,7 +443,8 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 			subConsume = 1
 		}
 		session := &BillingSession{
-			relayInfo: relayInfo,
+			moneySnapshot: moneySnapshot,
+			relayInfo:     relayInfo,
 			funding: &SubscriptionFunding{
 				requestId: relayInfo.RequestId,
 				userId:    relayInfo.UserId,

@@ -23,6 +23,12 @@ func TestValidateOptionValueRequiresPositiveFiniteBillingValues(t *testing.T) {
 				assert.Contains(t, err.Error(), key)
 			}
 			require.NoError(t, validateOptionValue(key, "0.0001"))
+			if key != "general_setting.custom_currency_exchange_rate" {
+				for _, value := range []string{"7.123456789", "1e100", "0.000000001"} {
+					require.Error(t, validateOptionValue(key, value))
+				}
+				require.NoError(t, validateOptionValue(key, "7.12345678"))
+			}
 		})
 	}
 }

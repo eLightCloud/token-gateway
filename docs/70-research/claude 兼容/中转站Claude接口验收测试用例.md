@@ -1,12 +1,14 @@
 ---
-status: current
+status: reference
 owner: Dev Team
-last-reviewed: 2026-10-18
+last-reviewed: 2026-10-22
 ---
 
 # 中转站 Claude 接口验收测试用例
 
-本文是后续各中转站 **Claude Messages / Claude Code 兼容验收的测试执行入口**，汇总本会话已有测试、历史回归、未覆盖项目和蒸馏采集检查，共 **64 个用例组**。每组可包含 JSON/SSE、不同路线和多个负例，因此用例组数不等于实际请求数。
+**本轮执行清单以[2026-10-22六渠道API报告的文末附件](中转站Claude接口验收-四渠道汇总测试报告-2026-10-22.md#附件六渠道完整messages检查项对比表)为准。** 该附件逐项定义请求断言、JSON/SSE模式、结果和证据；本轮仅验收有效凭据和已有模型下的/v1/messages合同；凭据负例、错误路由、客户端、区域/来源证明、余额专项、缓存到期等待、训练及SLA不在范围内。
+
+以下61组保留为历史编号及其他兼容场景参考，**不再是本轮必测清单**。其中“开始前必须固定”“客户端”“蒸馏”等前置和判据不作为本轮API验收门槛；本轮具体定义及结果以报告附件为准，当前为234项；摘要是否非空、回答准确性、非零缓存命中及本地聚合一致性不作为协议验收项。
 
 协议要求仍以 [接口兼容要求 R01–R12](上游号池与ClaudeCode接口兼容要求.md) 为准；本文只集中维护操作步骤和验收断言，不另建第二套协议。历史执行结果见 [10 月 18 日复测报告](2026-10-18-两端Claude兼容复测报告.md)、[早期回归记录](Claude接口响应结构与停止标记验证.md)、[原始报文索引](2026-10-18-原始报文/索引.md)。**本文不是任何站点已经通过测试的证明。** OpenAI、Gemini 等其他协议需增加对应协议用例，不能用本文件替代它们的完整验收。
 
@@ -159,18 +161,6 @@ schema 使用对应的 string/integer/boolean/object/array 类型，声明必填
 **前置与步骤：** 对比 `/v1/messages`、`/v1/messages?beta=true`；另外调用单数 `/v1/message`。根地址不重复加 `/v1`。必要时记录 `HEAD /api/hello` 启动探测。
 
 **通过与证据：** 两个标准变体正确路由；错误路径明确失败，启动探测不混入推理统计。保存 E。S2；传输超时和 404 分开记录。
-
-### TC05 模型列表、分页和能力元数据（P1，T21）
-
-**前置与步骤：** GET `/v1/models`，按冻结合同检查条目；使用小页大小和游标遍历，另测试空页/无效游标/不同权限。启用网关模型发现时再用真实客户端查看。
-
-**通过与证据：** Claude 格式、游标、可见模型和能力声明真实；不以 OpenAI 外层替代完整 Claude 列表。不额外伪造未知能力。保存每页 E。通常 S3，若导致暗换模型则 S1。
-
-### TC06 不存在或被禁止的模型（P0，T17/T21）
-
-**前置与步骤：** 固定有效凭据，将 B 的模型分别改为不存在的 ID、当前身份被禁止的 ID；其他内容不变。
-
-**通过与证据：** 按冻结合同报资源/权限错误，不自动改用便宜模型。保存 E 和路由记录。S1。
 
 ### TC07 版本、beta 及扩展头透传（P0，T01/T14）
 
@@ -402,12 +392,6 @@ schema 使用对应的 string/integer/boolean/object/array 类型，声明必填
 
 **通过与证据：** 明确拒绝，不溢出、不变负扣费、不静默裁剪为其他配置；既有计费规范仍生效。保存状态、路由及可用账务证据，未取得账务证据就只报告协议部分。S1。
 
-### TC44 输入 Token 计数接口（P1，T13）
-
-**前置与步骤：** POST `/v1/messages/count_tokens`，覆盖基本消息、system、合法客户端工具及支持的图片/文档来源；不发送生成请求专属的多余字段。对官方明确不支持的输入做独立负例。
-
-**通过与证据：** 返回合法模型计数，不能用字符数/固定数假装；没有生成回答。计数可与实际用量有小差异，学生 tokenizer 另算。404 是完整 API 差异，但不是 Claude Code 必然不能工作的证据。保存 E。S2。
-
 ### TC45 用量完整性与累计帧（P0，T12/T18）
 
 **前置与步骤：** 核对 JSON 与 SSE 各自真实执行的 usage；用 F 构造多次累计 usage 及缓存/思考细分，和上游权威执行记录关联。
@@ -492,7 +476,7 @@ schema 使用对应的 string/integer/boolean/object/array 类型，声明必填
 
 ### TC58 客户实际配置、恢复及后台请求（P1，T19/T21）
 
-**前置与步骤：** 在最小配置通过后启用客户实际配置，覆盖会话恢复、后台模型、模型发现/手动选择；声明支持的 Agent SDK/编辑器入口独立测试。
+**前置与步骤：** 在最小配置通过后启用客户实际配置，覆盖会话恢复、后台模型及手动选择；声明支持的 Agent SDK/编辑器入口独立测试。
 
 **通过与证据：** 配置及认证来源正确，后台请求也走约定模型和根地址；bare 通过不自动覆盖插件、长会话或其他入口。保存脱敏启动/网络记录。S1。
 
@@ -552,15 +536,15 @@ schema 使用对应的 string/integer/boolean/object/array 类型，声明必填
 | T10 | TC30、TC32–TC33、TC36、TC47 |
 | T11 | TC34–TC38 |
 | T12 | TC39–TC41、TC45 |
-| T13 | TC42–TC44 |
+| T13 | TC42–TC43 |
 | T14 | TC04、TC07、TC11、TC24、TC28–TC29、TC43、TC53、TC56、TC60 |
 | T15 | TC01、TC38、TC41、TC52、TC63 |
 | T16 | TC18、TC48–TC51 |
-| T17 | TC02–TC03、TC06、TC23、TC43、TC46–TC48、TC51 |
+| T17 | TC02–TC03、TC23、TC43、TC46–TC48、TC51 |
 | T18 | TC08、TC10–TC11、TC19、TC45、TC60 |
 | T19 | TC57–TC58 |
 | T20 | TC19、TC25、TC53–TC56 |
-| T21 | TC01、TC05–TC06、TC58、TC63 |
+| T21 | TC01、TC58、TC63 |
 | T22 | TC08–TC10、TC46、TC59–TC60 |
 | 蒸馏与质量记录 | TC61–TC64，并结合 TC19、TC27、TC34–TC38 |
 
@@ -570,7 +554,6 @@ schema 使用对应的 string/integer/boolean/object/array 类型，声明必填
 | --- | --- |
 | `availability`、`auth_x_api_key` | TC01–TC02；包含 ccmax 路线探测 |
 | `basic_json/basic_sse`、`beta_query`、`wrong_path/wrong_path_retry` | TC04、TC08–TC09；原超时保留不覆盖 |
-| `models`、`count_tokens` | TC05、TC44 |
 | `stop_json/stop_sse`、`stop_miss_*`、`stop_multi_*` | TC13、TC15–TC17 |
 | `truncated_json/truncated_sse` | TC14 |
 | `nested_tool_*`、`nested_roundtrip_*`、`forced_tool` | TC20–TC21、TC24 |
@@ -585,7 +568,7 @@ schema 使用对应的 string/integer/boolean/object/array 类型，声明必填
 
 10 月 13–14 日的非流式工具 input 字符串、omitted 块丢失、停止标记误报、流式开始 null 缺失、模型名前缀不一致、签名损坏被接受，分别保留在 TC20、TC26、TC15、TC09、TC01/TC10、TC32。供应方八项签名报告归入 TC30–TC33；其“由外观认证官方来源”的推断不作为通过依据，见 TC63。
 
-以上只说明旧证据落在哪个用例，不预填新执行状态。当前 107 份调用记录、69 份 HTTP 200（其中含模型列表）和 67 份 SDK 可解析消息不能换算成 107 个用例已通过。
+以上只说明旧证据落在哪个用例，不预填新执行状态。旧请求记录数量及HTTP 200、SDK可解析消息数量不能直接换算为通过的测试用例数。
 
 ## 13. 结果模板与交付规则
 
@@ -628,8 +611,8 @@ N/A合同依据或未完成原因：
 - [Streaming](https://platform.claude.com/docs/en/build-with-claude/streaming)：事件顺序、分片和累计用量。
 - [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)、[Preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking)：显示模式、签名及绑定。
 - [工具结果处理](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls)：工具往返。
-- [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)、[Token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting)：缓存和计数。
-- [Errors](https://platform.claude.com/docs/en/api/errors)、[Models](https://platform.claude.com/docs/en/api/models/list)：错误与模型发现。
+- [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)：缓存请求与响应。
+- [Errors](https://platform.claude.com/docs/en/api/errors)：错误响应。
 - [Claude Code 网关兼容指南](https://code.claude.com/docs/en/llm-gateway-protocol)：真实客户端接入与能力协商。
 - [项目计费规则](../../../.agents/rules/billing.md)：费用、重试和流中断验收的实现边界；本文不另建结算算法。
 

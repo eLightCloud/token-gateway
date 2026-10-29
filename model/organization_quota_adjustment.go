@@ -11,6 +11,7 @@ const (
 // UserQuotaAdjustment is the immutable financial fact created when an
 // administrator directly changes a user's wallet quota.
 type UserQuotaAdjustment struct {
+	MoneySnapshot  string `json:"-" gorm:"type:text"`
 	Id             int    `json:"id"`
 	UserId         int    `json:"user_id" gorm:"index:idx_user_quota_adjustment_period,priority:1"`
 	OperatorUserId int    `json:"operator_user_id" gorm:"index"`

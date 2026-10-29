@@ -68,6 +68,9 @@ func prepareTaskSettlementJournalLog(journal *model.TaskSettlementJournal, logPa
 		journal.LogDone = true
 		return nil
 	}
+	if err := finalizeBillingLogMoney(logParams); err != nil {
+		return err
+	}
 	logParams.OperationId = journal.RequestId
 	if logParams.Other == nil {
 		logParams.Other = model.NewLogOther()
