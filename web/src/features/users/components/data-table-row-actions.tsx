@@ -46,10 +46,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { SecurityRecoveryDialog } from '@/features/security-completion/recovery-dialog'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
+import { hasPermission } from '@/lib/admin-permissions'
 import { handleServerError } from '@/lib/handle-server-error'
+import { useAuthStore } from '@/stores/auth-store'
 
-import { manageUser, resetUserPasskey, resetUserTwoFA } from '../api'
+import { manageUser, resetUserPasskey } from '../api'
 import {
   USER_STATUS,
   USER_ROLE,
@@ -68,9 +71,12 @@ interface DataTableRowActionsProps {
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
   const user = row.original
+  const operator = useAuthStore((s) => s.auth.user)
+  const canRecoverSecurity = hasPermission(operator, 'account_security', 'recover') && operator?.id !== user.id && (operator?.role === USER_ROLE.ROOT || (operator?.role ?? 0) > user.role)
   const { setOpen, setCurrentRow, triggerRefresh } = useUsers()
   const [resetPasskeyOpen, setResetPasskeyOpen] = useState(false)
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
+  const [emailChangeOpen, setEmailChangeOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
 
@@ -111,22 +117,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       handleServerError(error, t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
       setResetPasskeyOpen(false)
-    }
-  }
-
-  const handleResetTwoFA = async () => {
-    try {
-      const result = await resetUserTwoFA(user.id)
-      if (result.success) {
-        toast.success(t('Two-factor authentication reset'))
-        triggerRefresh()
-      } else {
-        handleServerError(result, t('Failed to reset 2FA'))
-      }
-    } catch (error) {
-      handleServerError(error, t(ERROR_MESSAGES.UNEXPECTED))
-    } finally {
-      setResetTwoFAOpen(false)
     }
   }
 
@@ -239,9 +229,22 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         <DropdownMenuItem
           onSelect={(event) => {
             event.preventDefault()
+            setEmailChangeOpen(true)
+          }}
+          disabled={
+            !canRecoverSecurity
+          }
+        >
+          {t('Request email change')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault()
             setResetTwoFAOpen(true)
           }}
-          disabled={isRoot}
+          disabled={
+            !canRecoverSecurity
+          }
         >
           {t('Reset 2FA')}
           <DropdownMenuShortcut>
@@ -275,16 +278,20 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         handleConfirm={handleResetPasskey}
       />
 
-      <ConfirmDialog
+      <SecurityRecoveryDialog
+        key={`email-${user.id}`}
+        emailChange
+        open={emailChangeOpen}
+        onOpenChange={setEmailChangeOpen}
+        userID={user.id}
+        onSuccess={triggerRefresh}
+      />
+      <SecurityRecoveryDialog
+        key={user.id}
         open={resetTwoFAOpen}
         onOpenChange={setResetTwoFAOpen}
-        title={t('Reset Two-Factor Authentication')}
-        desc={t(
-          'Reset 2FA for {{username}}? The user must set up 2FA again to continue using it.',
-          { username: user.username }
-        )}
-        confirmText={t('Reset 2FA')}
-        handleConfirm={handleResetTwoFA}
+        userID={user.id}
+        onSuccess={triggerRefresh}
       />
 
       <UserBindingDialog

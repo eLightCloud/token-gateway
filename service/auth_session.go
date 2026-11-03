@@ -61,6 +61,9 @@ func CreateLoginSessionAtAuthVersion(userID int, expectedAuthVersion int64, logi
 }
 
 func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string) (*AuthBundle, error) {
+	if err := model.ResellerLoginAllowed(userID); err != nil {
+		return nil, err
+	}
 	user, err := model.GetUserCache(userID)
 	if err != nil {
 		return nil, err

@@ -79,6 +79,17 @@ func GenerateOAuthCode(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "绑定操作需要登录"})
 			return
 		}
+		if request.Intent == model.AuthFlowIntentBind {
+			security, err := model.GetSecurityCompletion(identity.UserID)
+			if err != nil {
+				writeSecurityOperationError(c, err)
+				return
+			}
+			if security.Required && !security.Complete {
+				writeSecurityOperationError(c, service.ErrVerificationForbidden)
+				return
+			}
+		}
 		userID = identity.UserID
 		sessionID = identity.SessionID
 		if request.Intent == model.AuthFlowIntentBind {

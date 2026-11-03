@@ -20,6 +20,7 @@ const (
 const userQuotaReserveScript = `
 if tonumber(redis.call('HGET', KEYS[1], 'Id') or '0') ~= tonumber(ARGV[2])
   or tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0') ~= tonumber(ARGV[3])
+  or redis.call('HGET', KEYS[1], 'ResellerKind') == 'agent_customer'
   or redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
   return -1
 end
@@ -33,6 +34,7 @@ return 1`
 const userQuotaDeltaScript = `
 if tonumber(redis.call('HGET', KEYS[1], 'Id') or '0') ~= tonumber(ARGV[2])
   or tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0') ~= tonumber(ARGV[3])
+  or redis.call('HGET', KEYS[1], 'ResellerKind') == 'agent_customer'
   or redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
   return -1
 end

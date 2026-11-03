@@ -14,6 +14,9 @@ var ErrWalletQuotaOutOfRange = errors.New("wallet quota result is out of range")
 // predicate makes the range check and arithmetic one atomic database action on
 // SQLite, MySQL, and PostgreSQL.
 func adjustUserWalletInTx(tx *gorm.DB, userId int, delta int64) error {
+	if err := RequireOrdinaryUser(tx, userId); err != nil {
+		return err
+	}
 	if userId <= 0 {
 		return errors.New("invalid wallet user id")
 	}

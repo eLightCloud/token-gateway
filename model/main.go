@@ -340,6 +340,10 @@ func migrateDB() error {
 		common.SysError("failed to migrate options primary key: " + err.Error())
 	}
 
+	if err := migrateReseller(DB); err != nil {
+		return err
+	}
+
 	err := DB.AutoMigrate(
 		&Channel{},
 		&Token{},
@@ -407,6 +411,9 @@ func migrateDB() error {
 		&VantageServiceOperation{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := migrateTwoFASecretStorage(DB); err != nil {
 		return err
 	}
 	if err := MigrateOrganizationInvoiceShardIndex(); err != nil {

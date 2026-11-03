@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -258,4 +259,46 @@ func TestTokenCacheInitPreservesLiveQuotaAndFenceBlocksStaleSnapshot(t *testing.
 	cached, err = cacheGetTokenByKey(token.Key)
 	require.NoError(t, err)
 	assert.EqualValues(t, 100, cached.RemainQuota)
+}
+
+func TestUserCacheSchemaGroupRefreshPreservesPendingQuota(t *testing.T) {
+	truncateTables(t)
+	testUserCacheSchemaGroupRefreshPreservesPendingQuota(t)
+}
+
+// Shared by the focused regression and the real-database S1 matrix.
+func testUserCacheSchemaGroupRefreshPreservesPendingQuota(t *testing.T) {
+	t.Helper()
+	for _, schema := range []int{userCacheSchemaVersion, userCacheSchemaVersion - 1} {
+		t.Run(fmt.Sprintf("schema_%d", schema), func(t *testing.T) {
+			resetBatchUpdateTestState(t)
+			useUserCacheMiniRedis(t)
+			common.BatchUpdateEnabled = true
+			user := createReserveTestUser(t, 10)
+			reserved, err := TryReserveUserQuota(user.Id, 8)
+			require.NoError(t, err)
+			require.True(t, reserved)
+			require.EqualValues(t, 10, getUserQuotaFromDB(t, user.Id), "reservation is still pending in the batch")
+			// Emulate a cache left by the previous binary, before a background group
+			// refresh. Identity fields did not exist in that schema.
+			require.NoError(t, common.RDB.HSet(t.Context(), getUserCacheKey(user.Id), "CacheSchema", schema).Err())
+			if schema != userCacheSchemaVersion {
+				require.NoError(t, common.RDB.HDel(t.Context(), getUserCacheKey(user.Id), "ResellerKind").Err())
+			}
+			require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Update("group", "upgraded").Error)
+			require.NoError(t, RefreshUserGroupCache(user.Id))
+			cached, err := GetUserCache(user.Id)
+			require.NoError(t, err)
+			assert.Equal(t, "upgraded", cached.Group)
+			assert.EqualValues(t, 2, cached.Quota, "first read after migration must preserve reserved funds")
+			reserved, err = TryReserveUserQuota(user.Id, 3)
+			require.NoError(t, err)
+			assert.False(t, reserved, "database's unflushed balance cannot authorize a second spend")
+			batchUpdate()
+			assert.EqualValues(t, 2, getUserQuotaFromDB(t, user.Id))
+			cached, err = GetUserCache(user.Id)
+			require.NoError(t, err)
+			assert.EqualValues(t, 2, cached.Quota)
+		})
+	}
 }

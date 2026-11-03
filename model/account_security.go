@@ -19,6 +19,15 @@ var (
 // password under the same user lock as the credential update. Only self-profile
 // fields are accepted; a stale snapshot cannot restore roles or account status.
 func ChangeUserPassword(identity AuthSessionIdentity, update *User, firstPassword bool) error {
+	kind, err := ResellerUserKind(DB, identity.UserID)
+	if err != nil {
+		return err
+	}
+	if SecurityCompletionRequired(kind) {
+		if err := common.ValidateSecurityAccountPassword(update.Password); err != nil {
+			return err
+		}
+	}
 	hash, err := common.HashAccountPassword(update.Password)
 	if err != nil {
 		return err

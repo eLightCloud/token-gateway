@@ -640,3 +640,69 @@ func TestManageUserQuotaAdjustmentPersistsInvoiceFact(t *testing.T) {
 	assert.Equal(t, int64(1_000_000), adjustment.BalanceBefore)
 	assert.Equal(t, int64(1_500_000), adjustment.BalanceAfter)
 }
+
+// Handler contracts complement the shared three-database domain fixture: body
+// fields cannot pick identities, and errors never expose persistence details.
+func TestResellerS1ManagementHandlers(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerQuotaAdjustment{}))
+	root := createQuotaTestOperator(t, db, common.RoleRootUser)
+	engine := gin.New()
+	engine.Use(func(c *gin.Context) { c.Set("id", root.Id); c.Set("role", root.Role); c.Next() })
+	engine.POST("/agents", CreateResellerAgent)
+	engine.POST("/agents/:id/quota", func(c *gin.Context) { c.Set("reseller_admin", true); AdjustResellerQuota(c) })
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/agents", strings.NewReader(`{"username":"api-agent","email":"api-agent@example.invalid","password":"must-never-be-set","quota":999,"role":100,"agent_user_id":999}`))
+	engine.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "password")
+	duplicate := httptest.NewRecorder()
+	engine.ServeHTTP(duplicate, httptest.NewRequest(http.MethodPost, "/agents", strings.NewReader(`{"username":"api-agent","email":"other@example.invalid"}`)))
+	require.Equal(t, http.StatusConflict, duplicate.Code)
+	assert.NotContains(t, duplicate.Body.String(), "UNIQUE")
+	var agent model.User
+	require.NoError(t, db.Where("username = ?", "api-agent").First(&agent).Error)
+	assert.Equal(t, common.RoleCommonUser, agent.Role)
+	assert.Empty(t, agent.Password)
+	assert.Zero(t, agent.Quota)
+	require.Equal(t, "agent", agent.ResellerKind)
+	for _, tc := range []struct {
+		body   string
+		status int
+		code   string
+	}{
+		{`{"operation_id":"http-1","mode":"override","quota":1,"reason":"invalid"}`, http.StatusBadRequest, "RESELLER_INVALID_INPUT"},
+		{`{"operation_id":"http-1","mode":"add","quota":100,"reason":"allocation"}`, http.StatusOK, ""},
+		{`{"operation_id":"http-1","mode":"add","quota":101,"reason":"changed"}`, http.StatusConflict, "RESELLER_CONFLICT"},
+	} {
+		recorder = httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/agents/%d/quota", agent.Id), strings.NewReader(tc.body)))
+		require.Equal(t, tc.status, recorder.Code)
+		if tc.code != "" {
+			assert.Contains(t, recorder.Body.String(), tc.code)
+		}
+	}
+
+	// Service capabilities remain enforced even when invoking handlers without
+	// the router's RequirePermission middleware.
+	require.NoError(t, authz.Init(db))
+	admin := model.User{Username: "reseller-policy-admin", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, AuthVersion: 1, Group: "default", AffCode: "reseller-policy-admin"}
+	require.NoError(t, db.Create(&admin).Error)
+	require.NoError(t, authz.SetUserPermissions(admin.Id, authz.PermissionsMap{authz.ResourceReseller: {"create": false, "quota": false}}))
+	originalOperator := root
+	root = admin
+	forbidden := httptest.NewRecorder()
+	engine.ServeHTTP(forbidden, httptest.NewRequest(http.MethodPost, "/agents", strings.NewReader(`{"username":"denied-agent","email":"denied@example.invalid"}`)))
+	require.Equal(t, http.StatusForbidden, forbidden.Code)
+	forbidden = httptest.NewRecorder()
+	engine.ServeHTTP(forbidden, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/agents/%d/quota", agent.Id), strings.NewReader(`{"operation_id":"policy-bypass","mode":"add","quota":1,"reason":"denied"}`)))
+	require.Equal(t, http.StatusForbidden, forbidden.Code)
+	root = originalOperator
+	// Old root management handlers must also obey the domain restriction.
+	denied := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"promote"}`, agent.Id))
+	assert.Contains(t, denied.Body.String(), `"success":false`)
+	denied = performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"delete"}`, agent.Id))
+	assert.Contains(t, denied.Body.String(), `"success":false`)
+	require.NoError(t, db.First(&agent, agent.Id).Error)
+	assert.Equal(t, common.RoleCommonUser, agent.Role)
+}

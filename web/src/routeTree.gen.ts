@@ -14,11 +14,13 @@ import { Route as authRouteRouteImport } from './routes/(auth)/route'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as PrivacyPolicyRouteImport } from './routes/privacy-policy'
 import { Route as UserAgreementRouteImport } from './routes/user-agreement'
+import { Route as authAccountActivationRouteImport } from './routes/(auth)/account-activation'
 import { Route as authForgotPasswordRouteImport } from './routes/(auth)/forgot-password'
 import { Route as authOauthRouteImport } from './routes/(auth)/oauth'
 import { Route as authOtpRouteImport } from './routes/(auth)/otp'
 import { Route as authRegisterRouteImport } from './routes/(auth)/register'
 import { Route as authResetRouteImport } from './routes/(auth)/reset'
+import { Route as authSecuritySetupRouteImport } from './routes/(auth)/security-setup'
 import { Route as authSignInRouteImport } from './routes/(auth)/sign-in'
 import { Route as authSignUpRouteImport } from './routes/(auth)/sign-up'
 import { Route as errors401RouteImport } from './routes/(errors)/401'
@@ -104,6 +106,11 @@ const UserAgreementRoute = UserAgreementRouteImport.update({
   path: '/user-agreement',
   getParentRoute: () => rootRouteImport,
 } as any)
+const authAccountActivationRoute = authAccountActivationRouteImport.update({
+  id: '/account-activation',
+  path: '/account-activation',
+  getParentRoute: () => authRouteRoute,
+} as any)
 const authForgotPasswordRoute = authForgotPasswordRouteImport.update({
   id: '/forgot-password',
   path: '/forgot-password',
@@ -127,6 +134,11 @@ const authRegisterRoute = authRegisterRouteImport.update({
 const authResetRoute = authResetRouteImport.update({
   id: '/reset',
   path: '/reset',
+  getParentRoute: () => authRouteRoute,
+} as any)
+const authSecuritySetupRoute = authSecuritySetupRouteImport.update({
+  id: '/security-setup',
+  path: '/security-setup',
   getParentRoute: () => authRouteRoute,
 } as any)
 const authSignInRoute = authSignInRouteImport.update({
@@ -483,11 +495,13 @@ export interface FileRoutesByFullPath {
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
   '/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
+  '/account-activation': typeof authAccountActivationRoute
   '/forgot-password': typeof authForgotPasswordRoute
   '/oauth': typeof authOauthRoute
   '/otp': typeof authOtpRoute
   '/register': typeof authRegisterRoute
   '/reset': typeof authResetRoute
+  '/security-setup': typeof authSecuritySetupRoute
   '/sign-in': typeof authSignInRoute
   '/sign-up': typeof authSignUpRoute
   '/401': typeof errors401Route
@@ -553,11 +567,13 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
+  '/account-activation': typeof authAccountActivationRoute
   '/forgot-password': typeof authForgotPasswordRoute
   '/oauth': typeof authOauthRoute
   '/otp': typeof authOtpRoute
   '/register': typeof authRegisterRoute
   '/reset': typeof authResetRoute
+  '/security-setup': typeof authSecuritySetupRoute
   '/sign-in': typeof authSignInRoute
   '/sign-up': typeof authSignUpRoute
   '/401': typeof errors401Route
@@ -627,11 +643,13 @@ export interface FileRoutesById {
   '/privacy-policy': typeof PrivacyPolicyRoute
   '/user-agreement': typeof UserAgreementRoute
   '/_authenticated/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
+  '/(auth)/account-activation': typeof authAccountActivationRoute
   '/(auth)/forgot-password': typeof authForgotPasswordRoute
   '/(auth)/oauth': typeof authOauthRoute
   '/(auth)/otp': typeof authOtpRoute
   '/(auth)/register': typeof authRegisterRoute
   '/(auth)/reset': typeof authResetRoute
+  '/(auth)/security-setup': typeof authSecuritySetupRoute
   '/(auth)/sign-in': typeof authSignInRoute
   '/(auth)/sign-up': typeof authSignUpRoute
   '/(errors)/401': typeof errors401Route
@@ -700,11 +718,13 @@ export interface FileRouteTypes {
     | '/privacy-policy'
     | '/user-agreement'
     | '/system-settings'
+    | '/account-activation'
     | '/forgot-password'
     | '/oauth'
     | '/otp'
     | '/register'
     | '/reset'
+    | '/security-setup'
     | '/sign-in'
     | '/sign-up'
     | '/401'
@@ -770,11 +790,13 @@ export interface FileRouteTypes {
     | '/'
     | '/privacy-policy'
     | '/user-agreement'
+    | '/account-activation'
     | '/forgot-password'
     | '/oauth'
     | '/otp'
     | '/register'
     | '/reset'
+    | '/security-setup'
     | '/sign-in'
     | '/sign-up'
     | '/401'
@@ -843,11 +865,13 @@ export interface FileRouteTypes {
     | '/privacy-policy'
     | '/user-agreement'
     | '/_authenticated/system-settings'
+    | '/(auth)/account-activation'
     | '/(auth)/forgot-password'
     | '/(auth)/oauth'
     | '/(auth)/otp'
     | '/(auth)/register'
     | '/(auth)/reset'
+    | '/(auth)/security-setup'
     | '/(auth)/sign-in'
     | '/(auth)/sign-up'
     | '/(errors)/401'
@@ -966,6 +990,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UserAgreementRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/(auth)/account-activation': {
+      id: '/(auth)/account-activation'
+      path: '/account-activation'
+      fullPath: '/account-activation'
+      preLoaderRoute: typeof authAccountActivationRouteImport
+      parentRoute: typeof authRouteRoute
+    }
     '/(auth)/forgot-password': {
       id: '/(auth)/forgot-password'
       path: '/forgot-password'
@@ -999,6 +1030,13 @@ declare module '@tanstack/react-router' {
       path: '/reset'
       fullPath: '/reset'
       preLoaderRoute: typeof authResetRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(auth)/security-setup': {
+      id: '/(auth)/security-setup'
+      path: '/security-setup'
+      fullPath: '/security-setup'
+      preLoaderRoute: typeof authSecuritySetupRouteImport
       parentRoute: typeof authRouteRoute
     }
     '/(auth)/sign-in': {
@@ -1432,22 +1470,26 @@ declare module '@tanstack/react-router' {
 }
 
 interface authRouteRouteChildren {
+  authAccountActivationRoute: typeof authAccountActivationRoute
   authForgotPasswordRoute: typeof authForgotPasswordRoute
   authOauthRoute: typeof authOauthRoute
   authOtpRoute: typeof authOtpRoute
   authRegisterRoute: typeof authRegisterRoute
   authResetRoute: typeof authResetRoute
+  authSecuritySetupRoute: typeof authSecuritySetupRoute
   authSignInRoute: typeof authSignInRoute
   authSignUpRoute: typeof authSignUpRoute
   authUserResetRoute: typeof authUserResetRoute
 }
 
 const authRouteRouteChildren: authRouteRouteChildren = {
+  authAccountActivationRoute: authAccountActivationRoute,
   authForgotPasswordRoute: authForgotPasswordRoute,
   authOauthRoute: authOauthRoute,
   authOtpRoute: authOtpRoute,
   authRegisterRoute: authRegisterRoute,
   authResetRoute: authResetRoute,
+  authSecuritySetupRoute: authSecuritySetupRoute,
   authSignInRoute: authSignInRoute,
   authSignUpRoute: authSignUpRoute,
   authUserResetRoute: authUserResetRoute,

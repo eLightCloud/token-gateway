@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { AuthenticatedLayout } from '@/components/layout'
+import { getSecurityCompletion } from '@/features/security-completion/api'
 import { resolveAuthentication } from '@/lib/auth-session'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -37,6 +38,10 @@ export const Route = createFileRoute('/_authenticated')({
         to: '/sign-in',
         search: { redirect: location.href },
       })
+    }
+    const security = await getSecurityCompletion()
+    if (security.required && (!security.complete || security.kind !== '')) {
+      throw redirect({ to: '/security-setup' })
     }
   },
   component: AuthenticatedLayout,

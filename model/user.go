@@ -77,6 +77,7 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
+	ResellerKind         string                     `json:"-" gorm:"size:20"`
 	Id                   int                        `json:"id"`
 	Username             string                     `json:"username" gorm:"unique;index" validate:"max=20"`
 	Password             string                     `json:"password" gorm:"not null;" validate:"min=8,max=128"`
@@ -116,16 +117,17 @@ type User struct {
 
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
-		Id:          user.Id,
-		Group:       user.Group,
-		Quota:       user.Quota,
-		Status:      user.Status,
-		Role:        user.Role,
-		Username:    user.Username,
-		Setting:     user.Setting,
-		Email:       user.Email,
-		AuthVersion: user.AuthVersion,
-		CacheSchema: userCacheSchemaVersion,
+		ResellerKind: user.ResellerKind,
+		Id:           user.Id,
+		Group:        user.Group,
+		Quota:        user.Quota,
+		Status:       user.Status,
+		Role:         user.Role,
+		Username:     user.Username,
+		Setting:      user.Setting,
+		Email:        user.Email,
+		AuthVersion:  user.AuthVersion,
+		CacheSchema:  userCacheSchemaVersion,
 	}
 	return cache
 }
@@ -547,7 +549,7 @@ func GetSelfUserById(id int) (*User, error) {
 		"github_id", "discord_id", "oidc_id", "wechat_id", "telegram_id",
 		"group", "quota", "used_quota", "request_count", "aff_code", "aff_count",
 		"aff_quota", "aff_history", "inviter_id", "linux_do_id", "setting",
-		"stripe_customer", "auth_version",
+		"stripe_customer", "auth_version", "reseller_kind",
 		"CASE WHEN password <> '' THEN 1 ELSE 0 END AS has_password",
 	}).First(&profile, "id = ?", id).Error
 	profile.User.HasPassword = profile.HasPassword
@@ -580,6 +582,9 @@ func HardDeleteUserById(id int) error {
 }
 
 func inviteUser(inviterId int) error {
+	if err := RequireOrdinaryUser(DB, inviterId); err != nil {
+		return err
+	}
 	result := DB.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]any{
 		"aff_count":   gorm.Expr("aff_count + ?", 1),
 		"aff_quota":   gorm.Expr("aff_quota + ?", common.QuotaForInviter),
@@ -595,6 +600,9 @@ func inviteUser(inviterId int) error {
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int64) error {
+	if err := RequireOrdinaryUser(DB, user.Id); err != nil {
+		return err
+	}
 	// 检查quota是否小于最小额度
 	if float64(quota) < common.QuotaPerUnit {
 		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(common.QuotaFromFloat(common.QuotaPerUnit)))
@@ -832,6 +840,9 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 	if err = tx.First(&current, user.Id).Error; err != nil {
 		return err
 	}
+	if err := GuardResellerProfile(&current, &newUser, updatePassword); err != nil {
+		return err
+	}
 	// Updates(struct) ignores zero values. Match that behavior when deciding
 	// whether this request actually changes authentication-sensitive state;
 	// partial self-profile updates intentionally leave role/status/group empty.
@@ -847,6 +858,7 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 	}
 	if err = tx.Model(&current).Omit(
 		"access_token",
+		"reseller_kind",
 		"quota",
 		"used_quota",
 		"request_count",
@@ -904,6 +916,9 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 	if err = tx.First(&current, user.Id).Error; err != nil {
 		return err
 	}
+	if err := GuardResellerProfile(&current, &newUser, updatePassword); err != nil {
+		return err
+	}
 	authChanged := (updatePassword && current.Password != newUser.Password) || current.Group != newUser.Group
 	if authChanged {
 		newUser.AuthVersion, err = IncrementUserAuthVersionWithTx(tx, user.Id)
@@ -918,6 +933,18 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 }
 
 func (user *User) ClearBinding(bindingType string) error {
+	if bindingType == "email" {
+		kind, err := ResellerUserKind(DB, user.Id)
+		if err != nil {
+			return err
+		}
+		if SecurityCompletionRequired(kind) {
+			return ErrResellerForbidden
+		}
+	}
+	if err := RequireOrdinaryUser(DB, user.Id); err != nil {
+		return err
+	}
 	if user.Id == 0 {
 		return errors.New("user id is empty")
 	}
@@ -966,6 +993,9 @@ func DeleteUserForSession(identity AuthSessionIdentity) error {
 }
 
 func (user *User) delete(identity *AuthSessionIdentity) error {
+	if err := RequireOrdinaryUser(DB, user.Id); err != nil {
+		return err
+	}
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
@@ -1002,6 +1032,9 @@ func (user *User) delete(identity *AuthSessionIdentity) error {
 }
 
 func (user *User) HardDelete() error {
+	if err := RequireOrdinaryUser(DB, user.Id); err != nil {
+		return err
+	}
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
@@ -1196,6 +1229,9 @@ func ResetUserPasswordByEmail(email string, password string) error {
 	if err != nil {
 		return err
 	}
+	if SecurityCompletionRequired(user.ResellerKind) {
+		return ErrAuthFlowInvalid
+	}
 	hashedPassword, err := common.HashAccountPassword(password)
 	if err != nil {
 		return err
@@ -1344,6 +1380,9 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 }
 
 func IncreaseUserQuota(id int, quota int64, db bool) (err error) {
+	if err := RequireOrdinaryUser(DB, id); err != nil {
+		return err
+	}
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}

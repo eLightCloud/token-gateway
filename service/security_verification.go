@@ -23,6 +23,8 @@ const (
 	VerificationScopeChannelKeyRead      = "channel.key.read"
 	VerificationScopePasskeyRegister     = "passkey.register"
 	VerificationScopePasskeyDelete       = "passkey.delete"
+	VerificationScopeSecurityRecovery    = "account.security.recover"
+	VerificationScopeSecurityEmailChange = "account.security.email_change"
 	VerificationScopeTwoFASetup          = "2fa.setup"
 	VerificationScopeTwoFADisable        = "2fa.disable"
 	VerificationScopeTwoFABackupCodes    = "2fa.backup_codes.regenerate"
@@ -50,6 +52,18 @@ var (
 type VerificationOperation struct {
 	Scope   string          `json:"scope"`
 	Context json.RawMessage `json:"context,omitempty"`
+}
+
+type SecurityEmailChangeContext struct {
+	UserID   int    `json:"user_id"`
+	Email    string `json:"email"`
+	Incident string `json:"incident"`
+}
+
+type SecurityRecoveryContext struct {
+	UserID     int    `json:"user_id"`
+	Incident   string `json:"incident"`
+	RevokeKeys bool   `json:"revoke_keys"`
 }
 
 type ChannelKeyReadContext struct {
@@ -117,6 +131,18 @@ func BindVerificationOperation(operation VerificationOperation) (VerificationBin
 			return VerificationBinding{}, ErrVerificationContextInvalid
 		}
 		normalized = context
+	case VerificationScopeSecurityEmailChange:
+		var context SecurityEmailChangeContext
+		if len(fields) != 3 || common.Unmarshal(operation.Context, &context) != nil || context.UserID <= 0 || len(context.Incident) < 3 || len(context.Incident) > 100 || common.Validate.Var(context.Email, "required,email,max=50") != nil || context.Email != model.NormalizeEmail(context.Email) {
+			return VerificationBinding{}, ErrVerificationContextInvalid
+		}
+		normalized = context
+	case VerificationScopeSecurityRecovery:
+		var context SecurityRecoveryContext
+		if len(fields) != 3 || common.Unmarshal(operation.Context, &context) != nil || context.UserID <= 0 || len(context.Incident) < 3 || len(context.Incident) > 100 {
+			return VerificationBinding{}, ErrVerificationContextInvalid
+		}
+		normalized = context
 	case VerificationScopeVantageIntegrationSettings, VerificationScopeVideoEnhanceSettings, VerificationScopePasskeyRegister, VerificationScopePasskeyDelete, VerificationScopeTwoFASetup,
 		VerificationScopeTwoFADisable, VerificationScopeTwoFABackupCodes,
 		VerificationScopeAccessTokenGenerate, VerificationScopeAccessTokenRevoke,
@@ -179,7 +205,7 @@ func securityVerificationPolicy(scope string, state model.UserVerificationState)
 	}
 	switch scope {
 	case VerificationScopeChannelKeyRead, VerificationScopePasskeyDelete, VerificationScopeLogin:
-	case VerificationScopeTwoFADisable, VerificationScopeTwoFABackupCodes:
+	case VerificationScopeSecurityEmailChange, VerificationScopeSecurityRecovery, VerificationScopeTwoFADisable, VerificationScopeTwoFABackupCodes:
 		if !state.HasTwoFA {
 			return nil, model.ErrTwoFANotEnabled
 		}
@@ -224,6 +250,7 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 	if scope == VerificationScopeLogin {
 		return nil, ErrProofScope
 	}
+
 	state, err := model.GetUserVerificationState(identity.UserID)
 	if err != nil {
 		return nil, err
@@ -231,6 +258,12 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 	if state.Status != common.UserStatusEnabled || state.AuthVersion != identity.UserAuthVersion {
 		return nil, ErrAuthTokenInvalid
 	}
+	if model.SecurityCompletionRequired(state.ResellerKind) {
+		if err := CheckSecurityCompletionVerification(identity.UserID, scope); err != nil {
+			return nil, err
+		}
+	}
+
 	if (scope == VerificationScopeChannelKeyRead || scope == VerificationScopeVideoEnhanceSettings || scope == VerificationScopeVantageIntegrationSettings) && state.Role != common.RoleRootUser {
 		return nil, ErrVerificationForbidden
 	}

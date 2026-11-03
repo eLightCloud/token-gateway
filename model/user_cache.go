@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -11,19 +12,20 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 3
+const userCacheSchemaVersion = 4
 
 type UserBase struct {
-	Id          int    `json:"id"`
-	Group       string `json:"group"`
-	Email       string `json:"email"`
-	Quota       int64  `json:"quota"`
-	Status      int    `json:"status"`
-	Role        int    `json:"role"`
-	Username    string `json:"username"`
-	Setting     string `json:"setting"`
-	AuthVersion int64  `json:"-"`
-	CacheSchema int    `json:"-"`
+	ResellerKind string `json:"-"`
+	Id           int    `json:"id"`
+	Group        string `json:"group"`
+	Email        string `json:"email"`
+	Quota        int64  `json:"quota"`
+	Status       int    `json:"status"`
+	Role         int    `json:"role"`
+	Username     string `json:"username"`
+	Setting      string `json:"setting"`
+	AuthVersion  int64  `json:"-"`
+	CacheSchema  int    `json:"-"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -109,6 +111,17 @@ func GetUserCache(userId int) (*UserBase, error) {
 				return nil, err
 			}
 			common.SysLog("failed to synchronously populate user cache: " + err.Error())
+		} else {
+			// Population preserves ordinary users' live quota, which may include
+			// reservations not yet flushed to the database. Return that balance
+			// rather than the database snapshot used to refresh the metadata.
+			cached, err := cacheGetUserBase(userId)
+			if err == nil {
+				return cached, nil
+			}
+			if errors.Is(err, ErrUserAuthCachePending) {
+				return nil, err
+			}
 		}
 	}
 	return user.ToBaseUser(), nil
@@ -133,6 +146,9 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 	}
 	if floor > userCache.AuthVersion {
 		return nil, ErrUserAuthCachePending
+	}
+	if err := loadResellerCustomerQuota(&userCache); err != nil {
+		return nil, err
 	}
 	return &userCache, nil
 }
@@ -210,7 +226,14 @@ func updateUserQuotaCache(userId int, quota int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Quota", fmt.Sprintf("%d", quota))
+	// Customer quota is database-authoritative, including delayed async refreshes.
+	const script = `
+if redis.call('HGET', KEYS[1], 'ResellerKind') == 'agent_customer' then
+  redis.call('HDEL', KEYS[1], 'Quota')
+  return 0
+end
+return redis.call('HSET', KEYS[1], 'Quota', ARGV[1])`
+	return common.RDB.Eval(context.Background(), script, []string{getUserCacheKey(userId)}, quota).Err()
 }
 
 // RefreshUserGroupCache writes the database-authoritative group into an

@@ -56,7 +56,9 @@ func Enable2FA(c *gin.Context) {
 		return
 	}
 	recordUserSecurityAudit(c, identity.UserID, "user.2fa_enable", nil)
-	common.ApiSuccess(c, authRotationData(bundle))
+	data := authRotationData(bundle)
+	notifyCompletedSecurityChange(identity.UserID, "Two-factor authentication was enabled", data)
+	common.ApiSuccess(c, data)
 }
 
 // Disable2FA 禁用2FA

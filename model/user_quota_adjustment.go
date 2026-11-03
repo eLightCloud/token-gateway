@@ -41,6 +41,9 @@ func AdjustUserQuota(userID, operatorRole int, mode string, value int64, operato
 		if err := lockForUpdate(tx).First(&user, userID).Error; err != nil {
 			return err
 		}
+		if user.ResellerKind != "" {
+			return ErrResellerForbidden
+		}
 		if operatorRole != common.RoleRootUser && operatorRole <= user.Role {
 			return ErrUserQuotaPermission
 		}

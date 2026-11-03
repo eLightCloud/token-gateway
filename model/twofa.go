@@ -232,10 +232,23 @@ func GetUnusedBackupCodeCount(userId int) (int, error) {
 // DisableTwoFAWithAuthVersion atomically removes the factor and invalidates
 // every access token issued against the previous security configuration.
 func DisableTwoFAWithAuthVersion(userId int) error {
+	if SecurityCompletionRequired("") {
+		return ErrResellerForbidden
+	}
+	if err := RequireOrdinaryUser(DB, userId); err != nil {
+		return err
+	}
 	return disableTwoFAWithAuthVersion(userId, nil)
 }
 
 func DisableTwoFAForSession(identity AuthSessionIdentity) error {
+	kind, err := ResellerUserKind(DB, identity.UserID)
+	if err != nil {
+		return err
+	}
+	if SecurityCompletionRequired(kind) {
+		return ErrResellerForbidden
+	}
 	return disableTwoFAWithAuthVersion(identity.UserID, &identity)
 }
 
@@ -284,6 +297,15 @@ func (t *TwoFA) ValidateTOTPAndUpdateUsage(code string) (bool, error) {
 		return false, nil
 	}
 
+	kind, err := ResellerUserKind(DB, t.UserId)
+	if err != nil {
+		return false, err
+	}
+	if SecurityCompletionRequired(kind) {
+		if err := ClaimTwoFACode(t.Id, t.Secret, code); err != nil {
+			return false, err
+		}
+	}
 	// 验证成功，重置失败次数并更新最后使用时间
 	now := time.Now()
 	t.FailedAttempts = 0

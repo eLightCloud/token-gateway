@@ -1,0 +1,78 @@
+package controller
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+)
+
+func resellerResponse(c *gin.Context, data any, err error) {
+	if err == nil {
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": data})
+		return
+	}
+	status, code, message := http.StatusServiceUnavailable, "RESELLER_PERSISTENCE_UNAVAILABLE", i18n.MsgDatabaseError
+	switch {
+	case errors.Is(err, model.ErrResellerInvalid):
+		status, code, message = http.StatusBadRequest, "RESELLER_INVALID_INPUT", i18n.MsgInvalidParams
+	case errors.Is(err, model.ErrResellerForbidden):
+		status, code, message = http.StatusForbidden, "RESELLER_FORBIDDEN", i18n.MsgAuthInsufficientPrivilege
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		status, code, message = http.StatusNotFound, "RESELLER_NOT_FOUND", i18n.MsgUserNotExists
+	case errors.Is(err, model.ErrResellerConflict), errors.Is(err, model.ErrEmailAlreadyTaken), errors.Is(err, gorm.ErrDuplicatedKey):
+		status, code, message = http.StatusConflict, "RESELLER_CONFLICT", i18n.MsgOperationFailed
+	}
+	// Never include database errors, addresses or credential material in failures.
+	c.JSON(status, gin.H{"success": false, "code": code, "message": common.TranslateMessage(c, message)})
+}
+
+func CreateResellerAgent(c *gin.Context) {
+	var input model.ResellerCreateInput
+	if err := common.DecodeJson(c.Request.Body, &input); err != nil {
+		resellerResponse(c, nil, model.ErrResellerInvalid)
+		return
+	}
+	identity, err := service.CreateResellerAccount(c.GetInt("id"), "agent", input)
+	if err == nil {
+		recordManageAuditFor(c, identity.UserID, "reseller.agent.create", map[string]any{"user_id": identity.UserID})
+	}
+	resellerResponse(c, identity, err)
+}
+
+func CreateResellerCustomer(c *gin.Context) {
+	var input model.ResellerCreateInput
+	if err := common.DecodeJson(c.Request.Body, &input); err != nil {
+		resellerResponse(c, nil, model.ErrResellerInvalid)
+		return
+	}
+	identity, err := service.CreateResellerAccount(c.GetInt("id"), "agent_customer", input)
+	if err == nil {
+		recordManageAuditFor(c, identity.UserID, "reseller.customer.create", map[string]any{"user_id": identity.UserID})
+	}
+	resellerResponse(c, identity, err)
+}
+
+func AdjustResellerQuota(c *gin.Context) {
+	userID, err := strconv.Atoi(c.Param("id"))
+	var input model.ResellerQuotaInput
+	if err != nil || userID <= 0 || common.DecodeJson(c.Request.Body, &input) != nil {
+		resellerResponse(c, nil, model.ErrResellerInvalid)
+		return
+	}
+	expected := "agent_customer"
+	if c.GetBool("reseller_admin") {
+		expected = "agent"
+	}
+	receipt, err := service.AdjustResellerAccountQuota(c.GetInt("id"), userID, expected, input)
+	if err == nil {
+		recordManageAuditFor(c, userID, "reseller.quota.adjust", map[string]any{"adjustment_id": receipt.ID, "operation_id": receipt.OperationID, "mode": receipt.Mode, "quota": receipt.Quota, "before": receipt.Before, "after": receipt.After})
+	}
+	resellerResponse(c, receipt, err)
+}

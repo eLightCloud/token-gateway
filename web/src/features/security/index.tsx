@@ -111,7 +111,9 @@ export function Security() {
             <h3 id='security-account' className='text-sm font-semibold'>
               {t('Account Actions')}
             </h3>
-            <AccountActionCard action='delete' username={profile.username} />
+            {!profile.reseller_kind && (
+              <AccountActionCard action='delete' username={profile.username} />
+            )}
           </section>
         </div>
         <aside
@@ -123,7 +125,10 @@ export function Security() {
               {t('Security verification')}
             </h3>
             <PasskeyCard loading={loading} />
-            <TwoFACard loading={loading} />
+            <TwoFACard
+              loading={loading}
+              required={profile.security_completion_required}
+            />
           </div>
           <section aria-labelledby='security-privacy' className='space-y-4'>
             <h3 id='security-privacy' className='text-sm font-semibold'>

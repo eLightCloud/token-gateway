@@ -1,0 +1,27 @@
+{
+  "users": [
+    {"id": 1, "username": "s0-admin", "aff_code": "s0admin", "role": 100, "status": 1, "quota": 10000, "group": "default"},
+    {"id": 101, "username": "s0-future-agent", "aff_code": "s0agent", "role": 1, "status": 1, "quota": 10000, "group": "default"},
+    {"id": 201, "username": "s0-future-customer", "aff_code": "s0cust", "role": 1, "status": 1, "quota": 1000, "group": "default"}
+  ],
+  "tokens": [
+    {"id": 201, "user_id": 201, "name": "s0-synthetic", "key": "s0synthetic0000000000000000000001", "status": 1, "expired_time": -1, "remain_quota": 50, "unlimited_quota": false}
+  ],
+  "channels": [
+    {"id": 11, "name": "s0-primary", "type": 1, "status": 1, "key": "synthetic", "models": "s0-model", "group": "default"}
+  ],
+  "abilities": [
+    {"group": "default", "model": "s0-model", "channel_id": 11, "enabled": true}
+  ],
+  "future_contract": {
+    "note": "S0 creates ordinary users only; agent identities and authorization tables do not exist yet",
+    "agent_user_id": 101,
+    "customer_user_id": 201,
+    "agent_ratio_scaled": 800000,
+    "customer_ratio_scaled": 900000,
+    "estimated_base_quota": 100,
+    "final_base_quota": 60,
+    "expected_customer_final_quota": 54,
+    "expected_agent_final_quota": 48
+  }
+}

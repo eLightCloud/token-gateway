@@ -35,6 +35,9 @@ func ValidateNewAccountPassword(password string) error {
 	if !utf8.ValidString(password) || utf8.RuneCountInString(password) < MinAccountPasswordLength || utf8.RuneCountInString(password) > MaxAccountPasswordLength {
 		return ErrAccountPasswordLength
 	}
+	if os.Getenv("SECURITY_COMPLETION_ENFORCED") == "true" {
+		return validateSecurityPasswordBlocklist(password)
+	}
 	return nil
 }
 

@@ -26,11 +26,13 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { SecureVerificationDialog } from '@/features/auth/secure-verification'
+import { replaceSecurityFactor } from '@/features/security-completion/api'
 import { disable2FA } from '@/lib/api'
 
 import { useAccountSecurity } from '../../hooks/use-account-security'
 
 interface TwoFADisableDialogProps {
+  replacement?: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
   onSuccess: () => void
@@ -59,10 +61,16 @@ export function TwoFADisableDialog(props: TwoFADisableDialogProps) {
     if (!confirmed) return
     const result = await security.run(async (signal) => {
       const proof = await security.verify({ scope: '2fa.disable' }, signal)
-      return disable2FA(proof, signal)
+      return props.replacement
+        ? replaceSecurityFactor(proof, signal)
+        : disable2FA(proof, signal)
     })
     if (!result) return
-    toast.success(t('Two-factor authentication disabled'))
+    toast.success(
+      props.replacement
+        ? t('Complete account security setup')
+        : t('Two-factor authentication disabled')
+    )
     props.onOpenChange(false)
     props.onSuccess()
   }
@@ -72,11 +80,23 @@ export function TwoFADisableDialog(props: TwoFADisableDialogProps) {
       <ConfirmDialog
         open={props.open && !security.showVerification}
         onOpenChange={handleOpenChange}
-        title={t('Disable Two-Factor Authentication')}
-        desc={t(
-          'This action will permanently remove 2FA protection from your account.'
-        )}
-        confirmText={t('Disable 2FA')}
+        title={
+          props.replacement
+            ? t('Replace authenticator')
+            : t('Disable Two-Factor Authentication')
+        }
+        desc={
+          props.replacement
+            ? t(
+                'Dashboard access is restricted until a new authenticator is enabled. Existing API keys remain valid.'
+              )
+            : t(
+                'This action will permanently remove 2FA protection from your account.'
+              )
+        }
+        confirmText={
+          props.replacement ? t('Replace authenticator') : t('Disable 2FA')
+        }
         destructive
         disabled={!confirmed || security.pending}
         isLoading={security.pending}
@@ -85,7 +105,11 @@ export function TwoFADisableDialog(props: TwoFADisableDialogProps) {
         <Alert variant='destructive'>
           <AlertTriangle className='size-4' />
           <AlertDescription>
-            {t('Warning: Disabling 2FA will make your account less secure.')}
+            {props.replacement
+              ? t(
+                  'Save your recovery codes before replacing the authenticator.'
+                )
+              : t('Warning: Disabling 2FA will make your account less secure.')}
           </AlertDescription>
         </Alert>
         <div className='flex items-start gap-2'>

@@ -65,7 +65,9 @@ func authHelper(c *gin.Context, minRole int) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"success": false, "code": "AUTH_USER_INVALID", "message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid)})
 		return
 	}
-	setDashboardAuthContext(c, user, identity, useAccessToken)
+	if !setDashboardAuthContext(c, user, identity, useAccessToken) {
+		return
+	}
 
 	// 管理/root 写操作审计兜底：内聚在鉴权链路里，保证任何经过 AdminAuth/RootAuth
 	// 的写接口都会自动留痕（无需在路由上单独挂审计中间件，避免漏挂）。
@@ -91,7 +93,9 @@ func TryUserAuth() func(c *gin.Context) {
 			return
 		}
 		if credentialKind != dashboardCredentialUnmatched {
-			setDashboardAuthContext(c, user, identity, credentialKind == dashboardCredentialPAT)
+			if !setDashboardAuthContext(c, user, identity, credentialKind == dashboardCredentialPAT) {
+				return
+			}
 		}
 		c.Next()
 	}
@@ -200,7 +204,10 @@ func authorizationToken(header string) (string, bool) {
 	return header, header != ""
 }
 
-func setDashboardAuthContext(c *gin.Context, user *model.UserBase, identity service.AuthIdentity, useAccessToken bool) {
+func setDashboardAuthContext(c *gin.Context, user *model.UserBase, identity service.AuthIdentity, useAccessToken bool) bool {
+	if !allowSecurityCompletion(c, user.Id, useAccessToken) {
+		return false
+	}
 	c.Header("Auth-Version", "864b7076dbcd0a3c01b5520316720ebf")
 	c.Set("username", user.Username)
 	c.Set("role", user.Role)
@@ -213,6 +220,7 @@ func setDashboardAuthContext(c *gin.Context, user *model.UserBase, identity serv
 	c.Set("session_version", identity.SessionVersion)
 	c.Set(authIdentityContextKey, identity)
 	user.WriteContext(c)
+	return true
 }
 
 func writeDashboardAuthError(c *gin.Context, err error) {
@@ -272,7 +280,9 @@ func TokenOrUserAuth() func(c *gin.Context) {
 				writeDashboardAuthError(c, err)
 				return
 			}
-			setDashboardAuthContext(c, user, identity, false)
+			if !setDashboardAuthContext(c, user, identity, false) {
+				return
+			}
 			c.Next()
 			return
 		}
@@ -318,6 +328,10 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 				})
 			}
 			c.Abort()
+			return
+		}
+
+		if !allowResellerDashboard(c, token.UserId) {
 			return
 		}
 

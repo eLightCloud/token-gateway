@@ -15,9 +15,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +43,7 @@ import (
 )
 
 func setupSecurityEnrollmentTest(t *testing.T) (*model.User, service.AuthIdentity) {
+	t.Setenv("MFA_STORAGE_KEY", "s2-test-storage-key-independent-of-session")
 	t.Helper()
 	require.NoError(t, i18n.Init())
 	gin.SetMode(gin.TestMode)
@@ -64,7 +68,7 @@ func setupSecurityEnrollmentTest(t *testing.T) (*model.User, service.AuthIdentit
 	var version string
 	require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
 	t.Logf("database: %s %s", dialect, version)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.TwoFA{}, &model.TwoFABackupCode{}, &model.PasskeyCredential{}, &model.AuthFlow{}, &model.UserOAuthBinding{}, &model.Option{}))
+	require.NoError(t, db.AutoMigrate(&model.UserSecurityState{}, &model.User{}, &model.UserSession{}, &model.TwoFA{}, &model.TwoFABackupCode{}, &model.PasskeyCredential{}, &model.AuthFlow{}, &model.UserOAuthBinding{}, &model.Option{}))
 	require.NoError(t, logDB.AutoMigrate(&model.AuditLog{}))
 	model.DB, model.LOG_DB = db, logDB
 	dbType := common.DatabaseTypeSQLite
@@ -1638,5 +1642,196 @@ func TestSecurityEnrollmentRejectsChangedFirstFactorPolicy(t *testing.T) {
 				assert.True(t, factor == nil || !factor.IsEnabled)
 			})
 		}
+	}
+}
+
+func TestSecurityCompletionGatesDashboardCredentialsAndPreservesRelay(t *testing.T) {
+	user, _ := setupSecurityEnrollmentTest(t)
+	t.Setenv("SECURITY_COMPLETION_ENFORCED", "true")
+	t.Setenv("LOG_SQL_DSN", "")
+	require.NoError(t, model.InitLogDB())
+	require.NoError(t, model.DB.AutoMigrate(&model.Token{}, &model.ResellerIdentity{}, &model.ResellerAccount{}, &model.SecurityRecoveryRecord{}))
+	bundle, err := service.CreateLoginSession(user.Id, "oauth", "127.0.0.1", "s2-gate")
+	require.NoError(t, err)
+	identity, err := service.ParseAccessToken(bundle.AccessToken)
+	require.NoError(t, err)
+	_, err = service.GetVerificationRequirements(identity, service.VerificationScopeAccessTokenGenerate)
+	require.ErrorIs(t, err, service.ErrVerificationForbidden)
+	_, err = service.GetVerificationRequirements(identity, service.VerificationScopeTwoFASetup)
+	require.ErrorIs(t, err, service.ErrVerificationForbidden)
+
+	pat := "s2-dashboard-pat"
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("access_token", pat).Error)
+	require.NoError(t, model.PublishUserAuthCache(user.Id))
+	key := model.Token{UserId: user.Id, Key: strings.Repeat("r", 48), Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true}
+	require.NoError(t, model.DB.Create(&key).Error)
+	router := gin.New()
+	router.GET("/api/user/self", middleware.UserAuth(), func(c *gin.Context) { c.Status(204) })
+	router.GET("/api/business", middleware.UserAuth(), func(c *gin.Context) { c.Status(204) })
+	router.POST("/api/user/2fa/disable", middleware.UserAuth(), Disable2FA)
+	router.GET("/api/security/completion", middleware.UserAuth(), GetSecurityCompletion)
+	router.GET("/v1/test", middleware.TokenAuth(), func(c *gin.Context) { c.Status(204) })
+	router.POST("/api/cookie", middleware.SessionCookieOriginGuard(), func(c *gin.Context) { c.Status(204) })
+	for _, tc := range []struct {
+		origin string
+		want   int
+	}{{"", 403}, {"https://attacker.example", 403}, {"http://example.com", 204}} {
+		request := httptest.NewRequest("POST", "/api/cookie", nil)
+		if tc.origin != "" {
+			request.Header.Set("Origin", tc.origin)
+		}
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		assert.Equal(t, tc.want, response.Code)
+	}
+
+	for _, tc := range []struct {
+		path, credential string
+		want             int
+	}{
+		{"/api/business", bundle.AccessToken, 403}, {"/api/business", pat, 403},
+		{"/api/user/self", bundle.AccessToken, 204}, {"/api/user/self", pat, 403},
+		{"/api/security/completion", bundle.AccessToken, 200}, {"/v1/test", key.Key, 204},
+	} {
+		request := httptest.NewRequest("GET", tc.path, nil)
+		request.Header.Set("Authorization", "Bearer "+tc.credential)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		assert.Equal(t, tc.want, response.Code, tc.path+": "+response.Body.String())
+	}
+	request := httptest.NewRequest("POST", "/api/user/2fa/disable", nil)
+	request.Header.Set("Authorization", "Bearer "+bundle.AccessToken)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	assert.Equal(t, 403, response.Code)
+	assert.Contains(t, response.Body.String(), "MFA_REQUIRED")
+	recoveryOperator := model.User{Username: "s2-recovery-operator", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AuthVersion: 1, AffCode: "s2-recovery-operator"}
+	require.NoError(t, model.DB.Create(&recoveryOperator).Error)
+	_, err = model.RecoverUserSecurity(recoveryOperator.Id, user.Id, "DEV-S2-004", "Synthetic identity recovery reference DEV-004", false)
+	require.NoError(t, err)
+	request = httptest.NewRequest("GET", "/api/user/self", nil)
+	request.Header.Set("Authorization", "Bearer "+bundle.AccessToken)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	assert.Equal(t, 401, response.Code)
+	request = httptest.NewRequest("GET", "/v1/test", nil)
+	request.Header.Set("Authorization", "Bearer "+key.Key)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	assert.Equal(t, 204, response.Code, response.Body.String())
+}
+
+func TestSecurityCompletionManualRecoveryRequiresPermissionProofAndNotification(t *testing.T) {
+	operator, identity := setupSecurityEnrollmentTest(t)
+	t.Setenv("SECURITY_COMPLETION_ENFORCED", "true")
+	require.NoError(t, model.DB.AutoMigrate(&model.SecurityRecoveryRecord{}, &model.ResellerIdentity{}))
+	mailbox := newSecurityMailbox(t)
+	require.NoError(t, model.DB.Model(operator).Update("role", common.RoleRootUser).Error)
+	require.NoError(t, model.DB.Model(operator).Update("email", "s2-operator@example.com").Error)
+	require.NoError(t, model.DB.Create(&model.UserSecurityState{UserID: operator.Id, VerifiedEmail: "s2-operator@example.com", VerifiedAt: time.Now().Unix()}).Error)
+
+	require.NoError(t, model.DB.Create(&model.TwoFA{UserId: operator.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}).Error)
+	target := model.User{Username: "s2-recovery-target", Email: "recovery-target@example.com", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AuthVersion: 1, AffCode: "s2-recovery-target"}
+	require.NoError(t, model.DB.Create(&target).Error)
+	require.NoError(t, model.DB.Create(&model.TwoFA{UserId: target.Id, Secret: "KRSXG5DSNFXGOIDB", IsEnabled: true}).Error)
+	operationContext, err := common.Marshal(service.SecurityRecoveryContext{UserID: target.Id, Incident: "DEV-S2-005", RevokeKeys: false})
+	require.NoError(t, err)
+	operation := service.VerificationOperation{Scope: service.VerificationScopeSecurityRecovery, Context: operationContext}
+	body := `{"incident":"DEV-S2-005","evidence":"Two independent synthetic identity checks DEV-005","revoke_keys":false,"confirmed":true}`
+	path := fmt.Sprintf("/api/security/admin/users/%d/recovery", target.Id)
+	// Agent/common role cannot use this independent capability, even with a proof.
+	denied := securityEnrollmentRequest("POST", path, body, "", identity, AdminRecoverSecurity)
+	assert.Equal(t, 403, denied.Code)
+	admin := func(c *gin.Context) {
+		c.Params = gin.Params{{Key: "id", Value: fmt.Sprint(target.Id)}}
+		c.Set("role", common.RoleRootUser)
+		AdminRecoverSecurity(c)
+	}
+	missing := securityEnrollmentRequest("POST", path, body, "", identity, admin)
+	assert.Contains(t, missing.Body.String(), "SECURITY_PROOF_REQUIRED")
+	proof := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodTwoFA)
+	response := securityEnrollmentRequest("POST", path, body, proof, identity, admin)
+	var result securityEnrollmentResponse
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	factor, err := model.GetTwoFAByUserId(target.Id)
+	require.NoError(t, err)
+	assert.Nil(t, factor)
+	mailbox.mutex.Lock()
+	messages := append([]string(nil), mailbox.mail[target.Email]...)
+	mailbox.mutex.Unlock()
+	assert.NotEmpty(t, messages)
+	replay := securityEnrollmentRequest("POST", path, body, proof, identity, admin)
+	assert.Contains(t, replay.Body.String(), "SECURITY_PROOF_CONSUMED")
+	var audits []model.AuditLog
+	require.NoError(t, model.LOG_DB.Find(&audits).Error)
+	serialized, err := common.Marshal(audits)
+	require.NoError(t, err)
+	assert.NotContains(t, string(serialized), proof)
+	assert.NotContains(t, string(serialized), "KRSXG5DSNFXGOIDB")
+	var records []model.SecurityRecoveryRecord
+	require.NoError(t, model.DB.Find(&records).Error)
+	assert.Len(t, records, 1)
+}
+
+func TestSecurityCompletionEmailAndMFAEnrollment(t *testing.T) {
+	user, identity := setupSecurityEnrollmentTest(t)
+	t.Setenv("SECURITY_COMPLETION_ENFORCED", "true")
+	require.NoError(t, model.DB.Model(user).Update("email", "s2-enrollment@example.com").Error)
+	mailbox := newSecurityMailbox(t)
+	requested := securityEnrollmentRequest("POST", "/api/security/email/start", "{}", "", identity, StartSecurityEmail)
+	var result securityEnrollmentResponse
+	require.NoError(t, common.Unmarshal(requested.Body.Bytes(), &result))
+	require.True(t, result.Success, requested.Body.String())
+	mailbox.mutex.Lock()
+	messages := append([]string(nil), mailbox.mail["s2-enrollment@example.com"]...)
+	mailbox.mutex.Unlock()
+	require.Len(t, messages, 1)
+	matches := regexp.MustCompile(`href="([^"]+)"`).FindStringSubmatch(messages[0])
+	require.Len(t, matches, 2)
+	link, err := url.Parse(html.UnescapeString(matches[1]))
+	require.NoError(t, err)
+	values, err := url.ParseQuery(link.Fragment)
+	require.NoError(t, err)
+	require.Equal(t, model.SecurityEmailPurpose, values.Get("purpose"))
+	token := values.Get("token")
+	require.NotEmpty(t, token)
+	payload, err := common.Marshal(map[string]string{"token": token})
+	require.NoError(t, err)
+	completed := securityEnrollmentRequest("POST", "/api/security/email/complete", string(payload), "", identity, FinishSecurityEmail)
+	require.NoError(t, common.Unmarshal(completed.Body.Bytes(), &result))
+	require.True(t, result.Success, completed.Body.String())
+	var rotation struct {
+		AccessToken string `json:"access_token"`
+	}
+	require.NoError(t, common.Unmarshal(result.Data, &rotation))
+	identity, err = service.ParseAccessToken(rotation.AccessToken)
+	require.NoError(t, err)
+	state, err := model.GetSecurityCompletion(user.Id)
+	require.NoError(t, err)
+	assert.True(t, state.EmailVerified)
+	assert.False(t, state.Complete)
+	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeTwoFASetup}, service.VerificationMethodPassword)
+	setupResponse := securityEnrollmentRequest("POST", "/api/user/2fa/setup", "{}", proof, identity, Setup2FA)
+	require.NoError(t, common.Unmarshal(setupResponse.Body.Bytes(), &result))
+	require.True(t, result.Success, setupResponse.Body.String())
+	var setup service.TwoFASetup
+	require.NoError(t, common.Unmarshal(result.Data, &setup))
+	code, err := totp.GenerateCode(setup.Secret, time.Now())
+	require.NoError(t, err)
+	payload, err = common.Marshal(map[string]string{"flow_token": setup.FlowToken, "code": code})
+	require.NoError(t, err)
+	enabled := securityEnrollmentRequest("POST", "/api/user/2fa/enable", string(payload), "", identity, Enable2FA)
+	require.NoError(t, common.Unmarshal(enabled.Body.Bytes(), &result))
+	require.True(t, result.Success, enabled.Body.String())
+	state, err = model.GetSecurityCompletion(user.Id)
+	require.NoError(t, err)
+	assert.True(t, state.Complete)
+	var audits []model.AuditLog
+	require.NoError(t, model.LOG_DB.Find(&audits).Error)
+	raw, err := common.Marshal(audits)
+	require.NoError(t, err)
+	for _, secret := range []string{token, proof, code, setup.Secret, setup.FlowToken, setup.BackupCodes[0]} {
+		assert.NotContains(t, string(raw), secret)
 	}
 }

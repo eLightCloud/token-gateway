@@ -24,6 +24,11 @@ func StartTwoFASetup(identity AuthIdentity, authorization *model.AuthFlowAuthori
 	if err != nil {
 		return nil, err
 	}
+	if model.SecurityCompletionRequired(user.ResellerKind) {
+		if err := model.ValidateMFAStorageConfiguration(); err != nil {
+			return nil, err
+		}
+	}
 	key, err := common.GenerateTOTPSecret(user.Username)
 	if err != nil {
 		return nil, err

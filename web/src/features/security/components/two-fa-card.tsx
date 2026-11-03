@@ -44,12 +44,16 @@ import { TwoFASetupDialog } from './dialogs/two-fa-setup-dialog'
 // ============================================================================
 
 interface TwoFACardProps {
+  required?: boolean
   loading: boolean
 }
 
 type DialogKey = 'disable' | 'backup'
 
-export function TwoFACard({ loading: pageLoading }: TwoFACardProps) {
+export function TwoFACard({
+  loading: pageLoading,
+  required = false,
+}: TwoFACardProps) {
   const { t } = useTranslation()
   const { status, loading, error, refetch } = useTwoFA(!pageLoading)
   const dialogs = useDialogs<DialogKey>()
@@ -168,7 +172,7 @@ export function TwoFACard({ loading: pageLoading }: TwoFACardProps) {
                   onClick={() => dialogs.open('disable')}
                 >
                   <AlertTriangle className='mr-2 h-4 w-4' />
-                  {t('Disable 2FA')}
+                  {required ? t('Replace authenticator') : t('Disable 2FA')}
                 </Button>
               </div>
             )}
@@ -184,6 +188,7 @@ export function TwoFACard({ loading: pageLoading }: TwoFACardProps) {
       />
 
       <TwoFADisableDialog
+        replacement={required}
         open={dialogs.isOpen('disable')}
         onOpenChange={(open) =>
           open ? dialogs.open('disable') : dialogs.close('disable')

@@ -13,8 +13,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -333,4 +335,106 @@ func TestApplyWebSocketSubprotocolAuthorizationReadsRepeatedHeaders(t *testing.T
 
 	assert.True(t, applyWebSocketSubprotocolAuthorization(header))
 	assert.Equal(t, "Bearer sk-later-field", header.Get("Authorization"))
+}
+
+func TestResellerS1RejectsPendingAccountsAcrossDashboardCredentials(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.UserSecurityState{}, &model.TwoFA{}, &model.ResellerIdentity{}, &model.ResellerAccount{}, &model.Token{}))
+	user := createMiddlewarePATUser(t, "reseller-pending", "reseller-pat")
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("reseller_kind", "agent_customer").Error)
+	require.NoError(t, model.DB.Create(&model.ResellerIdentity{UserID: user.Id, Kind: "agent_customer", AgentUserID: 999, Activation: "pending"}).Error)
+	now := time.Now().Unix()
+	session := &model.UserSession{SID: "reseller-existing-session", UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion, Status: model.UserSessionStatusActive, RefreshHash: "reseller-refresh", LoginMethod: "password", LastActiveAt: now, ExpiresAt: now + 3600}
+	require.NoError(t, model.CreateUserSession(session))
+	access, _, err := service.IssueAccessToken(service.AuthIdentity{UserID: user.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1})
+	require.NoError(t, err)
+	token := &model.Token{UserId: user.Id, Key: "resellerkey", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true}
+	require.NoError(t, model.DB.Create(token).Error)
+	// A warm Key cache must not bypass live business-identity checks.
+	cache := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: cache.Addr()})
+	previousClient := common.RDB
+	common.RDB = client
+	common.RedisEnabled = true
+	t.Cleanup(func() { common.RDB = previousClient; require.NoError(t, client.Close()) })
+	require.NoError(t, common.RedisHSetObj("token:"+common.GenerateHMAC(token.Key), token, time.Minute))
+	for _, tc := range []struct {
+		name, token string
+		handler     gin.HandlerFunc
+	}{
+		{"required PAT", "reseller-pat", UserAuth()},
+		{"required existing session", access, UserAuth()},
+		{"optional PAT", "reseller-pat", TryUserAuth()},
+		{"optional existing session", access, TryUserAuth()},
+		{"mixed existing session", access, TokenOrUserAuth()},
+		{"read-only key", "resellerkey", TokenAuthReadOnly()},
+		{"relay key", "resellerkey", TokenAuth()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reached := false
+			router := gin.New()
+			router.GET("/protected", tc.handler, func(c *gin.Context) { reached = true; c.Status(http.StatusNoContent) })
+			request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			request.Header.Set("Authorization", "Bearer "+tc.token)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			assert.False(t, reached)
+			assert.Contains(t, []int{http.StatusForbidden, http.StatusUnauthorized}, response.Code)
+		})
+	}
+}
+
+func TestResellerIdentityDatabaseFailureIsNotAnInvalidKey(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Token{}))
+	user := createMiddlewarePATUser(t, "ordinary-key-owner", "unused-pat")
+	token := &model.Token{UserId: user.Id, Key: "ordinarycachedkey", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true}
+	require.NoError(t, model.DB.Create(token).Error)
+	cache := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: cache.Addr()})
+	oldClient := common.RDB
+	common.RDB = client
+	common.RedisEnabled = true
+	t.Cleanup(func() { common.RDB = oldClient; require.NoError(t, client.Close()) })
+	require.NoError(t, common.RedisHSetObj("token:"+common.GenerateHMAC(token.Key), token, time.Minute))
+	require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register("test:identity_database_failure", func(tx *gorm.DB) {
+		if tx.Statement.Table == "users" {
+			tx.AddError(errors.New("synthetic database failure"))
+		}
+	}))
+	t.Cleanup(func() { require.NoError(t, model.DB.Callback().Query().Remove("test:identity_database_failure")) })
+	reached := false
+	router := gin.New()
+	router.GET("/protected", TokenAuth(), func(c *gin.Context) { reached = true; c.Status(http.StatusNoContent) })
+	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.Header.Set("Authorization", "Bearer "+token.Key)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	assert.False(t, reached)
+	assert.Equal(t, http.StatusInternalServerError, response.Code)
+}
+
+func TestResellerWritesRejectCookieOnlyAuthentication(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	for _, tc := range []struct {
+		path string
+		auth gin.HandlerFunc
+	}{
+		{"/api/reseller/admin/agents", AdminAuth()},
+		{"/api/reseller/admin/agents/1/quota-adjustments", AdminAuth()},
+		{"/api/reseller/self/customers", UserAuth()},
+		{"/api/reseller/self/customers/1/quota-adjustments", UserAuth()},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			reached := false
+			router := gin.New()
+			router.POST(tc.path, tc.auth, func(c *gin.Context) { reached = true; c.Status(http.StatusNoContent) })
+			request := httptest.NewRequest(http.MethodPost, tc.path, nil)
+			request.AddCookie(&http.Cookie{Name: service.RefreshCookieName, Value: "cookie-is-not-an-access-credential"})
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			assert.False(t, reached)
+			assert.Equal(t, http.StatusUnauthorized, response.Code)
+		})
+	}
 }

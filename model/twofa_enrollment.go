@@ -99,8 +99,22 @@ func EnableTwoFAEnrollment(identity AuthSessionIdentity, token, code string) err
 		if !common.ValidateTOTPCode(pending.Secret, cleanCode) {
 			return ErrTwoFACodeInvalid
 		}
+		kind, err := ResellerUserKind(tx, identity.UserID)
+		if err != nil {
+			return err
+		}
+		if SecurityCompletionRequired(kind) {
+			if err := claimTwoFACodeWithTx(tx, pending.Id, pending.Secret, cleanCode); err != nil {
+				return err
+			}
+		}
 		if _, err := IncrementUserAuthVersionWithTx(tx, identity.UserID); err != nil {
 			return err
+		}
+		if kind != "" {
+			if err := tx.Model(&ResellerIdentity{}).Where("user_id = ? AND activation = ?", identity.UserID, "security_pending").Update("activation", "active").Error; err != nil {
+				return err
+			}
 		}
 		return tx.Model(&pending).Updates(map[string]any{"is_enabled": true, "failed_attempts": 0, "locked_until": nil}).Error
 	})

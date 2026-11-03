@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -11,13 +12,12 @@ import (
 )
 
 // SessionCookieOriginGuard protects cookie-authenticated refresh/logout
-// endpoints when secure cookie mode is enabled. In insecure local development
-// mode it preserves the legacy behavior and intentionally performs no Origin
-// validation. It never adds CORS response headers and must not be installed on
+// endpoints when secure cookie mode or the account security rollout is enabled.
+// In legacy insecure local development mode it preserves the previous behavior. It never adds CORS response headers and must not be installed on
 // relay routes.
 func SessionCookieOriginGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !common.SessionCookieSecure {
+		if !common.SessionCookieSecure && os.Getenv("SECURITY_COMPLETION_ENFORCED") != "true" {
 			c.Next()
 			return
 		}

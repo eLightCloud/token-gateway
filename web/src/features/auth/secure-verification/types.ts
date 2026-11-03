@@ -39,9 +39,19 @@ export type SecurityProofScope =
   | 'account.binding.unbind'
   | 'account.password.set'
   | 'account.password.change'
+  | 'account.security.email_change'
+  | 'account.security.recover'
   | 'account.delete'
 
 export type VerificationOperation =
+  | {
+      scope: 'account.security.email_change'
+      context: { user_id: number; incident: string; email: string }
+    }
+  | {
+      scope: 'account.security.recover'
+      context: { user_id: number; incident: string; revoke_keys: boolean }
+    }
   | { scope: 'channel.key.read'; context: { channel_id: number } }
   | {
       scope: 'account.binding.bind'
@@ -51,7 +61,11 @@ export type VerificationOperation =
   | {
       scope: Exclude<
         SecurityProofScope,
-        'channel.key.read' | 'account.binding.bind' | 'account.binding.unbind'
+        | 'account.security.email_change'
+        | 'account.security.recover'
+        | 'channel.key.read'
+        | 'account.binding.bind'
+        | 'account.binding.unbind'
       >
       context?: Record<string, never>
     }
