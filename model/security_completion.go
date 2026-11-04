@@ -266,7 +266,16 @@ func CompleteSecurityMail(userID int, purpose, token, password string, identity 
 // Recovery never edits relay token validity implicitly. The optional explicit
 // compromise action disables keys in the same transaction as credential reset.
 func RecoverUserSecurity(operatorID, userID int, incident, evidence string, revokeKeys bool) (*SecurityRecoveryRecord, error) {
-	record := &SecurityRecoveryRecord{Action: "mfa_reset", UserID: userID, OperatorID: operatorID, Incident: incident, Evidence: evidence, RevokeKeys: revokeKeys, OccurredAt: time.Now().Unix()}
+	return recoverUserSecurity(operatorID, userID, incident, evidence, revokeKeys, "mfa_reset")
+}
+
+// RecoverUserPasskey preserves the authenticator and its backup codes.
+func RecoverUserPasskey(operatorID, userID int, incident, evidence string, revokeKeys bool) (*SecurityRecoveryRecord, error) {
+	return recoverUserSecurity(operatorID, userID, incident, evidence, revokeKeys, "passkey_reset")
+}
+
+func recoverUserSecurity(operatorID, userID int, incident, evidence string, revokeKeys bool, action string) (*SecurityRecoveryRecord, error) {
+	record := &SecurityRecoveryRecord{Action: action, UserID: userID, OperatorID: operatorID, Incident: incident, Evidence: evidence, RevokeKeys: revokeKeys, OccurredAt: time.Now().Unix()}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var user User
 		if err := lockForUpdate(tx).First(&user, userID).Error; err != nil {
@@ -285,11 +294,21 @@ func RecoverUserSecurity(operatorID, userID int, incident, evidence string, revo
 		if _, err := IncrementUserAuthVersionWithTx(tx, userID); err != nil {
 			return err
 		}
-		if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&TwoFABackupCode{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&TwoFA{}).Error; err != nil {
-			return err
+		if action == "passkey_reset" {
+			result := tx.Unscoped().Where("user_id = ?", userID).Delete(&PasskeyCredential{})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return ErrPasskeyNotFound
+			}
+		} else {
+			if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&TwoFABackupCode{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&TwoFA{}).Error; err != nil {
+				return err
+			}
 		}
 		if err := tx.Model(&AuthFlow{}).Where("user_id = ? AND consumed_at IS NULL", userID).Update("consumed_at", time.Now()).Error; err != nil {
 			return err

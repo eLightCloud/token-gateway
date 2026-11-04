@@ -561,6 +561,17 @@ func TestSecurityEnrollmentOperationContext(t *testing.T) {
 		{"revoke access token", "access_token.revoke", ``, nil},
 		{"access token target injection", "access_token.revoke", `{"user_id":42}`, service.ErrVerificationContextInvalid},
 		{"enrollment target injection", "passkey.register", `{"user_id":42}`, service.ErrVerificationContextInvalid},
+		{"recovery", service.VerificationScopeSecurityRecovery, `{"user_id":42,"incident":"DEV-42","revoke_keys":false}`, nil},
+		{"recovery missing field", service.VerificationScopeSecurityRecovery, `{"user_id":42,"incident":"DEV-42"}`, service.ErrVerificationContextInvalid},
+		{"recovery extra field", service.VerificationScopeSecurityRecovery, `{"user_id":42,"incident":"DEV-42","revoke_keys":false,"extra":1}`, service.ErrVerificationContextInvalid},
+		{"recovery invalid user", service.VerificationScopeSecurityRecovery, `{"user_id":0,"incident":"DEV-42","revoke_keys":false}`, service.ErrVerificationContextInvalid},
+		{"recovery invalid incident", service.VerificationScopeSecurityRecovery, `{"user_id":42,"incident":"x","revoke_keys":false}`, service.ErrVerificationContextInvalid},
+		{"recovery invalid flag", service.VerificationScopeSecurityRecovery, `{"user_id":42,"incident":"DEV-42","revoke_keys":"false"}`, service.ErrVerificationContextInvalid},
+		{"email change", service.VerificationScopeSecurityEmailChange, `{"user_id":42,"incident":"DEV-42","email":"new@example.com"}`, nil},
+		{"email change noncanonical", service.VerificationScopeSecurityEmailChange, `{"user_id":42,"incident":"DEV-42","email":"New@Example.com"}`, service.ErrVerificationContextInvalid},
+		{"email change invalid", service.VerificationScopeSecurityEmailChange, `{"user_id":42,"incident":"DEV-42","email":"bad"}`, service.ErrVerificationContextInvalid},
+		{"email change missing field", service.VerificationScopeSecurityEmailChange, `{"user_id":42,"incident":"DEV-42"}`, service.ErrVerificationContextInvalid},
+		{"email change extra field", service.VerificationScopeSecurityEmailChange, `{"user_id":42,"incident":"DEV-42","email":"new@example.com","extra":1}`, service.ErrVerificationContextInvalid},
 		{"unknown scope", "user.email.change", `{}`, service.ErrProofScope},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -576,6 +587,21 @@ func TestSecurityEnrollmentOperationContext(t *testing.T) {
 	secondBinding, err := service.BindVerificationOperation(reordered)
 	require.NoError(t, err)
 	assert.Equal(t, firstBinding, secondBinding)
+	for _, tc := range []struct{ scope, original, reordered, changed string }{
+		{service.VerificationScopeSecurityRecovery, `{"user_id":42,"incident":"DEV-42","revoke_keys":false}`, `{"revoke_keys":false,"incident":"DEV-42","user_id":42}`, `{"user_id":42,"incident":"DEV-42","revoke_keys":true}`},
+		{service.VerificationScopeSecurityEmailChange, `{"user_id":42,"incident":"DEV-42","email":"new@example.com"}`, `{"email":"new@example.com","incident":"DEV-42","user_id":42}`, `{"user_id":42,"incident":"DEV-42","email":"other@example.com"}`},
+	} {
+		t.Run(tc.scope+" binding", func(t *testing.T) {
+			original, err := service.BindVerificationOperation(service.VerificationOperation{Scope: tc.scope, Context: []byte(tc.original)})
+			require.NoError(t, err)
+			reordered, err := service.BindVerificationOperation(service.VerificationOperation{Scope: tc.scope, Context: []byte(tc.reordered)})
+			require.NoError(t, err)
+			assert.Equal(t, original, reordered)
+			changed, err := service.BindVerificationOperation(service.VerificationOperation{Scope: tc.scope, Context: []byte(tc.changed)})
+			require.NoError(t, err)
+			assert.NotEqual(t, original, changed)
+		})
+	}
 }
 
 func TestSecurityEnrollmentChannelProofRejectsMismatchesBeforeConsumption(t *testing.T) {
@@ -1543,7 +1569,6 @@ func TestSecurityEnrollmentMissingTargetsAreBusinessErrors(t *testing.T) {
 		handler   gin.HandlerFunc
 	}{
 		{"/api/channel/999/key", i18n.MsgChannelNotExists, GetChannelKey},
-		{"/api/user/999/2fa", i18n.MsgUserNotExists, AdminDisable2FA},
 	} {
 		var expectedMessage string
 		response := securityEnrollmentRequest("POST", target.path, "", "", identity, func(c *gin.Context) {
@@ -1747,9 +1772,45 @@ func TestSecurityCompletionManualRecoveryRequiresPermissionProofAndNotification(
 		c.Set("role", common.RoleRootUser)
 		AdminRecoverSecurity(c)
 	}
+	for _, id := range []string{"invalid", "0", "-1"} {
+		invalid := securityEnrollmentRequest("POST", path, body, "", identity, func(c *gin.Context) {
+			c.Params = gin.Params{{Key: "id", Value: id}}
+			c.Set("role", common.RoleRootUser)
+			AdminRecoverSecurity(c)
+		})
+		assert.Equal(t, http.StatusBadRequest, invalid.Code)
+	}
+	for _, lookupFailure := range []bool{false, true} {
+		queryFailed := false
+		context, err := common.Marshal(service.SecurityRecoveryContext{UserID: 999, Incident: "DEV-S2-005"})
+		require.NoError(t, err)
+		proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeSecurityRecovery, Context: context}, service.VerificationMethodTwoFA)
+		if lookupFailure {
+			require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register("recovery_target_failure", func(tx *gorm.DB) {
+				if user, ok := tx.Statement.Dest.(*model.User); ok && user.Id == 999 {
+					queryFailed = true
+					tx.AddError(errors.New("private recovery database failure"))
+				}
+			}))
+		}
+		failed := securityEnrollmentRequest("POST", "/api/security/admin/users/999/recovery", body, proof, identity, func(c *gin.Context) {
+			c.Params = gin.Params{{Key: "id", Value: "999"}}
+			c.Set("role", common.RoleRootUser)
+			AdminRecoverSecurity(c)
+		})
+		if lookupFailure {
+			require.NoError(t, model.DB.Callback().Query().Remove("recovery_target_failure"))
+			assert.True(t, queryFailed)
+		}
+		assert.Equal(t, http.StatusServiceUnavailable, failed.Code)
+		assert.Contains(t, failed.Body.String(), "SECURITY_OPERATION_UNAVAILABLE")
+		assert.NotContains(t, failed.Body.String(), "private recovery database failure")
+	}
 	missing := securityEnrollmentRequest("POST", path, body, "", identity, admin)
 	assert.Contains(t, missing.Body.String(), "SECURITY_PROOF_REQUIRED")
 	proof := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodTwoFA)
+	mismatch := securityEnrollmentRequest("POST", path, strings.Replace(body, "DEV-S2-005", "DEV-S2-006", 1), proof, identity, admin)
+	assert.Contains(t, mismatch.Body.String(), "SECURITY_PROOF_CONTEXT_MISMATCH")
 	response := securityEnrollmentRequest("POST", path, body, proof, identity, admin)
 	var result securityEnrollmentResponse
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
@@ -1777,6 +1838,31 @@ func TestSecurityCompletionManualRecoveryRequiresPermissionProofAndNotification(
 func TestSecurityCompletionEmailAndMFAEnrollment(t *testing.T) {
 	user, identity := setupSecurityEnrollmentTest(t)
 	t.Setenv("SECURITY_COMPLETION_ENFORCED", "true")
+	// Activation always encrypts a newly chosen password, even when ordinary
+	// password login accepts plaintext transport inside TLS.
+	require.NoError(t, model.DB.AutoMigrate(&model.LoginEncryptionKey{}))
+	require.NoError(t, model.InitPasswordEncryption())
+	firstKeyID, _ := common.PasswordEncryptionPublicKey()
+	require.NoError(t, model.InitPasswordEncryption())
+	secondKeyID, _ := common.PasswordEncryptionPublicKey()
+	assert.Equal(t, firstKeyID, secondKeyID)
+	previousEncryption := common.PasswordLoginEncryptionEnabled
+	common.PasswordLoginEncryptionEnabled = false
+	t.Cleanup(func() { common.PasswordLoginEncryptionEnabled = previousEncryption })
+	keyResponse := securityEnrollmentRequest("GET", "/api/user/login/encryption-key", "", "", identity, GetPasswordEncryptionKey)
+	var keyResult struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Enabled   bool   `json:"enabled"`
+			KeyID     string `json:"kid"`
+			PublicKey string `json:"public_key"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(keyResponse.Body.Bytes(), &keyResult))
+	require.True(t, keyResult.Success)
+	assert.False(t, keyResult.Data.Enabled, "the login transport preference remains disabled")
+	assert.NotEmpty(t, keyResult.Data.KeyID, "activation still needs an encryption key")
+	assert.NotEmpty(t, keyResult.Data.PublicKey)
 	require.NoError(t, model.DB.Model(user).Update("email", "s2-enrollment@example.com").Error)
 	mailbox := newSecurityMailbox(t)
 	requested := securityEnrollmentRequest("POST", "/api/security/email/start", "{}", "", identity, StartSecurityEmail)
@@ -1834,4 +1920,353 @@ func TestSecurityCompletionEmailAndMFAEnrollment(t *testing.T) {
 	for _, secret := range []string{token, proof, code, setup.Secret, setup.FlowToken, setup.BackupCodes[0]} {
 		assert.NotContains(t, string(raw), secret)
 	}
+}
+
+func TestSecurityCompletionMFAStorageRejectsShortFallbackKey(t *testing.T) {
+	for _, tc := range []struct {
+		name, storageKey, sessionKey string
+		valid                        bool
+	}{
+		{"missing", "", "", false},
+		{"short fallback", "", "short-session-secret", false},
+		{"both short", "short-mfa-key", "short-session-secret", false},
+		{"valid fallback", "short-mfa-key", strings.Repeat("s", 32), true},
+		{"dedicated key", strings.Repeat("m", 32), "short-session-secret", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user, _ := setupSecurityEnrollmentTest(t)
+			t.Setenv("SECURITY_COMPLETION_ENFORCED", "true")
+			t.Setenv("MFA_STORAGE_KEY", tc.storageKey)
+			t.Setenv("SESSION_SECRET", tc.sessionKey)
+			err := model.ValidateMFAStorageConfiguration()
+			factor := &model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP"}
+			if tc.valid {
+				require.NoError(t, err)
+				require.NoError(t, model.DB.Create(factor).Error)
+				var stored string
+				require.NoError(t, model.DB.Model(&model.TwoFA{}).Select("secret").Where("user_id = ?", user.Id).Scan(&stored).Error)
+				assert.True(t, strings.HasPrefix(stored, "enc:v1:"))
+				loaded, err := model.GetTwoFAByUserId(user.Id)
+				require.NoError(t, err)
+				assert.Equal(t, factor.Secret, loaded.Secret)
+			} else {
+				require.Error(t, err)
+				require.Error(t, model.DB.Create(factor).Error)
+				var count int64
+				require.NoError(t, model.DB.Model(&model.TwoFA{}).Count(&count).Error)
+				assert.Zero(t, count)
+			}
+		})
+	}
+}
+
+func TestSecurityCompletionEnrollmentActivationRollsBackWithFactor(t *testing.T) {
+	for _, kind := range []string{"", "agent", "agent_customer"} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			user, identity := setupSecurityEnrollmentTest(t)
+			t.Setenv("SECURITY_COMPLETION_ENFORCED", "true")
+			require.NoError(t, model.DB.AutoMigrate(&model.ResellerIdentity{}))
+			require.NoError(t, model.DB.Model(user).Update("reseller_kind", kind).Error)
+			if kind != "" {
+				require.NoError(t, model.DB.Create(&model.ResellerIdentity{UserID: user.Id, Kind: kind, Activation: "security_pending"}).Error)
+			}
+			secret := "JBSWY3DPEHPK3PXP"
+			authorization := &model.AuthFlowAuthorization{AuthSessionIdentity: identity, ProofID: 1, Scope: service.VerificationScopeTwoFASetup, ContextHash: "synthetic-context"}
+			token, err := model.CreateTwoFAEnrollment(identity, authorization, secret, []string{"synthetic-backup-code"}, time.Now().Add(5*time.Minute))
+			require.NoError(t, err)
+			code, err := totp.GenerateCode(secret, time.Now())
+			require.NoError(t, err)
+			failure := errors.New("factor activation failed")
+			require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("fail_factor_activation", func(tx *gorm.DB) {
+				if tx.Statement.Table == "two_fas" {
+					tx.AddError(failure)
+				}
+			}))
+			err = model.EnableTwoFAEnrollment(identity, token, code)
+			require.NoError(t, model.DB.Callback().Update().Remove("fail_factor_activation"))
+			require.ErrorIs(t, err, failure)
+			factor, err := model.GetTwoFAByUserId(user.Id)
+			require.NoError(t, err)
+			require.NotNil(t, factor)
+			assert.False(t, factor.IsEnabled)
+			stored, err := model.GetUserById(user.Id, false)
+			require.NoError(t, err)
+			assert.Equal(t, identity.UserAuthVersion, stored.AuthVersion)
+			if kind != "" {
+				reseller, err := model.GetResellerIdentity(model.DB, user.Id)
+				require.NoError(t, err)
+				assert.Equal(t, "security_pending", reseller.Activation)
+			}
+			// The failed transaction must not consume the setup or its TOTP step.
+			require.NoError(t, model.EnableTwoFAEnrollment(identity, token, code))
+			factor, err = model.GetTwoFAByUserId(user.Id)
+			require.NoError(t, err)
+			assert.True(t, factor.IsEnabled)
+			if kind != "" {
+				reseller, err := model.GetResellerIdentity(model.DB, user.Id)
+				require.NoError(t, err)
+				assert.Equal(t, "active", reseller.Activation)
+			}
+			assert.Error(t, model.EnableTwoFAEnrollment(identity, token, code))
+			assert.Error(t, model.ClaimTwoFACode(factor.Id, secret, code))
+		})
+	}
+}
+
+func TestSecuritySecondBatch(t *testing.T) {
+	t.Run("customer statistics cannot reveal channel", func(t *testing.T) {
+		user, identity := setupSecondBatchReseller(t, "agent_customer")
+		require.NoError(t, model.LOG_DB.AutoMigrate(&model.Log{}))
+		for _, entry := range []model.Log{{UserId: user.Id, Username: user.Username, Type: model.LogTypeConsume, ChannelId: 11, Quota: 70}, {UserId: user.Id, Username: user.Username, Type: model.LogTypeConsume, ChannelId: 12, Quota: 30}, {UserId: 9999, Username: "another-customer", Type: model.LogTypeConsume, ChannelId: 11, Quota: 900}} {
+			entry.CreatedAt = time.Now().Unix()
+			entry.PromptTokens = entry.Quota
+			require.NoError(t, model.LOG_DB.Create(&entry).Error)
+		}
+		access, _, err := service.IssueAccessToken(identity)
+		require.NoError(t, err)
+		router := gin.New()
+		router.GET("/api/log/self/stat", middleware.UserAuth(), GetLogsSelfStat)
+		for _, channel := range []string{"0", "11", "12", "999"} {
+			req := httptest.NewRequest("GET", "/api/log/self/stat?channel="+channel, nil)
+			req.Header.Set("Authorization", "Bearer "+access)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var result struct {
+				Success bool
+				Data    struct{ Quota, Rpm, Tpm int }
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+			require.True(t, result.Success, response.Body.String())
+			assert.Equal(t, 100, result.Data.Quota, "channel=%s", channel)
+			assert.Equal(t, 2, result.Data.Rpm, "channel=%s", channel)
+			assert.Equal(t, 100, result.Data.Tpm, "channel=%s", channel)
+		}
+		require.NoError(t, model.DB.Model(user).Update("reseller_kind", "").Error)
+		require.NoError(t, model.PublishUserAuthCache(user.Id))
+		req := httptest.NewRequest("GET", "/api/log/self/stat?channel=11", nil)
+		req.Header.Set("Authorization", "Bearer "+access)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		assert.Contains(t, response.Body.String(), `"quota":70`)
+	})
+	for _, kind := range []string{"agent", "agent_customer"} {
+		t.Run("completed account can replace authenticator/"+kind, func(t *testing.T) {
+			user, identity := setupSecondBatchReseller(t, kind)
+			mailbox := newSecurityMailbox(t)
+			require.NoError(t, model.DB.AutoMigrate(&model.Token{}))
+			key := model.Token{UserId: user.Id, Key: strings.Repeat("k", 48), Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true}
+			require.NoError(t, model.DB.Create(&key).Error)
+			access, _, err := service.IssueAccessToken(identity)
+			require.NoError(t, err)
+			router := gin.New()
+			router.POST("/api/security/factor/replace", middleware.UserAuth(), ReplaceOwnSecurityFactor)
+			request := func(proof string) *httptest.ResponseRecorder {
+				req := httptest.NewRequest("POST", "/api/security/factor/replace", strings.NewReader(`{}`))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", "Bearer "+access)
+				req.Header.Set("X-Security-Proof", proof)
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, req)
+				return response
+			}
+			require.NoError(t, model.DB.Model(&model.UserSecurityState{}).Where("user_id = ?", user.Id).Update("verified_email", "").Error)
+			assert.Contains(t, request("").Body.String(), "SECURITY_COMPLETION_REQUIRED")
+			require.NoError(t, model.DB.Model(&model.UserSecurityState{}).Where("user_id = ?", user.Id).Update("verified_email", user.Email).Error)
+			missing := request("")
+			require.Equal(t, 403, missing.Code)
+			require.Contains(t, missing.Body.String(), "SECURITY_PROOF_REQUIRED")
+			wrong := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopePasskeyDelete}, service.VerificationMethodTwoFA)
+			assert.Contains(t, request(wrong).Body.String(), "SECURITY_PROOF_SCOPE_MISMATCH")
+			expired := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeTwoFADisable}, service.VerificationMethodTwoFA)
+			require.NoError(t, model.DB.Model(&model.AuthFlow{}).Where("purpose = ?", model.AuthFlowPurposeSecurityProof).Update("expires_at", time.Now().Add(-time.Minute)).Error)
+			assert.Contains(t, request(expired).Body.String(), "SECURITY_PROOF_EXPIRED")
+			proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeTwoFADisable}, service.VerificationMethodTwoFA)
+			response := request(proof)
+			require.Equal(t, 200, response.Code, response.Body.String())
+			var result securityEnrollmentResponse
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+			require.True(t, result.Success, response.Body.String())
+			state, err := model.GetSecurityCompletion(user.Id)
+			require.NoError(t, err)
+			assert.False(t, state.MFAEnabled)
+			assert.False(t, state.Complete)
+			var keptKey model.Token
+			require.NoError(t, model.DB.First(&keptKey, key.Id).Error)
+			assert.Equal(t, common.TokenStatusEnabled, keptKey.Status, "factor replacement must preserve consumption keys")
+			assert.Equal(t, key.Key, keptKey.Key)
+			replay := request(proof)
+			assert.NotEqual(t, 200, replay.Code)
+			mailbox.mutex.Lock()
+			messages := append([]string(nil), mailbox.mail[user.Email]...)
+			mailbox.mutex.Unlock()
+			assert.NotEmpty(t, messages)
+		})
+	}
+	t.Run("passkey recovery requires independent proof audit and notification", func(t *testing.T) {
+		operator, identity := setupSecurityEnrollmentTest(t)
+		require.NoError(t, model.DB.AutoMigrate(&model.SecurityRecoveryRecord{}, &model.Token{}, &model.ResellerIdentity{}))
+		require.NoError(t, model.DB.Model(operator).Updates(map[string]any{"role": common.RoleRootUser, "email": "second-operator@example.com"}).Error)
+		require.NoError(t, model.DB.Create(&model.TwoFA{UserId: operator.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}).Error)
+		target := model.User{Username: "second-passkey-target", Email: "second-target@example.com", Password: operator.Password, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AuthVersion: 1, AffCode: "second-target"}
+		require.NoError(t, model.DB.Create(&target).Error)
+		require.NoError(t, model.DB.Create(&model.PasskeyCredential{UserID: target.Id, CredentialID: "second-credential", PublicKey: "synthetic-public-key"}).Error)
+		require.NoError(t, model.DB.Create(&model.TwoFA{UserId: target.Id, Secret: "KRSXG5DSNFXGOIDB", IsEnabled: true}).Error)
+		require.NoError(t, model.DB.Create(&model.TwoFABackupCode{UserId: target.Id, CodeHash: "synthetic-backup-hash"}).Error)
+		key := model.Token{UserId: target.Id, Key: strings.Repeat("p", 48), Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true}
+		require.NoError(t, model.DB.Create(&key).Error)
+		bundle, err := service.CreateLoginSession(target.Id, "password", "127.0.0.1", "before-passkey-recovery")
+		require.NoError(t, err)
+		mailbox := newSecurityMailbox(t)
+		path := fmt.Sprintf("/api/user/%d/reset_passkey", target.Id)
+		body := `{"incident":"SECOND-42","evidence":"Two independent synthetic verification references","revoke_keys":false,"confirmed":true}`
+		role := common.RoleAdminUser
+		handler := func(c *gin.Context) {
+			c.Params = gin.Params{{Key: "id", Value: fmt.Sprint(target.Id)}}
+			c.Set("role", role)
+			AdminResetPasskey(c)
+		}
+		denied := securityEnrollmentRequest("DELETE", path, body, "", identity, handler)
+		require.Equal(t, 403, denied.Code, denied.Body.String())
+		role = common.RoleRootUser
+		missing := securityEnrollmentRequest("DELETE", path, body, "", identity, handler)
+		require.Contains(t, missing.Body.String(), "SECURITY_PROOF_REQUIRED")
+		encoded, err := common.Marshal(service.SecurityRecoveryContext{UserID: target.Id, Incident: "SECOND-42"})
+		require.NoError(t, err)
+		operation := service.VerificationOperation{Scope: "account.security.passkey_recover", Context: encoded}
+		wrong := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeSecurityRecovery, Context: encoded}, service.VerificationMethodTwoFA)
+		assert.Contains(t, securityEnrollmentRequest("DELETE", path, body, wrong, identity, handler).Body.String(), "SECURITY_PROOF_SCOPE_MISMATCH")
+		expired := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodTwoFA)
+		require.NoError(t, model.DB.Model(&model.AuthFlow{}).Where("purpose = ?", model.AuthFlowPurposeSecurityProof).Update("expires_at", time.Now().Add(-time.Minute)).Error)
+		assert.Contains(t, securityEnrollmentRequest("DELETE", path, body, expired, identity, handler).Body.String(), "SECURITY_PROOF_EXPIRED")
+		mismatchProof := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodTwoFA)
+		assert.Contains(t, securityEnrollmentRequest("DELETE", path, strings.Replace(body, "SECOND-42", "SECOND-43", 1), mismatchProof, identity, handler).Body.String(), "SECURITY_PROOF_CONTEXT_MISMATCH")
+		assert.Contains(t, securityEnrollmentRequest("DELETE", path, strings.Replace(body, `"revoke_keys":false`, `"revoke_keys":true`, 1), mismatchProof, identity, handler).Body.String(), "SECURITY_PROOF_CONTEXT_MISMATCH")
+		failedProof := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodTwoFA)
+		originalPort := common.SMTPPort
+		common.SMTPPort = 1
+		failed := securityEnrollmentRequest("DELETE", path, body, failedProof, identity, handler)
+		common.SMTPPort = originalPort
+		assert.NotEqual(t, 200, failed.Code, failed.Body.String())
+		_, err = model.GetPasskeyByUserID(target.Id)
+		require.NoError(t, err)
+		assert.Contains(t, securityEnrollmentRequest("DELETE", path, body, failedProof, identity, handler).Body.String(), "SECURITY_PROOF_CONSUMED")
+		rollbackProof := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodTwoFA)
+		require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register("second_batch:recovery_failure", func(tx *gorm.DB) {
+			if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "SecurityRecoveryRecord" {
+				tx.AddError(errors.New("synthetic recovery record failure"))
+			}
+		}))
+		rolledBack := securityEnrollmentRequest("DELETE", path, body, rollbackProof, identity, handler)
+		require.NoError(t, model.DB.Callback().Create().Remove("second_batch:recovery_failure"))
+		assert.NotContains(t, rolledBack.Body.String(), `"success":true`)
+		_, err = model.GetPasskeyByUserID(target.Id)
+		require.NoError(t, err)
+		beforeIdentity, err := service.ParseAccessToken(bundle.AccessToken)
+		require.NoError(t, err)
+		require.NoError(t, model.ValidateAuthSessionWithTx(model.DB, beforeIdentity), "failed recovery must roll back authentication version")
+		assert.Contains(t, securityEnrollmentRequest("DELETE", path, body, rollbackProof, identity, handler).Body.String(), "SECURITY_PROOF_CONSUMED")
+		proof := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodTwoFA)
+		response := securityEnrollmentRequest("DELETE", path, body, proof, identity, handler)
+		require.Equal(t, 200, response.Code, response.Body.String())
+		var result securityEnrollmentResponse
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+		require.True(t, result.Success, response.Body.String())
+		_, err = model.GetPasskeyByUserID(target.Id)
+		require.ErrorIs(t, err, model.ErrPasskeyNotFound)
+		factor, err := model.GetTwoFAByUserId(target.Id)
+		require.NoError(t, err)
+		require.NotNil(t, factor)
+		assert.True(t, factor.IsEnabled)
+		var backup model.TwoFABackupCode
+		require.NoError(t, model.DB.Where("user_id = ?", target.Id).First(&backup).Error)
+		assert.Equal(t, "synthetic-backup-hash", backup.CodeHash)
+		var keptKey model.Token
+		require.NoError(t, model.DB.First(&keptKey, key.Id).Error)
+		assert.Equal(t, common.TokenStatusEnabled, keptKey.Status)
+		assert.Equal(t, key.Key, keptKey.Key)
+		oldIdentity, err := service.ParseAccessToken(bundle.AccessToken)
+		require.NoError(t, err)
+		require.Error(t, model.ValidateAuthSessionWithTx(model.DB, oldIdentity))
+		assert.Contains(t, securityEnrollmentRequest("DELETE", path, body, proof, identity, handler).Body.String(), "SECURITY_PROOF_CONSUMED")
+		var records []model.SecurityRecoveryRecord
+		require.NoError(t, model.DB.Find(&records).Error)
+		require.Len(t, records, 1)
+		assert.Equal(t, "passkey_reset", records[0].Action)
+		mailbox.mutex.Lock()
+		messages := append([]string(nil), mailbox.mail[target.Email]...)
+		mailbox.mutex.Unlock()
+		assert.NotEmpty(t, messages)
+		var audit []model.AuditLog
+		require.NoError(t, model.LOG_DB.Find(&audit).Error)
+		serialized, err := common.Marshal(audit)
+		require.NoError(t, err)
+		for _, secret := range []string{proof, key.Key, "KRSXG5DSNFXGOIDB", "synthetic-public-key"} {
+			assert.NotContains(t, string(serialized), secret)
+		}
+		// A separately verified compromise decision may revoke consumption keys.
+		require.NoError(t, model.DB.Create(&model.PasskeyCredential{UserID: target.Id, CredentialID: "second-compromised-credential", PublicKey: "synthetic-new-public-key"}).Error)
+		compromiseContext, err := common.Marshal(service.SecurityRecoveryContext{UserID: target.Id, Incident: "SECOND-42", RevokeKeys: true})
+		require.NoError(t, err)
+		compromiseProof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopePasskeyRecovery, Context: compromiseContext}, service.VerificationMethodTwoFA)
+		compromise := securityEnrollmentRequest("DELETE", path, strings.Replace(body, `"revoke_keys":false`, `"revoke_keys":true`, 1), compromiseProof, identity, handler)
+		require.NoError(t, common.Unmarshal(compromise.Body.Bytes(), &result))
+		require.True(t, result.Success, compromise.Body.String())
+		require.NoError(t, model.DB.First(&keptKey, key.Id).Error)
+		assert.Equal(t, common.TokenStatusDisabled, keptKey.Status)
+		factor, err = model.GetTwoFAByUserId(target.Id)
+		require.NoError(t, err)
+		assert.True(t, factor.IsEnabled)
+	})
+}
+
+func setupSecondBatchReseller(t *testing.T, kind string) (*model.User, service.AuthIdentity) {
+	t.Helper()
+	user, identity := setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}))
+	require.NoError(t, model.DB.Model(user).Updates(map[string]any{"reseller_kind": kind, "email": "second-reseller@example.com"}).Error)
+	user.Email = "second-reseller@example.com"
+	require.NoError(t, model.DB.Create(&model.UserSecurityState{UserID: user.Id, VerifiedEmail: user.Email, VerifiedAt: time.Now().Unix()}).Error)
+	require.NoError(t, model.DB.Create(&model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}).Error)
+	parentID := 0
+	if kind == "agent_customer" {
+		parent := model.User{Username: "second-parent", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, ResellerKind: "agent", AffCode: "second-parent"}
+		require.NoError(t, model.DB.Create(&parent).Error)
+		parentID = parent.Id
+		require.NoError(t, model.DB.Create(&model.ResellerIdentity{UserID: parent.Id, Kind: "agent", Activation: "active"}).Error)
+		require.NoError(t, model.DB.Create(&model.ResellerAccount{UserID: parent.Id, Enabled: true, Balance: 10000}).Error)
+	}
+	require.NoError(t, model.DB.Create(&model.ResellerIdentity{UserID: user.Id, Kind: kind, AgentUserID: parentID, Activation: "active"}).Error)
+	if kind == "agent" {
+		require.NoError(t, model.DB.Create(&model.ResellerAccount{UserID: user.Id, Enabled: true, Balance: 10000}).Error)
+	}
+	require.NoError(t, model.PublishUserAuthCache(user.Id))
+	return user, identity
+}
+
+func TestSecurityCompletionAdministrativeEmailChangeNotifiesBothVerifiedAddresses(t *testing.T) {
+	operator, _ := setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.SecurityRecoveryRecord{}))
+	require.NoError(t, model.DB.Model(operator).Update("role", common.RoleRootUser).Error)
+	target := model.User{Username: "email-recovery-target", Email: "old-address@example.invalid", Password: operator.Password, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AuthVersion: 1, AffCode: "email-recovery-target"}
+	require.NoError(t, model.DB.Create(&target).Error)
+	require.NoError(t, model.DB.Create(&model.TwoFA{UserId: target.Id, Secret: "KRSXG5DSNFXGOIDB", IsEnabled: true}).Error)
+	mailbox := newSecurityMailbox(t)
+	token, err := model.StartAdministrativeEmailChange(target.Id, model.SecurityEmailChange{Email: "new-address@example.invalid", CurrentEmail: target.Email, AuthVersion: target.AuthVersion, OperatorID: operator.Id, Incident: "FINAL-EMAIL", Evidence: "Two independent synthetic identity references"})
+	require.NoError(t, err)
+	body, err := common.Marshal(map[string]any{"user_id": target.Id, "token": token})
+	require.NoError(t, err)
+	response := securityEnrollmentRequest("POST", "/api/security/email-change/complete", string(body), "", service.AuthIdentity{}, FinishAdminEmailChange)
+	var result securityEnrollmentResponse
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	mailbox.mutex.Lock()
+	assert.NotEmpty(t, mailbox.mail[target.Email])
+	assert.NotEmpty(t, mailbox.mail["new-address@example.invalid"])
+	mailbox.mutex.Unlock()
+	factor, err := model.GetTwoFAByUserId(target.Id)
+	require.NoError(t, err)
+	assert.True(t, factor.IsEnabled)
+	replay := securityEnrollmentRequest("POST", "/api/security/email-change/complete", string(body), "", service.AuthIdentity{}, FinishAdminEmailChange)
+	assert.NotContains(t, replay.Body.String(), `"success":true`)
 }

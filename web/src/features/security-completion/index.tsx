@@ -137,11 +137,13 @@ export function SecurityCompletionPage() {
             <Link to='/dashboard'>{t('Continue')}</Link>
           )}
           {status.data.kind !== '' && status.data.complete && (
-            <p>
-              {t(
-                'Reseller business access will open after billing verification.'
-              )}
-            </p>
+            <Link
+              to={
+                status.data.kind === 'agent' ? '/reseller/customers' : '/wallet'
+              }
+            >
+              {t('Continue')}
+            </Link>
           )}
         </>
       )}

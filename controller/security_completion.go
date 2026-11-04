@@ -309,17 +309,8 @@ func FinishAdminEmailChange(c *gin.Context) {
 		writeSecurityCompletionError(c, model.ErrAuthFlowInvalid)
 		return
 	}
-	flow, err := model.GetAuthFlow(input.Token, model.AuthFlowMatch{Purpose: model.SecurityEmailChangePurpose, UserId: input.UserID})
+	state, err := model.CompleteAdministrativeEmailChange(input.UserID, input.Token)
 	if err != nil {
-		writeSecurityCompletionError(c, err)
-		return
-	}
-	var state model.SecurityEmailChange
-	if common.UnmarshalJsonStr(flow.Payload, &state) != nil {
-		writeSecurityCompletionError(c, model.ErrAuthFlowInvalid)
-		return
-	}
-	if err := model.CompleteAdministrativeEmailChange(input.UserID, input.Token); err != nil {
 		writeSecurityCompletionError(c, err)
 		return
 	}
@@ -376,6 +367,8 @@ func deliverSecurityPasswordRecovery(email string) {
 	}()
 	user, err := model.GetUniqueUserByEmail(email)
 	if err == nil {
-		_ = service.SendSecurityCompletionMail(user.Id, model.SecurityPasswordPurpose, nil)
+		if err := service.SendSecurityCompletionMail(user.Id, model.SecurityPasswordPurpose, nil); err != nil {
+			common.SysError("password recovery email delivery failed user_id=" + strconv.Itoa(user.Id))
+		}
 	}
 }

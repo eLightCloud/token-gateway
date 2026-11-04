@@ -327,11 +327,11 @@ func InitResources() error {
 		common.FatalLog("failed to initialize authorization: " + err.Error())
 		return err
 	}
-	if common.PasswordLoginEncryptionEnabled {
-		if err = model.InitPasswordEncryption(); err != nil {
-			common.FatalLog("failed to initialize password encryption: " + err.Error())
-			return err
-		}
+	// Activation and account password changes always use encrypted payloads,
+	// independently of the ordinary login transport preference.
+	if err = model.InitPasswordEncryption(); err != nil {
+		common.FatalLog("failed to initialize password encryption: " + err.Error())
+		return err
 	}
 
 	model.CheckSetup()

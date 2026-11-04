@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"html"
 	"net/url"
@@ -54,4 +55,37 @@ func CheckSecurityCompletionVerification(userID int, scope string) error {
 		return nil
 	}
 	return ErrVerificationForbidden
+}
+
+type SecurityEmailChangeContext struct {
+	UserID   int    `json:"user_id"`
+	Email    string `json:"email"`
+	Incident string `json:"incident"`
+}
+
+type SecurityRecoveryContext struct {
+	UserID     int    `json:"user_id"`
+	Incident   string `json:"incident"`
+	RevokeKeys bool   `json:"revoke_keys"`
+}
+
+// normalizeSecurityCompletionContext owns the exact operation schema bound to
+// recovery and email-change proofs; the verification engine only dispatches.
+func normalizeSecurityCompletionContext(operation VerificationOperation, fields map[string]json.RawMessage) (any, error) {
+	switch operation.Scope {
+	case VerificationScopeSecurityEmailChange:
+		var context SecurityEmailChangeContext
+		if len(fields) != 3 || common.Unmarshal(operation.Context, &context) != nil || context.UserID <= 0 || len(context.Incident) < 3 || len(context.Incident) > 100 || common.Validate.Var(context.Email, "required,email,max=50") != nil || context.Email != model.NormalizeEmail(context.Email) {
+			return nil, ErrVerificationContextInvalid
+		}
+		return context, nil
+	case VerificationScopeSecurityRecovery, VerificationScopePasskeyRecovery:
+		var context SecurityRecoveryContext
+		if len(fields) != 3 || common.Unmarshal(operation.Context, &context) != nil || context.UserID <= 0 || len(context.Incident) < 3 || len(context.Incident) > 100 {
+			return nil, ErrVerificationContextInvalid
+		}
+		return context, nil
+	default:
+		return nil, ErrProofScope
+	}
 }

@@ -1,18 +1,14 @@
 package controller
 
 import (
-	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 type Verify2FARequest struct {
@@ -186,62 +182,5 @@ func Admin2FAStats(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data":    stats,
-	})
-}
-
-// AdminDisable2FA 管理员强制禁用用户2FA
-func AdminDisable2FA(c *gin.Context) {
-	userIdStr := c.Param("id")
-	userId, err := strconv.Atoi(userIdStr)
-	if err != nil || userId <= 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "用户ID格式错误",
-		})
-		return
-	}
-
-	// 检查目标用户权限
-	targetUser, err := model.GetUserById(userId, false)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		common.ApiErrorI18n(c, i18n.MsgUserNotExists)
-		return
-	}
-	if err != nil {
-		writeSecurityOperationError(c, err)
-		return
-	}
-
-	myRole := c.GetInt("role")
-	if !canManageTargetRole(myRole, targetUser.Role) {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "无权操作同级或更高级用户的2FA设置",
-		})
-		return
-	}
-
-	// 禁用2FA
-	if err := model.DisableTwoFAWithAuthVersion(userId); err != nil {
-		if errors.Is(err, model.ErrTwoFANotEnabled) {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "用户未启用2FA",
-			})
-			return
-		}
-		writeSecurityOperationError(c, err)
-		return
-	}
-	if _, err := model.RevokeAllUserSessions(userId, "admin_twofa_disabled"); err != nil {
-		writeSecurityOperationError(c, err)
-		return
-	}
-
-	recordManageAuditFor(c, userId, "user.2fa_disable", nil)
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "用户2FA已被强制禁用",
 	})
 }

@@ -15,13 +15,21 @@ import (
 
 // The deployment secret is outside the database. All replicas must share it;
 // changing it requires decrypting/re-encrypting credentials before rollout.
-func twoFACipher() (cipher.AEAD, error) {
+func twoFAStorageSecret() (string, error) {
 	secret := os.Getenv("MFA_STORAGE_KEY")
 	if len(secret) < 32 {
 		secret = os.Getenv("SESSION_SECRET")
 	}
-	if secret == "" {
-		return nil, errors.New("MFA_STORAGE_KEY or SESSION_SECRET must contain at least 32 bytes for persistent MFA encryption")
+	if len(secret) < 32 {
+		return "", errors.New("MFA_STORAGE_KEY or SESSION_SECRET must contain at least 32 bytes for persistent MFA encryption")
+	}
+	return secret, nil
+}
+
+func twoFACipher() (cipher.AEAD, error) {
+	secret, err := twoFAStorageSecret()
+	if err != nil {
+		return nil, err
 	}
 	key := sha256.Sum256([]byte("new-api:totp-storage:v1:" + secret))
 	block, err := aes.NewCipher(key[:])
@@ -44,7 +52,10 @@ func encryptTwoFASecret(secret string) (string, error) {
 }
 
 func (factor *TwoFA) BeforeSave(_ *gorm.DB) error {
-	if len(os.Getenv("MFA_STORAGE_KEY")) < 32 && len(os.Getenv("SESSION_SECRET")) < 32 && os.Getenv("SECURITY_COMPLETION_ENFORCED") != "true" {
+	if _, err := twoFAStorageSecret(); err != nil {
+		if os.Getenv("SECURITY_COMPLETION_ENFORCED") == "true" {
+			return err
+		}
 		return nil
 	}
 	if factor.Secret == "" || strings.HasPrefix(factor.Secret, "enc:v1:") {
@@ -78,9 +89,9 @@ func (factor *TwoFA) AfterFind(_ *gorm.DB) error {
 func (factor *TwoFA) AfterSave(tx *gorm.DB) error { return factor.AfterFind(tx) }
 
 func migrateTwoFASecretStorage(db *gorm.DB) error {
-	if len(os.Getenv("MFA_STORAGE_KEY")) < 32 && len(os.Getenv("SESSION_SECRET")) < 32 {
+	if _, err := twoFAStorageSecret(); err != nil {
 		if os.Getenv("SECURITY_COMPLETION_ENFORCED") == "true" {
-			return errors.New("configure a stable MFA_STORAGE_KEY or SESSION_SECRET before enabling account security")
+			return err
 		}
 		return nil
 	}
@@ -100,6 +111,6 @@ func migrateTwoFASecretStorage(db *gorm.DB) error {
 }
 
 func ValidateMFAStorageConfiguration() error {
-	_, err := twoFACipher()
+	_, err := twoFAStorageSecret()
 	return err
 }

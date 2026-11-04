@@ -41,6 +41,7 @@ export type SecurityProofScope =
   | 'account.password.change'
   | 'account.security.email_change'
   | 'account.security.recover'
+  | 'account.security.passkey_recover'
   | 'account.delete'
 
 export type VerificationOperation =
@@ -49,7 +50,7 @@ export type VerificationOperation =
       context: { user_id: number; incident: string; email: string }
     }
   | {
-      scope: 'account.security.recover'
+      scope: 'account.security.recover' | 'account.security.passkey_recover'
       context: { user_id: number; incident: string; revoke_keys: boolean }
     }
   | { scope: 'channel.key.read'; context: { channel_id: number } }
@@ -63,6 +64,7 @@ export type VerificationOperation =
         SecurityProofScope,
         | 'account.security.email_change'
         | 'account.security.recover'
+        | 'account.security.passkey_recover'
         | 'channel.key.read'
         | 'account.binding.bind'
         | 'account.binding.unbind'

@@ -26,6 +26,7 @@ import {
 } from '@tanstack/react-router'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import type { InternalAxiosRequestConfig } from 'axios'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
@@ -79,6 +80,40 @@ async function renderPage(activation = false) {
     </QueryClientProvider>
   )
 }
+
+it('allows anonymous email-change confirmation without requiring or refreshing a dashboard session', async () => {
+  useAuthStore.getState().auth.reset()
+  window.history.replaceState(
+    null,
+    '',
+    '/account-activation#token=opaque-mail-token&user_id=42&purpose=security_email_change'
+  )
+  const previousAdapter = api.defaults.adapter
+  const requests: string[] = []
+  api.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+    requests.push(config.url ?? '')
+    return {
+      config,
+      headers: {},
+      status: 200,
+      statusText: 'OK',
+      data: { success: true, data: {} },
+    }
+  }
+  try {
+    await renderPage(true)
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Verify Email' })
+    )
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Email verified. Continue with security setup.'
+    )
+    expect(requests).toEqual(['/api/security/email-change/complete'])
+    expect(useAuthStore.getState().auth.accessToken).toBeNull()
+  } finally {
+    api.defaults.adapter = previousAdapter
+  }
+})
 
 describe('Security enrollment', () => {
   it('restricts an unverified account to security queries and supports keyboard email delivery with cooldown', async () => {

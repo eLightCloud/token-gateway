@@ -74,7 +74,7 @@ export function AccountActivation() {
         return authResult<AccountSecurityResult>(
           api.post('/api/security/email-change/complete', link, {
             ...authRequestOptions,
-            singleUseAuthorization: true,
+            skipAuthRefresh: true,
           })
         )
       }
@@ -85,7 +85,7 @@ export function AccountActivation() {
             ? '/api/security/password/reset'
             : '/api/security/activation',
           { ...link, ...encrypted },
-          { ...authRequestOptions, singleUseAuthorization: true }
+          { ...authRequestOptions, skipAuthRefresh: true }
         )
       )
     },

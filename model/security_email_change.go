@@ -51,19 +51,15 @@ func StartAdministrativeEmailChange(userID int, state SecurityEmailChange) (stri
 	return token, err
 }
 
-func CompleteAdministrativeEmailChange(userID int, token string) error {
+func CompleteAdministrativeEmailChange(userID int, token string) (*SecurityEmailChange, error) {
 	if userID <= 0 {
-		return ErrAuthFlowInvalid
-	}
-	flow, err := GetAuthFlow(token, AuthFlowMatch{Purpose: SecurityEmailChangePurpose, UserId: userID})
-	if err != nil {
-		return err
+		return nil, ErrAuthFlowInvalid
 	}
 	var state SecurityEmailChange
-	if common.UnmarshalJsonStr(flow.Payload, &state) != nil {
-		return ErrAuthFlowInvalid
-	}
-	_, err = ConsumeAuthFlowWithAction(token, AuthFlowMatch{Purpose: SecurityEmailChangePurpose, UserId: userID}, func(tx *gorm.DB, flow *AuthFlow) error {
+	_, err := ConsumeAuthFlowWithAction(token, AuthFlowMatch{Purpose: SecurityEmailChangePurpose, UserId: userID}, func(tx *gorm.DB, flow *AuthFlow) error {
+		if common.UnmarshalJsonStr(flow.Payload, &state) != nil {
+			return ErrAuthFlowInvalid
+		}
 		return withNormalizedEmailLock(tx, state.Email, func(tx *gorm.DB) error {
 			var user User
 			if err := lockForUpdate(tx).First(&user, userID).Error; err != nil {
@@ -88,11 +84,13 @@ func CompleteAdministrativeEmailChange(userID int, token string) error {
 		})
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := PublishUserAuthCache(userID); err != nil {
-		return err
+		return nil, err
 	}
-	_, err = RevokeAllUserSessions(userID, "administrative_email_change")
-	return err
+	if _, err := RevokeAllUserSessions(userID, "administrative_email_change"); err != nil {
+		return nil, err
+	}
+	return &state, nil
 }

@@ -441,52 +441,7 @@ func PasskeyLoginFinish(c *gin.Context) {
 }
 
 func AdminResetPasskey(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		common.ApiErrorMsg(c, "无效的用户 ID")
-		return
-	}
-
-	user := &model.User{Id: id}
-	if err := user.FillUserById(); err != nil {
-		writeSecurityOperationError(c, err)
-		return
-	}
-	myRole := c.GetInt("role")
-	if !canManageTargetRole(myRole, user.Role) {
-		common.ApiErrorMsg(c, "no permission")
-		return
-	}
-
-	if _, err := model.GetPasskeyByUserID(user.Id); err != nil {
-		if errors.Is(err, model.ErrPasskeyNotFound) {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "该用户尚未绑定 Passkey",
-			})
-			return
-		}
-		writeSecurityOperationError(c, err)
-		return
-	}
-
-	if err := model.DeletePasskeyByUserIDWithAuthVersion(user.Id); err != nil {
-		writeSecurityOperationError(c, err)
-		return
-	}
-	if _, err := model.RevokeAllUserSessions(user.Id, "admin_passkey_reset"); err != nil {
-		writeSecurityOperationError(c, err)
-		return
-	}
-
-	recordManageAuditFor(c, user.Id, "user.reset_passkey", map[string]any{
-		"username": user.Username,
-		"id":       user.Id,
-	})
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Passkey 已重置",
-	})
+	AdminRecoverPasskey(c)
 }
 
 func PasskeyVerifyBegin(c *gin.Context) {

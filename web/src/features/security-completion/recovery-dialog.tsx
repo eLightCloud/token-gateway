@@ -60,6 +60,7 @@ const schema = z.object({
 
 interface RecoveryDialogProps {
   emailChange?: boolean
+  passkeyRecovery?: boolean
   open: boolean
   onOpenChange: (open: boolean) => void
   userID: number
@@ -69,6 +70,15 @@ interface RecoveryDialogProps {
 export function SecurityRecoveryDialog(props: RecoveryDialogProps) {
   const { t } = useTranslation()
   const security = useAccountSecurity()
+  let title = t('Account security recovery')
+  let submitLabel = t('Reset 2FA')
+  if (props.emailChange) {
+    title = t('Request email change')
+    submitLabel = title
+  } else if (props.passkeyRecovery) {
+    title = t('Reset Passkey')
+    submitLabel = title
+  }
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
     defaultValues: {
@@ -96,7 +106,9 @@ export function SecurityRecoveryDialog(props: RecoveryDialogProps) {
               },
             }
           : {
-              scope: 'account.security.recover',
+              scope: props.passkeyRecovery
+                ? 'account.security.passkey_recover'
+                : 'account.security.recover',
               context: {
                 user_id: props.userID,
                 incident: values.incident,
@@ -105,17 +117,23 @@ export function SecurityRecoveryDialog(props: RecoveryDialogProps) {
             },
         signal
       )
+      const options = {
+        ...authRequestOptions,
+        headers: { 'X-Security-Proof': proof },
+        signal,
+        singleUseAuthorization: true,
+      }
       return authResult<AccountSecurityResult>(
-        api.post(
-          `/api/security/admin/users/${props.userID}/${props.emailChange ? 'email-change' : 'recovery'}`,
-          values,
-          {
-            ...authRequestOptions,
-            headers: { 'X-Security-Proof': proof },
-            signal,
-            singleUseAuthorization: true,
-          }
-        )
+        props.passkeyRecovery
+          ? api.delete(`/api/user/${props.userID}/reset_passkey`, {
+              ...options,
+              data: values,
+            })
+          : api.post(
+              `/api/security/admin/users/${props.userID}/${props.emailChange ? 'email-change' : 'recovery'}`,
+              values,
+              options
+            )
       )
     })
     if (result) {
@@ -131,11 +149,7 @@ export function SecurityRecoveryDialog(props: RecoveryDialogProps) {
           if (!open) security.cancel()
           props.onOpenChange(open)
         }}
-        title={
-          props.emailChange
-            ? t('Request email change')
-            : t('Account security recovery')
-        }
+        title={title}
         description={t(
           'Record verification references only. Never enter passwords, codes, tokens or identity documents.'
         )}
@@ -235,7 +249,7 @@ export function SecurityRecoveryDialog(props: RecoveryDialogProps) {
                   )}
             </p>
             <Button type='submit' disabled={security.pending}>
-              {props.emailChange ? t('Request email change') : t('Reset 2FA')}
+              {submitLabel}
             </Button>
           </form>
         </Form>
