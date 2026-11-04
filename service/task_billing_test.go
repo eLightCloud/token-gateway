@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/http/httptest"
 
 	"encoding/json"
@@ -12,11 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"errors"
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -24,7 +28,11 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"strings"
+	"sync"
 )
 
 func TestMain(m *testing.M) {
@@ -53,6 +61,7 @@ func TestMain(m *testing.M) {
 	common.LogConsumeEnabled = true
 
 	if err := db.AutoMigrate(
+		&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerProjection{}, &model.ResellerConfigRevision{}, &model.ResellerFundingSnapshot{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.ResellerBillingReceipt{}, &model.ResellerRequest{}, &model.ResellerEvent{},
 		&model.Task{},
 		&model.Midjourney{},
 		&model.User{},
@@ -99,6 +108,9 @@ func TestMain(m *testing.M) {
 func truncate(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
+		for _, table := range []string{"reseller_identities", "reseller_accounts", "reseller_projections", "reseller_config_heads", "reseller_model_configs", "reseller_config_revisions", "reseller_funding_snapshots", "reseller_billing_receipts", "reseller_requests", "reseller_events"} {
+			require.NoError(t, model.DB.Exec("DELETE FROM "+table).Error)
+		}
 		model.DB.Exec("DELETE FROM tasks")
 		model.DB.Exec("DELETE FROM midjourneys")
 		model.DB.Exec("DELETE FROM users")
@@ -1971,4 +1983,562 @@ func TestOrganizationInvoiceTaskSubmissionConfirmationSurvivesOutboxAndSnapshotS
 			}
 		})
 	}
+}
+
+func TestPersonalTaskLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		ratio        string
+		submitted    int
+		finalBase    int
+		confirmed    bool
+		refund       bool
+		wantB, wantA int64
+	}{
+		{"pending equal completion", "0.9", 90, 100, false, false, 910, 9920},
+		{"fixed reconciliation", "0.9", 90, 100, false, false, 910, 9920},
+		{"rounded zero fixed reconciliation", "0.000001", 0, 100, false, false, 1000, 9920},
+		{"log failure recovery", "0.9", 90, 100, false, false, 910, 9920},
+		{"refund log recovery", "0.9", 90, 0, false, true, 1000, 10000},
+		{"delivery topup", "0.9", 90, 150, false, false, 865, 9880},
+		{"pending smaller completion", "0.9", 90, 60, false, false, 946, 9952},
+		{"confirmed submission", "0.9", 90, 100, true, false, 910, 9920},
+		{"zero completion", "0.9", 90, 0, false, false, 1000, 10000},
+		{"failure refund", "0.9", 90, 0, false, true, 1000, 10000},
+		{"rounded zero fixed", "0.000001", 0, 100, false, false, 1000, 9920},
+		{"rounded zero failure", "0.000001", 0, 0, false, true, 1000, 10000},
+		{"ratio one equal completion", "1", 100, 100, false, false, 900, 9920},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			fixedReconciliation := tc.name == "fixed reconciliation" || tc.name == "rounded zero fixed reconciliation"
+			root := model.User{Id: 811, Username: "personal-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AffCode: "personal-root"}
+			a := model.User{Id: 812, Username: "personal-agent", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, ResellerKind: "agent", AffCode: "personal-agent"}
+			b := model.User{Id: 813, Username: "personal-customer", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, ResellerKind: "agent_customer", Quota: 1000, AffCode: "personal-customer"}
+			require.NoError(t, model.DB.Create(&root).Error)
+			require.NoError(t, model.DB.Create(&a).Error)
+			require.NoError(t, model.DB.Create(&b).Error)
+			require.NoError(t, model.DB.Create(&model.ResellerIdentity{UserID: a.Id, Kind: "agent", Activation: "active"}).Error)
+			require.NoError(t, model.DB.Create(&model.ResellerIdentity{UserID: b.Id, Kind: "agent_customer", AgentUserID: a.Id, Activation: "active"}).Error)
+			require.NoError(t, model.DB.Create(&model.ResellerAccount{UserID: a.Id, Enabled: true, Balance: 10000}).Error)
+			channel := model.Channel{Id: 814, Name: "personal-task", Models: "personal-model", Key: "synthetic", Status: common.ChannelStatusEnabled}
+			require.NoError(t, model.DB.Create(&channel).Error)
+			input := model.ResellerConfigInput{Items: []model.ResellerConfigItem{{Model: "personal-model", ChannelID: channel.Id, Authorized: true, Ratio: "0.8"}}}
+			_, err := model.SaveResellerConfig(root.Id, a.Id, true, input)
+			require.NoError(t, err)
+			input.Items[0].Ratio = tc.ratio
+			_, err = model.SaveResellerConfig(a.Id, b.Id, false, input)
+			require.NoError(t, err)
+			snapshot, err := model.LoadPersonalPricing(b.Id, "personal-model")
+			require.NoError(t, err)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+			info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "generate"}, RequestId: "personal-task-request", UserId: b.Id, IsPlayground: true, PersonalPricing: snapshot, OriginModelName: "personal-model", PriceData: types.PriceData{Quota: 100, QuotaToPreConsume: 100}, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id}}
+			info.PriceData.UsePrice = fixedReconciliation
+			require.Nil(t, PreConsumeBilling(ctx, 100, info))
+			task := &model.Task{TaskID: "personal-task", UserId: b.Id, ChannelId: channel.Id, Quota: 100, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{BillingSource: BillingSourceWallet, BillingContext: SnapshotTaskBillingContext(info)}}
+			require.NoError(t, model.DB.Create(task).Error)
+			require.NoError(t, SettleOrganizationInvoiceTaskSubmission(ctx, info, task, 100, tc.confirmed))
+			assert.Equal(t, tc.submitted, task.Quota)
+			var state model.ResellerRequest
+			require.NoError(t, model.DB.First(&state, "id = ?", info.RequestId).Error)
+			if !tc.confirmed {
+				assert.Equal(t, "pending", state.State)
+				assert.Nil(t, state.AgentQuota)
+			} else {
+				assert.Equal(t, "settled", state.State)
+			}
+			// Mutable configuration changes cannot reprice this task.
+			require.NoError(t, model.DB.Model(&model.ResellerModelConfig{}).Where("user_id = ?", b.Id).Update("ratio", 2000000).Error)
+			if tc.name == "delivery topup" {
+				task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{}
+				require.NoError(t, model.DB.Save(task).Error)
+				current := *task
+				require.NoError(t, ReservePersonalTaskDelivery(ctx, task, &current, 150, map[string]any{"seconds": 15}, "delivery"))
+				assert.EqualValues(t, 135, task.Quota)
+				require.NoError(t, model.DB.First(&current, task.ID).Error)
+				require.NoError(t, ReservePersonalTaskDelivery(ctx, task, &current, 150, map[string]any{"seconds": 15}, "delivery"))
+				assert.EqualValues(t, 865, getUserQuota(t, b.Id))
+			}
+
+			if tc.name == "log failure recovery" || tc.name == "refund log recovery" {
+				originalLogDB := model.LOG_DB
+				unavailable, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+				require.NoError(t, err)
+				model.LOG_DB = unavailable
+				if tc.refund {
+					assert.False(t, RefundTaskQuota(ctx, task, "synthetic failure"))
+				} else {
+					assert.False(t, RecalculateTaskQuota(ctx, task, tc.finalBase, "completion"))
+				}
+				model.LOG_DB = originalLogDB
+				connection, err := unavailable.DB()
+				require.NoError(t, err)
+				require.NoError(t, connection.Close())
+			}
+			if !tc.confirmed {
+				if tc.refund {
+					require.True(t, RefundTaskQuota(ctx, task, "synthetic failure"))
+				} else if fixedReconciliation {
+					task.Status = model.TaskStatusSuccess
+					StageTaskUsageReconciliation(task, &relaycommon.TaskInfo{Status: string(model.TaskStatusSuccess)})
+					require.NoError(t, model.DB.Save(task).Error)
+					require.True(t, settleReconciledTaskUsage(ctx, task))
+					require.True(t, settleReconciledTaskUsage(ctx, task), "completion replay preserves exact targets")
+				} else if tc.name == "rounded zero fixed" {
+					require.NoError(t, model.ConfirmTaskInvoiceExpense(model.TaskSettlementEntityTask, task.ID, task.Quota, "synthetic-fixed-zero"))
+				} else {
+					require.True(t, RecalculateTaskQuota(ctx, task, tc.finalBase, "completion"))
+				}
+			}
+			for range 2 {
+				_, err := model.ProcessResellerEvents(100)
+				require.NoError(t, err)
+			}
+			var customer model.User
+			require.NoError(t, model.DB.First(&customer, b.Id).Error)
+			assert.Equal(t, tc.wantB, customer.Quota)
+			var account model.ResellerAccount
+			require.NoError(t, model.DB.First(&account, "user_id = ?", a.Id).Error)
+			assert.Equal(t, tc.wantA, account.Balance)
+			assert.Zero(t, account.Reserved)
+			if tc.name == "pending equal completion" {
+				for _, remaining := range []int{60, 30, 0} {
+					operation := fmt.Sprintf("partial-%d", remaining)
+					require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, operation, remaining))
+					require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, operation, remaining))
+					_, err := model.ProcessResellerEvents(100)
+					require.NoError(t, err)
+					require.NoError(t, model.DB.First(&customer, b.Id).Error)
+					require.NoError(t, model.DB.First(&account, "user_id = ?", a.Id).Error)
+					assert.EqualValues(t, 1000-remaining*9/10, customer.Quota)
+					assert.EqualValues(t, 10000-remaining*8/10, account.Balance)
+					assert.Zero(t, account.Reserved)
+				}
+				require.Error(t, RefundPersonalRequestToBase(ctx, info.RequestId, "over-refund", 1))
+				for _, dispatched := range []bool{false, true} {
+					next := *info
+					next.RequestId = fmt.Sprintf("recover-unsent-%v", dispatched)
+					next.Billing = nil
+					require.Nil(t, PreConsumeBilling(ctx, 100, &next))
+					if dispatched {
+						require.NoError(t, MarkPersonalRequestDispatch(&next))
+						require.ErrorIs(t, RecoverUnsentPersonalRequest(ctx, next.RequestId), model.ErrResellerConflict)
+						next.Billing.Refund(ctx)
+					} else {
+						require.NoError(t, RecoverUnsentPersonalRequest(ctx, next.RequestId))
+						require.NoError(t, RecoverUnsentPersonalRequest(ctx, next.RequestId))
+					}
+				}
+				_, err := model.ProcessResellerEvents(100)
+				require.NoError(t, err)
+				require.NoError(t, model.DB.First(&customer, b.Id).Error)
+				require.NoError(t, model.DB.First(&account, "user_id = ?", a.Id).Error)
+				assert.EqualValues(t, 1000, customer.Quota)
+				assert.EqualValues(t, 10000, account.Balance)
+				assert.Zero(t, account.Reserved)
+				mjInfo := *info
+				mjInfo.RequestId = "personal-midjourney"
+				mjInfo.Billing, mjInfo.PersonalPricing = nil, nil
+				common.SetContextKey(ctx, constant.ContextKeyChannelId, channel.Id)
+				require.Nil(t, PreparePersonalMidjourney(ctx, &mjInfo, 100))
+				mj := &model.Midjourney{UserId: b.Id, ChannelId: channel.Id, MjId: "synthetic-mj", Action: "IMAGINE"}
+				prepared, err := PrepareMidjourneyTaskBilling(&mjInfo, mj, 100, true)
+				require.NoError(t, err)
+				require.True(t, prepared)
+				require.NoError(t, mj.Insert())
+				billed, err := SettleMidjourneyTaskBilling(&mjInfo, mj, prepared)
+				require.NoError(t, err)
+				require.True(t, billed)
+				assert.Equal(t, 200, mj.Quota)
+				_, err = model.ProcessResellerEvents(100)
+				require.NoError(t, err)
+				require.NoError(t, model.DB.First(&account, "user_id = ?", a.Id).Error)
+				assert.EqualValues(t, 80, account.Reserved)
+				require.NoError(t, model.DB.Model(&model.Midjourney{}).Where("id = ?", mj.Id).Update("status", "SUCCESS").Error)
+				require.True(t, model.HasPendingPersonalTerminalTasks())
+				assert.Equal(t, 1, SweepPersonalTerminalTasks(ctx))
+				assert.Zero(t, SweepPersonalTerminalTasks(ctx))
+				_, err = model.ProcessResellerEvents(100)
+				require.NoError(t, err)
+				require.NoError(t, model.DB.First(&account, "user_id = ?", a.Id).Error)
+				assert.EqualValues(t, 9920, account.Balance)
+				assert.Zero(t, account.Reserved)
+				require.True(t, RefundMidjourneyQuota(ctx, mj, "synthetic failure"))
+				require.True(t, RefundMidjourneyQuota(ctx, mj, "synthetic failure"))
+				_, err = model.ProcessResellerEvents(100)
+				require.NoError(t, err)
+				require.NoError(t, model.DB.First(&customer, b.Id).Error)
+				require.NoError(t, model.DB.First(&account, "user_id = ?", a.Id).Error)
+				assert.EqualValues(t, 1000, customer.Quota)
+				assert.EqualValues(t, 10000, account.Balance)
+				assert.Zero(t, account.Reserved)
+			}
+		})
+	}
+}
+
+func TestPersonalOrdinarySubscription(t *testing.T) {
+	for _, ratio := range []int64{900000, 2000000, 1} {
+		t.Run(fmt.Sprint(ratio), func(t *testing.T) {
+			truncate(t)
+			seedUser(t, 901, 1000)
+			seedChannel(t, 902)
+			plan := model.SubscriptionPlan{Id: 903, Title: "personal funding", Enabled: true}
+			require.NoError(t, model.DB.Create(&plan).Error)
+			seedSubscription(t, 904, 901, 10000, 0)
+			require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("id = ?", 904).Update("plan_id", plan.Id).Error)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{RequestId: fmt.Sprintf("personal-sub-%d", ratio), UserId: 901, IsPlayground: true, OriginModelName: "personal-model", UserSetting: dto.UserSetting{BillingPreference: "subscription_only"}, PersonalPricing: &types.PersonalPricingSnapshot{UserID: 901, Model: "personal-model", Channels: map[int]types.PersonalChannelPrice{902: {CustomerRatio: ratio, AgentRatio: 1000000}}}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 902}}
+			require.Nil(t, PreConsumeBilling(ctx, 100, info))
+			assert.Equal(t, 904, info.SubscriptionId)
+			require.NoError(t, info.Billing.Settle(60))
+			want, clamp, err := model.PersonalQuota(60, ratio)
+			require.NoError(t, err)
+			require.Nil(t, clamp)
+			var sub model.UserSubscription
+			require.NoError(t, model.DB.First(&sub, 904).Error)
+			assert.EqualValues(t, want, sub.AmountUsed)
+			var user model.User
+			require.NoError(t, model.DB.First(&user, 901).Error)
+			assert.EqualValues(t, 1000, user.Quota)
+			require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, "full-refund", 0))
+			require.NoError(t, model.DB.First(&sub, 904).Error)
+			assert.Zero(t, sub.AmountUsed)
+		})
+	}
+}
+
+func TestPersonalQuotaSaturationKeepsFinalChargeAndAudit(t *testing.T) {
+	truncate(t)
+	seedUser(t, 911, 1000)
+	seedChannel(t, 912)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{RequestId: "personal-saturation", UserId: 911, IsPlayground: true, ForcePreConsume: true, OriginModelName: "personal-model", UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, PersonalPricing: &types.PersonalPricingSnapshot{UserID: 911, Model: "personal-model", Channels: map[int]types.PersonalChannelPrice{912: {CustomerRatio: 2000000, AgentRatio: 1000000}}}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 912}}
+	require.NotNil(t, PreConsumeBilling(ctx, common.MaxQuota, info))
+	assert.EqualValues(t, 1000, getUserQuota(t, 911))
+	info.QuotaClamp = nil
+	require.Nil(t, PreConsumeBilling(ctx, 100, info))
+	require.NoError(t, SettleBillingAndRecordConsumeLog(ctx, info, common.MaxQuota, model.RecordConsumeLogParams{ChannelId: 912, ModelName: "personal-model", Quota: common.MaxQuota, Other: model.NewLogOther()}, true))
+	assert.EqualValues(t, 1000-int64(common.MaxQuota), getUserQuota(t, 911))
+	var state model.ResellerRequest
+	require.NoError(t, model.DB.First(&state, "id = ?", info.RequestId).Error)
+	require.NotNil(t, state.CustomerQuota)
+	assert.EqualValues(t, common.MaxQuota, *state.CustomerQuota)
+	var fact types.PersonalBillingFact
+	require.NoError(t, common.UnmarshalJsonStr(state.Snapshot, &fact))
+	assert.True(t, fact.Saturated)
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	admin, ok := other["admin_info"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, admin, "quota_saturation")
+	require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, "partial-still-saturated", common.MaxQuota-1))
+	assert.EqualValues(t, 1000-int64(common.MaxQuota), getUserQuota(t, 911))
+	require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, "full-refund", 0))
+	assert.EqualValues(t, 1000, getUserQuota(t, 911))
+}
+
+// This suite also runs on the runner-owned real MySQL/PostgreSQL databases.
+// Synthetic IDs and scoped cleanup preserve the frozen upgrade fixture.
+func TestPersonalFundingCorrectness(t *testing.T) {
+	if dialect := os.Getenv("S1_MATRIX_DIALECT"); dialect != "" {
+		dsn := os.Getenv("S1_MATRIX_DSN")
+		var driver gorm.Dialector
+		switch dialect {
+		case "sqlite":
+			path := os.Getenv("S1_MATRIX_SQLITE")
+			require.NotEmpty(t, path)
+			driver = sqlite.Open(path)
+		case "mysql":
+			require.Contains(t, dsn, "@tcp(127.0.0.1:")
+			require.Contains(t, dsn, "/s1_test?")
+			driver = mysql.Open(dsn)
+		case "postgres":
+			require.True(t, strings.HasPrefix(dsn, "host=127.0.0.1 "))
+			require.Contains(t, dsn, " dbname=s1_test ")
+			driver = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
+		default:
+			t.Fatal("unsupported isolated dialect")
+		}
+		db, err := gorm.Open(driver, &gorm.Config{})
+		require.NoError(t, err)
+		connection, err := db.DB()
+		require.NoError(t, err)
+		previousDB, previousLog := model.DB, model.LOG_DB
+		previousMain, previousLogKind := common.MainDatabaseType(), common.LogDatabaseType()
+		model.DB, model.LOG_DB = db, db
+		common.SetDatabaseTypes(common.DatabaseType(dialect), common.DatabaseType(dialect))
+		// Serialize SQLite's single-writer transactions; MySQL/PostgreSQL use
+		// multiple connections and exercise the request row lock concurrently.
+		if dialect == "sqlite" {
+			connection.SetMaxOpenConns(1)
+		}
+		var version string
+		versionSQL := "SELECT version()"
+		if dialect == "sqlite" {
+			versionSQL = "SELECT sqlite_version()"
+		}
+		require.NoError(t, db.Raw(versionSQL).Scan(&version).Error)
+		t.Logf("personal funding database=%s version=%s upgrade=%s", dialect, version, os.Getenv("S1_UPGRADE"))
+		t.Cleanup(func() {
+			model.DB, model.LOG_DB = previousDB, previousLog
+			common.SetDatabaseTypes(previousMain, previousLogKind)
+			require.NoError(t, connection.Close())
+		})
+	}
+	t.Run("immediate failure uses refund lifecycle", func(t *testing.T) {
+		ctx, info := personalFundingFixture(t)
+		task := model.Task{TaskID: "immediate-failure", UserId: info.UserId, ChannelId: info.ChannelId, Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingSource: "wallet", TokenId: info.TokenId, BillingContext: SnapshotTaskBillingContext(info)}}
+		require.NoError(t, SettlePersonalTaskSubmission(ctx, info, &task, 0, true, model.RecordConsumeLogParams{ModelName: info.OriginModelName, Other: model.NewLogOther()}))
+		var state model.ResellerRequest
+		require.NoError(t, model.DB.First(&state, "id = ?", info.RequestId).Error)
+		assert.Equal(t, "refunded", state.State)
+		assert.EqualValues(t, 1000, getUserQuota(t, info.UserId))
+		var event model.ResellerEvent
+		require.NoError(t, model.DB.Where("request_id = ? AND version > ?", info.RequestId, 1).First(&event).Error)
+		assert.Equal(t, "refund", event.Kind)
+	})
+	t.Run("recovery includes dispatched terminal task without submission journal", func(t *testing.T) {
+		ctx, info := personalFundingFixture(t)
+		require.NoError(t, MarkPersonalRequestDispatch(info))
+		task := model.Task{TaskID: "legacy-terminal-orphan", UserId: info.UserId, ChannelId: info.ChannelId, Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingSource: "wallet", TokenId: info.TokenId, BillingContext: SnapshotTaskBillingContext(info)}}
+		require.NoError(t, model.DB.Create(&task).Error)
+		require.NoError(t, model.DB.Model(&model.ResellerRequest{}).Where("id = ?", info.RequestId).Updates(map[string]any{"entity_type": "task", "entity_id": task.ID}).Error)
+		personalTerminalRecovery.cursor = ""
+		SweepPersonalTerminalTasks(ctx)
+		var request model.ResellerRequest
+		require.NoError(t, model.DB.First(&request, "id = ?", info.RequestId).Error)
+		assert.Equal(t, "refunded", request.State)
+		assert.EqualValues(t, 1000, getUserQuota(t, info.UserId))
+		SweepPersonalTerminalTasks(ctx)
+		assert.EqualValues(t, 1000, getUserQuota(t, info.UserId), "recovery replay cannot credit the wallet again")
+	})
+
+	for _, entity := range []string{model.TaskSettlementEntityTask, model.TaskSettlementEntityMidjourney} {
+		t.Run("missing submission intent refunds actual debit/"+entity, func(t *testing.T) {
+			ctx, info := personalFundingFixture(t)
+			require.NoError(t, MarkPersonalRequestDispatch(info))
+			if entity == model.TaskSettlementEntityTask {
+				task := model.Task{TaskID: "orphan-task", UserId: info.UserId, ChannelId: info.ChannelId, Quota: 100, Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingSource: "wallet", TokenId: info.TokenId, BillingContext: SnapshotTaskBillingContext(info)}}
+				require.NoError(t, model.DB.Create(&task).Error)
+				require.True(t, RefundTaskQuota(ctx, &task, "failed after insert"))
+			} else {
+				task := model.Midjourney{MjId: "orphan-mj", UserId: info.UserId, ChannelId: info.ChannelId, TokenId: info.TokenId, Status: "FAILURE", PrivateData: model.TaskPrivateData{BillingContext: SnapshotTaskBillingContext(info)}}
+				require.NoError(t, model.DB.Create(&task).Error)
+				require.True(t, RefundMidjourneyQuota(ctx, &task, "failed after insert"))
+			}
+			assert.EqualValues(t, 1000, getUserQuota(t, info.UserId))
+			var token model.Token
+			require.NoError(t, model.DB.First(&token, info.TokenId).Error)
+			assert.EqualValues(t, 1000, token.RemainQuota)
+			_, err := model.ProcessResellerEvents(100)
+			require.NoError(t, err)
+			var account model.ResellerAccount
+			require.NoError(t, model.DB.First(&account, "user_id = ?", 950002).Error)
+			assert.EqualValues(t, 10000, account.Balance)
+			assert.Zero(t, account.Reserved)
+		})
+	}
+	t.Run("task and submission intent survive apply failure together", func(t *testing.T) {
+		ctx, info := personalFundingFixture(t)
+		task := model.Task{TaskID: "atomic-task", UserId: info.UserId, ChannelId: info.ChannelId, Quota: 100, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{BillingSource: "wallet", TokenId: info.TokenId, BillingContext: SnapshotTaskBillingContext(info)}}
+		name := "personal_funding_apply_failure"
+		require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(name, func(tx *gorm.DB) {
+			if tx.Statement.Table == "task_settlement_journals" {
+				tx.AddError(errors.New("synthetic interruption before apply commit"))
+			}
+		}))
+		err := SettlePersonalTaskSubmission(ctx, info, &task, 100, false, model.RecordConsumeLogParams{ModelName: info.OriginModelName, Other: model.NewLogOther()})
+		require.NoError(t, model.DB.Callback().Update().Remove(name))
+		require.Error(t, err)
+		var saved model.Task
+		require.NoError(t, model.DB.Where("task_id = ?", task.TaskID).First(&saved).Error)
+		var journal model.TaskSettlementJournal
+		require.NoError(t, model.DB.Where("entity_type = ? AND entity_id = ?", "task", saved.ID).First(&journal).Error)
+		assert.False(t, journal.Applied)
+		require.Positive(t, SweepPendingTaskSettlements(ctx))
+		require.NoError(t, model.DB.First(&saved, saved.ID).Error)
+		assert.Equal(t, 90, saved.Quota)
+		var state model.ResellerRequest
+		require.NoError(t, model.DB.First(&state, "id = ?", info.RequestId).Error)
+		assert.Equal(t, "pending", state.State)
+		assert.Equal(t, saved.ID, state.EntityID)
+		assert.EqualValues(t, 910, getUserQuota(t, info.UserId))
+	})
+	t.Run("same table IDs retain distinct refund logs after cleanup", func(t *testing.T) {
+		ctx, info := personalFundingFixture(t)
+		task := model.Task{ID: 950010, TaskID: "same-id-task", UserId: info.UserId, ChannelId: info.ChannelId, Quota: 100, Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingSource: "wallet", TokenId: info.TokenId, BillingContext: SnapshotTaskBillingContext(info)}}
+		require.NoError(t, model.DB.Create(&task).Error)
+		// Keep this funding/log-id fixture independent of the frozen MySQL
+		// baseline's latin1 log column and the existing Chinese log template.
+		require.NoError(t, SettlePersonalTaskSubmission(ctx, info, &task, 100, false, model.RecordConsumeLogParams{Content: "task submitted", Other: model.NewLogOther()}))
+		require.True(t, RefundTaskQuota(ctx, &task, "task refund"))
+		next := *info
+		next.RequestId = "funding-mj-request"
+		next.Billing = nil
+		require.Nil(t, PreConsumeBilling(ctx, 100, &next))
+		mj := model.Midjourney{Id: int(task.ID), MjId: "same-id-mj", UserId: next.UserId, ChannelId: next.ChannelId, TokenId: next.TokenId, Status: "FAILURE", PrivateData: model.TaskPrivateData{BillingContext: SnapshotTaskBillingContext(&next)}}
+		require.NoError(t, model.DB.Create(&mj).Error)
+		_, err := SettleMidjourneyTaskBilling(&next, &mj, true)
+		require.NoError(t, err)
+		require.True(t, RefundMidjourneyQuota(ctx, &mj, "mj refund"))
+		var count int64
+		require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("user_id = ? AND type = ?", info.UserId, model.LogTypeRefund).Count(&count).Error)
+		assert.EqualValues(t, 2, count)
+		assert.EqualValues(t, 1000, getUserQuota(t, info.UserId))
+	})
+	t.Run("submission intent failure rolls task insertion back", func(t *testing.T) {
+		ctx, info := personalFundingFixture(t)
+		task := model.Task{TaskID: "rollback-task", UserId: info.UserId, ChannelId: info.ChannelId, Quota: 100, PrivateData: model.TaskPrivateData{BillingSource: "wallet", TokenId: info.TokenId, BillingContext: SnapshotTaskBillingContext(info)}}
+		name := "personal_funding_intent_failure"
+		require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register(name, func(tx *gorm.DB) {
+			if tx.Statement.Table == "task_settlement_journals" {
+				tx.AddError(errors.New("synthetic journal persistence failure"))
+			}
+		}))
+		err := SettlePersonalTaskSubmission(ctx, info, &task, 100, false, model.RecordConsumeLogParams{Other: model.NewLogOther()})
+		require.NoError(t, model.DB.Callback().Create().Remove(name))
+		require.Error(t, err)
+		var count int64
+		require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id = ?", task.TaskID).Count(&count).Error)
+		assert.Zero(t, count)
+		assert.Zero(t, task.ID)
+		info.Billing.Refund(ctx)
+		assert.EqualValues(t, 1000, getUserQuota(t, info.UserId))
+	})
+	t.Run("midjourney insertion retains submission recovery intent", func(t *testing.T) {
+		ctx, info := personalFundingFixture(t)
+		task := model.Midjourney{MjId: "atomic-mj", UserId: info.UserId, ChannelId: info.ChannelId, TokenId: info.TokenId, Status: "FAILURE", PrivateData: model.TaskPrivateData{BillingContext: SnapshotTaskBillingContext(info)}}
+		require.NoError(t, PersistMidjourneyTaskSubmission(info, &task, true))
+		var journal model.TaskSettlementJournal
+		require.NoError(t, model.DB.Where("entity_type = ? AND entity_id = ?", "midjourney", task.Id).First(&journal).Error)
+		info.Billing.Refund(ctx) // A committed task is owned by recovery.
+		assert.EqualValues(t, 910, getUserQuota(t, info.UserId))
+		require.Positive(t, SweepPendingTaskSettlements(ctx))
+		require.NoError(t, model.DB.First(&task, task.Id).Error)
+		assert.Equal(t, 90, task.Quota)
+		require.True(t, RefundMidjourneyQuota(ctx, &task, "terminal failure"))
+		assert.EqualValues(t, 1000, getUserQuota(t, info.UserId))
+	})
+	t.Run("stale refund intent cannot overcredit wallet", func(t *testing.T) {
+		ctx, info := personalFundingFixture(t)
+		require.NoError(t, SettleBillingAndRecordConsumeLog(ctx, info, 100, model.RecordConsumeLogParams{Other: model.NewLogOther()}, true))
+		var state model.ResellerRequest
+		require.NoError(t, model.DB.First(&state, "id = ?", info.RequestId).Error)
+		var fact types.PersonalBillingFact
+		require.NoError(t, common.UnmarshalJsonStr(state.Snapshot, &fact))
+		fact.Kind = "refund"
+		fact.OperationID = model.PersonalOperationID(info.RequestId, "stale-refund")
+		fact.BaseQuota, fact.CustomerTarget, fact.AgentTarget = 60, 54, 48
+		encoded, err := common.Marshal(fact)
+		require.NoError(t, err)
+		stale := model.TaskSettlementJournal{PersonalFact: string(encoded), RequestId: "stale-refund", Operation: model.TaskSettlementOperationRefund, UserId: info.UserId, TokenId: info.TokenId, ApplyToken: true, BillingSource: "wallet", ExpectedQuota: 90, FinalQuota: 54, Delta: -36, LogDone: true}
+		_, err = model.EnsureTaskSettlementJournal(&stale)
+		require.NoError(t, err)
+		require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, "remaining-80", 80))
+		_, _, err = model.ApplyTaskSettlementJournal(stale.RequestId)
+		require.ErrorIs(t, err, model.ErrResellerConflict)
+		assert.EqualValues(t, 928, getUserQuota(t, info.UserId))
+		require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, "remaining-60", 60))
+		assert.EqualValues(t, 946, getUserQuota(t, info.UserId))
+	})
+	t.Run("completed pre-fix refund remains idempotent", func(t *testing.T) {
+		ctx, info := personalFundingFixture(t)
+		task := model.Task{TaskID: "legacy-refund-task", UserId: info.UserId, ChannelId: info.ChannelId, Quota: 90, Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingSource: "wallet", TokenId: info.TokenId, BillingContext: SnapshotTaskBillingContext(info)}}
+		require.NoError(t, model.DB.Create(&task).Error)
+		fact := *task.PrivateData.BillingContext.PersonalPricing
+		legacyID := fmt.Sprintf("task-refund:%d", task.ID)
+		fact.OperationID = model.PersonalOperationID(info.RequestId, legacyID)
+		fact.Kind, fact.EntityType, fact.EntityID = "refund", "task", task.ID
+		fact.BaseQuota, fact.CustomerTarget, fact.AgentTarget = 0, 0, 0
+		payload, err := common.Marshal(fact)
+		require.NoError(t, err)
+		journal := model.TaskSettlementJournal{PersonalFact: string(payload), RequestId: legacyID, Operation: model.TaskSettlementOperationRefund, EntityType: "task", EntityId: task.ID, EntityExpectedQuota: 90, UserId: info.UserId, TokenId: info.TokenId, ApplyToken: true, BillingSource: "wallet", ExpectedQuota: 90, Delta: -90, LogDone: true}
+		_, err = model.EnsureTaskSettlementJournal(&journal)
+		require.NoError(t, err)
+		_, _, err = model.ApplyTaskSettlementJournal(legacyID)
+		require.NoError(t, err)
+		require.NoError(t, model.DeleteTaskSettlementJournal(legacyID))
+		require.True(t, RefundTaskQuota(ctx, &task, "legacy replay"))
+		assert.EqualValues(t, 1000, getUserQuota(t, info.UserId))
+	})
+	t.Run("concurrent refund targets and replay conserve balances", func(t *testing.T) {
+		ctx, info := personalFundingFixture(t)
+		require.NoError(t, SettleBillingAndRecordConsumeLog(ctx, info, 100, model.RecordConsumeLogParams{Other: model.NewLogOther()}, true))
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		var workers sync.WaitGroup
+		for _, remaining := range []int{80, 60} {
+			workers.Go(func() {
+				<-start
+				results <- RefundPersonalRequestToBase(ctx, info.RequestId, fmt.Sprintf("remaining-%d", remaining), remaining)
+			})
+		}
+		close(start)
+		workers.Wait()
+		close(results)
+		// A later larger target may be rejected; it must never reverse a refund.
+		for err := range results {
+			if err != nil {
+				assert.True(t, errors.Is(err, model.ErrResellerInvalid) || errors.Is(err, model.ErrResellerConflict), "%v", err)
+			}
+		}
+		require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, "final-60", 60))
+		require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, "final-60", 60))
+		require.ErrorIs(t, RefundPersonalRequestToBase(ctx, info.RequestId, "final-60", 80), model.ErrResellerConflict)
+		assert.EqualValues(t, 946, getUserQuota(t, info.UserId))
+		var token model.Token
+		require.NoError(t, model.DB.First(&token, info.TokenId).Error)
+		assert.EqualValues(t, 946, token.RemainQuota)
+		_, err := model.ProcessResellerEvents(100)
+		require.NoError(t, err)
+		var account model.ResellerAccount
+		require.NoError(t, model.DB.First(&account, "user_id = ?", 950002).Error)
+		assert.EqualValues(t, 9952, account.Balance)
+		assert.Zero(t, account.Reserved)
+	})
+}
+
+func personalFundingFixture(t *testing.T) (*gin.Context, *relaycommon.RelayInfo) {
+	t.Helper()
+	db := model.DB
+	t.Cleanup(func() {
+		for _, table := range []string{"tasks", "midjourneys", "tokens", "logs", "task_settlement_journals"} {
+			require.NoError(t, db.Table(table).Where("user_id = ?", 950003).Delete(map[string]any{}).Error)
+		}
+		for _, table := range []string{"reseller_requests", "reseller_events"} {
+			require.NoError(t, db.Table(table).Where("customer_user_id = ?", 950003).Delete(map[string]any{}).Error)
+		}
+		require.NoError(t, db.Where("request_id IN ?", []string{"funding-request", "funding-mj-request"}).Delete(&model.ResellerFundingSnapshot{}).Error)
+		require.NoError(t, db.Where("fact LIKE ?", "%funding-%").Delete(&model.ResellerBillingReceipt{}).Error)
+		require.NoError(t, db.Where("request_id IN ?", []string{"funding-request", "funding-mj-request"}).Delete(&model.ResellerProjection{}).Error)
+		for _, table := range []string{"reseller_identities", "reseller_accounts"} {
+			require.NoError(t, db.Table(table).Where("user_id IN ?", []int{950002, 950003}).Delete(map[string]any{}).Error)
+		}
+		require.NoError(t, db.Unscoped().Where("id IN ?", []int{950001, 950002, 950003}).Delete(&model.User{}).Error)
+		require.NoError(t, db.Unscoped().Where("id = ?", 950004).Delete(&model.Channel{}).Error)
+	})
+	for _, user := range []model.User{
+		{Id: 950001, Username: "funding-root", AffCode: "funding-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled},
+		{Id: 950002, Username: "funding-agent", AffCode: "funding-agent", ResellerKind: "agent", Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
+		{Id: 950003, Username: "funding-customer", AffCode: "funding-customer", ResellerKind: "agent_customer", Quota: 1000, Role: common.RoleCommonUser, Status: common.UserStatusEnabled},
+	} {
+		require.NoError(t, db.Create(&user).Error)
+	}
+	require.NoError(t, db.Create(&model.ResellerIdentity{UserID: 950002, Kind: "agent", Activation: "active"}).Error)
+	require.NoError(t, db.Create(&model.ResellerIdentity{UserID: 950003, Kind: "agent_customer", AgentUserID: 950002, Activation: "active"}).Error)
+	require.NoError(t, db.Create(&model.ResellerAccount{UserID: 950002, Balance: 10000, Enabled: true}).Error)
+	require.NoError(t, db.Create(&model.Channel{Id: 950004, Name: "funding-channel", Models: "funding-model", Status: common.ChannelStatusEnabled}).Error)
+	require.NoError(t, db.Create(&model.Token{Id: 950005, UserId: 950003, Key: "synthetic-funding-key", Name: "funding-token", Status: common.TokenStatusEnabled, RemainQuota: 1000}).Error)
+	snapshot := &types.PersonalPricingSnapshot{UserID: 950003, AgentUserID: 950002, Model: "funding-model", Channels: map[int]types.PersonalChannelPrice{950004: {CustomerRatio: 900000, AgentRatio: 800000}}}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "generate"}, RequestId: "funding-request", UserId: 950003, TokenId: 950005, OriginModelName: "funding-model", PersonalPricing: snapshot, PriceData: types.PriceData{Quota: 100, QuotaToPreConsume: 100}, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 950004}}
+	require.Nil(t, PreConsumeBilling(ctx, 100, info))
+	return ctx, info
 }

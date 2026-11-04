@@ -265,6 +265,11 @@ func ListModels(c *gin.Context, modelType int) {
 		userModelNames = append(userModelNames, modelName)
 	}
 
+	userModelNames, err = filterResellerModelNames(c.GetInt("id"), userModelNames)
+	if err != nil {
+		resellerResponse(c, nil, err)
+		return
+	}
 	ownerByModel := map[string]string{}
 	if len(ownerGroups) > 0 {
 		ownerByModel = getPreferredModelOwners(userModelNames, ownerGroups)
@@ -326,6 +331,9 @@ func ChannelListModels(c *gin.Context) {
 }
 
 func DashboardListModels(c *gin.Context) {
+	if respondResellerModelList(c) {
+		return
+	}
 	modelsByChannel := make(map[int][]string, len(channelId2Models))
 	for channelType, models := range channelId2Models {
 		modelsByChannel[channelType] = append([]string(nil), models...)
@@ -350,6 +358,15 @@ func EnabledListModels(c *gin.Context) {
 
 func RetrieveModel(c *gin.Context, modelType int) {
 	modelId := c.Param("model")
+	allowed, err := filterResellerModelNames(c.GetInt("id"), []string{modelId})
+	if err != nil {
+		resellerResponse(c, nil, err)
+		return
+	}
+	if len(allowed) == 0 {
+		c.JSON(404, gin.H{"error": gin.H{"message": "Model not found", "type": "invalid_request_error"}})
+		return
+	}
 	if aiModel, ok := openAIModelsMap[modelId]; ok {
 		switch modelType {
 		case constant.ChannelTypeAnthropic:

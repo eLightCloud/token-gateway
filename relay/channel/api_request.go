@@ -405,6 +405,9 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		}
 		dialer.Proxy = http.ProxyURL(proxyURL)
 	}
+	if err := service.MarkPersonalRequestDispatch(info); err != nil {
+		return nil, err
+	}
 	targetConn, resp, err := dialer.DialContext(c.Request.Context(), fullRequestURL, targetHeader)
 	if err != nil {
 		statusCode := http.StatusInternalServerError
@@ -559,6 +562,9 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	if err := service.MarkPersonalRequestDispatch(info); err != nil {
+		return nil, err
+	}
 	resp, err := relayClient.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())

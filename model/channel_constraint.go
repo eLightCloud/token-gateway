@@ -9,6 +9,7 @@ import (
 )
 
 var filterEvalOrder = []dto.ChannelFilterKind{
+	dto.FilterPersonalAuthorization,
 	dto.FilterVideoEnhance,
 	dto.FilterRequestPath,
 	dto.FilterTaskPluginIdentity,
@@ -105,6 +106,8 @@ func candidatePassesKindFilters(ch *Channel, exists bool, modelName string, kind
 
 func channelMatchesFilter(ch *Channel, modelName string, filter dto.ChannelFilter) bool {
 	switch filter.Kind {
+	case dto.FilterPersonalAuthorization:
+		return slices.Contains(filter.AllowedChannelIDs, ch.Id)
 	case dto.FilterRequestPath:
 		if filter.RequestPath == "" {
 			return true

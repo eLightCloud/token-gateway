@@ -149,6 +149,9 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 	}
 	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
 	formatUserLogs(logs, 0)
+	if err == nil && len(logs) > 0 {
+		err = redactPersonalCustomerLogs(logs[0].UserId, logs)
+	}
 	return logs, err
 }
 
@@ -609,6 +612,9 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	}
 
 	formatUserLogs(logs, startIdx)
+	if err := redactPersonalCustomerLogs(userId, logs); err != nil {
+		return nil, 0, err
+	}
 	return logs, total, err
 }
 

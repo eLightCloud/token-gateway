@@ -3,7 +3,6 @@ package service
 import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/authz"
-	"gorm.io/gorm"
 )
 
 // CreateResellerAccount enforces platform capabilities before entering the
@@ -31,13 +30,6 @@ func AdjustResellerAccountQuota(operatorID, userID int, kind string, input model
 	if kind != "agent" && kind != "agent_customer" {
 		return nil, model.ErrResellerInvalid
 	}
-	identity, err := model.GetResellerIdentity(model.DB, userID)
-	if err != nil {
-		return nil, err
-	}
-	if identity == nil || identity.Kind != kind {
-		return nil, gorm.ErrRecordNotFound
-	}
 	if kind == "agent" {
 		var operator model.User
 		if err := model.DB.First(&operator, operatorID).Error; err != nil {
@@ -47,5 +39,5 @@ func AdjustResellerAccountQuota(operatorID, userID int, kind string, input model
 			return nil, model.ErrResellerForbidden
 		}
 	}
-	return model.AdjustResellerQuota(operatorID, userID, input)
+	return model.AdjustResellerQuotaForKind(operatorID, userID, kind, input)
 }

@@ -71,6 +71,9 @@ func ReserveSeedanceEnhanceDelivery(ctx context.Context, task *model.Task) error
 		}
 		return clamp
 	}
+	if TaskHasPersonalPricing(task) {
+		return ReservePersonalTaskDelivery(ctx, task, &current, quota, actualFacts, result.MatchedTier)
+	}
 	if quota <= current.Quota {
 		return nil
 	}

@@ -82,6 +82,8 @@ type TokenCountMeta struct {
 }
 
 type RelayInfo struct {
+	PersonalPricing *hosttypes.PersonalPricingSnapshot
+
 	TokenId           int
 	TokenKey          string
 	TokenGroup        string

@@ -57,6 +57,10 @@ func PrepareMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.
 	}
 	task.PrivateData.MoneySnapshot = snapshot
 	task.Quota = quota
+	if relayInfo.PersonalPricing != nil {
+		task.PrivateData.BillingContext = SnapshotTaskBillingContext(relayInfo)
+		task.Quota = 0
+	}
 	task.BillingChannelId = task.ChannelId
 	if relayInfo.ChannelMeta != nil && relayInfo.ChannelId > 0 {
 		task.BillingChannelId = relayInfo.ChannelId
@@ -76,6 +80,9 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 		return false, errors.New("Midjourney task must be persisted before billing")
 	}
 
+	if relayInfo.PersonalPricing != nil {
+		return settlePersonalMidjourney(relayInfo, task)
+	}
 	result, billingErr := postConsumeQuotaWithResult(relayInfo, task.Quota, 0, true)
 	if !result.FundingApplied {
 		task.Quota = 0
@@ -99,6 +106,9 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 
 // RefundMidjourneyQuota reverses every accounting element recorded for a billed legacy task.
 func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason string) bool {
+	if MidjourneyHasPersonalPricing(task) {
+		return refundPersonalMidjourney(ctx, task, reason)
+	}
 	quota := task.Quota
 	if quota == 0 {
 		return true

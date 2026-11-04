@@ -89,7 +89,7 @@ func settleReconciledTaskUsage(ctx context.Context, task *model.Task) bool {
 			return false
 		}
 	} else if bc != nil && bc.PerCallBilling {
-		if !RecalculateTaskQuota(ctx, task, state.ReservedQuota, "任务按次费用确认") {
+		if !confirmFixedTaskUsage(ctx, task, state.ReservedQuota) {
 			_ = model.PersistTaskUsage(task, false)
 			return false
 		}

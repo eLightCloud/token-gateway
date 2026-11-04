@@ -513,7 +513,7 @@ func openTaskDialectDatabase(t *testing.T, models ...any) (*gorm.DB, common.Data
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	require.NoError(t, db.AutoMigrate(models...))
+	require.NoError(t, db.AutoMigrate(append([]any{&model.ResellerConfigHead{}, &model.ResellerModelConfig{}}, models...)...))
 	t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(models...)) })
 	var version string
 	if dialect == common.DatabaseTypeSQLite {
@@ -531,7 +531,7 @@ func TestImmediateTaskSettlementDatabase(t *testing.T) {
 		dialect = common.DatabaseTypeSQLite
 	}
 	db, _ := newAuditTestDatabase(t, string(dialect), os.Getenv("TEST_"+strings.ToUpper(string(dialect))+"_DSN"))
-	require.NoError(t, db.AutoMigrate(&model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}, &model.TaskSettlementJournal{}, &model.SystemTask{}, &model.SystemTaskLock{}))
+	require.NoError(t, db.AutoMigrate(&model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}, &model.TaskSettlementJournal{}, &model.SystemTask{}, &model.SystemTaskLock{}))
 	oldDB, oldLogDB := model.DB, model.LOG_DB
 	oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
 	oldRedis, oldMemory, oldBatch, oldConsume, oldExport := common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled, common.DataExportEnabled
@@ -563,6 +563,7 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 		count          float64
 		discountScaled int
 	}{
+		{"personal success", "SUCCESS", 2, 2, 0}, {"personal zero", "SUCCESS", 0, 0, 0}, {"personal failure", "FAILURE", 9, 0, 0},
 		{"partial", "SUCCESS", 2, 2, 0}, {"zero", "SUCCESS", 0, 0, 0}, {"larger", "SUCCESS", 6, 6, 0},
 		{"invalid usage", "SUCCESS", -1, 4, 0}, {"expression failure", "SUCCESS", 7, 4, 0}, {"negative result", "SUCCESS", 8, 4, 0}, {"missing usage", "SUCCESS", nil, 4, 0}, {"failed", "FAILURE", 9, 0, 0},
 		{"discount", "SUCCESS", 2, 2, 800000}, {"markup", "SUCCESS", 6, 6, 1500000}, {"discount failed", "FAILURE", 9, 0, 800000},
@@ -586,6 +587,11 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			require.NoError(t, db.Create(&user).Error)
 			ch := model.Channel{Name: "test provider", Type: constant.ChannelTypeTaskPlugin}
 			require.NoError(t, db.Create(&ch).Error)
+			agentID := 0
+			if strings.HasPrefix(tc.name, "personal") {
+				require.NoError(t, db.Model(&ch).Updates(map[string]any{"status": common.ChannelStatusEnabled, "models": "document-model", "group": "default"}).Error)
+				agentID = seedPersonalRelayAccount(t, &responsesWSBillingTest{user: &user, channel: &ch}, "0.9", int64(initial), "document-model")
+			}
 			var discountSnapshot *model.OrganizationDiscountSnapshot
 			if tc.discountScaled > 0 {
 				discountSnapshot = seedRelayOrganizationDiscount(t, db, user.Id, ch.Id, tc.discountScaled)
@@ -619,7 +625,11 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			assert.EqualValues(t, want, info.PriceData.Quota)
 			var stored model.Task
 			require.NoError(t, db.Where("task_id = ?", info.PublicTaskID).First(&stored).Error)
-			assert.EqualValues(t, want, stored.Quota)
+			charged := want
+			if agentID > 0 {
+				charged = want * 9 / 10
+			}
+			assert.EqualValues(t, charged, stored.Quota)
 			if discountSnapshot != nil {
 				require.NotNil(t, stored.PrivateData.BillingContext.Discount)
 				assert.Equal(t, &model.TaskBillingDiscount{SnapshotID: discountSnapshot.Id, ChannelId: ch.Id, Ratio: float64(tc.discountScaled) / 1000000}, stored.PrivateData.BillingContext.Discount)
@@ -632,12 +642,12 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			}
 			var updated model.User
 			require.NoError(t, db.First(&updated, user.Id).Error)
-			assert.EqualValues(t, initial-want, updated.Quota)
-			assert.EqualValues(t, want, updated.UsedQuota)
+			assert.EqualValues(t, initial-charged, updated.Quota)
+			assert.EqualValues(t, charged, updated.UsedQuota)
 			var logs []model.Log
 			require.NoError(t, db.Where("user_id = ?", user.Id).Find(&logs).Error)
 			require.Len(t, logs, 1)
-			assert.EqualValues(t, want, logs[0].Quota)
+			assert.EqualValues(t, charged, logs[0].Quota)
 			var other map[string]any
 			require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
 			if discountSnapshot != nil {
@@ -648,11 +658,19 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			if tc.status == "SUCCESS" {
 				assert.Equal(t, tc.count, other["usage_facts"].(map[string]any)["units"])
 			}
+			if agentID > 0 {
+				_, err := model.ProcessResellerEvents(100)
+				require.NoError(t, err)
+				var account model.ResellerAccount
+				require.NoError(t, db.First(&account, "user_id = ?", agentID).Error)
+				assert.EqualValues(t, 10000-want*8/10, account.Balance)
+				assert.Zero(t, account.Reserved)
+			}
 			assert.False(t, c.Writer.Written(), "presentation must follow persistence and settlement")
 			require.NoError(t, info.Billing.Settle(want))
 			info.Billing.Refund(c)
 			require.NoError(t, db.First(&updated, user.Id).Error)
-			assert.EqualValues(t, initial-want, updated.Quota, "terminal settlement is idempotent")
+			assert.EqualValues(t, initial-charged, updated.Quota, "terminal settlement is idempotent")
 		})
 	}
 }

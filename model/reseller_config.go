@@ -55,7 +55,7 @@ type ResellerConfigView struct {
 func ResellerManageTarget(tx *gorm.DB, operatorID, targetID int, admin bool) error {
 	var operator User
 	if err := tx.First(&operator, operatorID).Error; err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrDatabase, err)
 	}
 	if operator.Status != common.UserStatusEnabled {
 		return ErrResellerForbidden
@@ -72,7 +72,10 @@ func ResellerManageTarget(tx *gorm.DB, operatorID, targetID int, admin bool) err
 			return ErrResellerForbidden
 		}
 		var target User
-		return tx.First(&target, targetID).Error
+		if err := tx.First(&target, targetID).Error; err != nil {
+			return fmt.Errorf("%w: %w", ErrDatabase, err)
+		}
+		return nil
 	}
 	parent, err := GetResellerIdentity(tx, operatorID)
 	if err != nil {
@@ -83,7 +86,7 @@ func ResellerManageTarget(tx *gorm.DB, operatorID, targetID int, admin bool) err
 	}
 	var account ResellerAccount
 	if err := tx.First(&account, "user_id = ?", operatorID).Error; err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrDatabase, err)
 	}
 	if !account.Enabled {
 		return ErrResellerForbidden
@@ -98,18 +101,18 @@ func ReadResellerConfig(tx *gorm.DB, userID int) (*ResellerConfigView, error) {
 	var head ResellerConfigHead
 	err := tx.First(&head, "user_id = ?", userID).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrDatabase, err)
 	}
 	var rows []ResellerModelConfig
 	if err := tx.Where("user_id = ?", userID).Order("id").Find(&rows).Error; err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrDatabase, err)
 	}
 	view := &ResellerConfigView{Revision: head.Revision, Items: make([]ResellerConfigItem, 0, len(rows))}
 	for _, row := range rows {
 		if row.ModelKey != fmt.Sprintf("%x", sha256.Sum256([]byte(row.Model))) || row.Ratio < 1 || row.Ratio > 2*ResellerRatioScale {
-			return nil, ErrResellerInvalid
+			return nil, ErrResellerDataCorrupt
 		}
-		view.Items = append(view.Items, ResellerConfigItem{Model: row.Model, ChannelID: row.ChannelID, Authorized: row.Authorized, Ratio: fmt.Sprintf("%d.%06d", row.Ratio/ResellerRatioScale, row.Ratio%ResellerRatioScale)})
+		view.Items = append(view.Items, ResellerConfigItem{Model: row.Model, ChannelID: row.ChannelID, Authorized: row.Authorized, Ratio: formatPersonalRatio(row.Ratio)})
 	}
 	return view, nil
 }
@@ -132,7 +135,11 @@ func SaveResellerConfig(operatorID, userID int, admin bool, input ResellerConfig
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return ErrResellerConflict
+			var head ResellerConfigHead
+			if err := lockForUpdate(tx).First(&head, "user_id = ?", userID).Error; err != nil {
+				return err
+			}
+			return &ResellerRevisionConflictError{Revision: head.Revision}
 		}
 		var previous []ResellerModelConfig
 		if err := tx.Where("user_id = ?", userID).Find(&previous).Error; err != nil {
@@ -154,7 +161,11 @@ func SaveResellerConfig(operatorID, userID int, admin bool, input ResellerConfig
 		}
 		rows := make([]ResellerModelConfig, 0, len(input.Items))
 		seen := map[string]bool{}
+		normalized := make([]ResellerConfigItem, 0, len(input.Items))
 		for _, item := range input.Items {
+			if item.Ratio == "" {
+				item.Ratio = "1"
+			}
 			ratio, err := ParseResellerRatio(item.Ratio)
 			if err != nil || item.Model == "" || len(item.Model) > 512 || item.ChannelID <= 0 {
 				return ErrResellerInvalid
@@ -176,6 +187,8 @@ func SaveResellerConfig(operatorID, userID int, admin bool, input ResellerConfig
 			} else if !existed && !strings.Contains(","+channel.Models+",", ","+item.Model+",") {
 				return ErrResellerInvalid
 			}
+			item.Ratio = formatPersonalRatio(ratio)
+			normalized = append(normalized, item)
 			rows = append(rows, ResellerModelConfig{UserID: userID, ModelKey: fmt.Sprintf("%x", sha256.Sum256([]byte(item.Model))), Model: item.Model, ChannelID: item.ChannelID, Authorized: item.Authorized, Ratio: ratio, Revision: input.ExpectedRevision + 1})
 		}
 		if err := tx.Where("user_id = ?", userID).Delete(&ResellerModelConfig{}).Error; err != nil {
@@ -186,7 +199,7 @@ func SaveResellerConfig(operatorID, userID int, admin bool, input ResellerConfig
 				return err
 			}
 		}
-		snapshot, err := common.Marshal(input.Items)
+		snapshot, err := common.Marshal(normalized)
 		if err != nil {
 			return err
 		}

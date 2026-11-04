@@ -19,7 +19,7 @@ type organizationInvoiceTaskIntent struct {
 // outbox, including the legacy no-session fallback. It records no additional
 // consume row and performs no pricing. Confirmation travels in that same
 // durable intent so a crash or a failed refund cannot erase its meaning.
-func SettleOrganizationInvoiceTaskSubmission(c *gin.Context, info *relaycommon.RelayInfo, task *model.Task, quota int, confirmed bool) error {
+func SettleOrganizationInvoiceTaskSubmission(c *gin.Context, info *relaycommon.RelayInfo, task *model.Task, quota int, confirmed bool, omitColumns ...string) error {
 	params := BuildTaskConsumptionLog(c, info)
 	params.Other.MergePublic(taskBillingOther(task).Snapshot())
 	appendTaskLogInfo(task, params.Other)
@@ -36,6 +36,9 @@ func SettleOrganizationInvoiceTaskSubmission(c *gin.Context, info *relaycommon.R
 	}
 	requestContext := context.WithValue(c.Request.Context(), organizationInvoiceTaskIntentKey{}, organizationInvoiceTaskIntent{id: task.ID, quota: int64(quota), confirmed: confirmed})
 	c.Request = c.Request.WithContext(requestContext)
+	if info.PersonalPricing != nil {
+		return SettlePersonalTaskSubmission(c, info, task, quota, confirmed, params, omitColumns...)
+	}
 	return SettleBillingAndRecordConsumeLog(c, info, quota, params, true)
 }
 
@@ -47,7 +50,12 @@ func attachOrganizationInvoiceTaskIntent(ctx context.Context, journal *model.Tas
 		journal.InvoiceTaskEntity = model.TaskSettlementEntityTask
 		journal.InvoiceTaskId = intent.id
 		if intent.confirmed {
-			journal.InvoiceExpenseQuota = &intent.quota
+			if journal.PersonalFact != "" {
+				quota := int64(journal.FinalQuota)
+				journal.InvoiceExpenseQuota = &quota
+			} else {
+				journal.InvoiceExpenseQuota = &intent.quota
+			}
 		}
 	}
 }

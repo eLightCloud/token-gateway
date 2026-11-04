@@ -25,7 +25,10 @@ type TaskInvoiceExpense struct {
 // to task status or delivery mode, this is called only after pricing succeeds.
 func ConfirmTaskInvoiceExpense(entity string, id int64, quota int, source string) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
-		return confirmTaskInvoiceExpenseTx(tx, entity, id, quota, source, 0, true)
+		if err := confirmTaskInvoiceExpenseTx(tx, entity, id, quota, source, 0, true); err != nil {
+			return err
+		}
+		return confirmPersonalTaskExpenseTx(tx, entity, id, quota, source)
 	})
 }
 

@@ -109,7 +109,7 @@ func sweepTimedOutTasks(ctx context.Context) {
 			continue
 		}
 		timedOutCount++
-		if !isLegacy && task.Quota != 0 {
+		if !isLegacy && (task.Quota != 0 || TaskHasPersonalPricing(task)) {
 			RefundTaskQuota(ctx, task, reason)
 		}
 	}

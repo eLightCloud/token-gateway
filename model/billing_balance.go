@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/types"
 	"gorm.io/gorm"
 )
 
@@ -14,6 +15,7 @@ var (
 )
 
 type BillingBalancePreConsumeParams struct {
+	PersonalFact   *types.PersonalBillingFact
 	RequestId      string
 	UserId         int
 	ModelName      string
@@ -33,6 +35,12 @@ func PreConsumeBillingBalances(params BillingBalancePreConsumeParams) (*Subscrip
 	}
 	var subscription *SubscriptionPreConsumeResult
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if replay, err := PersonalBillingReplayTx(tx, params.PersonalFact); err != nil || replay {
+			return err
+		}
+		if err := validatePersonalFundingTx(tx, params.UserId, params.BillingSource, params.PersonalFact); err != nil {
+			return err
+		}
 		if params.Amount > 0 {
 			switch params.BillingSource {
 			case "subscription":
@@ -56,7 +64,13 @@ func PreConsumeBillingBalances(params BillingBalancePreConsumeParams) (*Subscrip
 			}
 		}
 
-		return preConsumeTokenBalanceTx(tx, params.TokenId, params.Amount, params.ApplyToken, params.TokenUnlimited)
+		if err := preConsumeTokenBalanceTx(tx, params.TokenId, params.Amount, params.ApplyToken, params.TokenUnlimited); err != nil {
+			return err
+		}
+		if err := recordPersonalFundingTx(tx, params, subscription); err != nil {
+			return err
+		}
+		return applyPersonalBillingFactTx(tx, params.PersonalFact)
 	})
 	if err != nil {
 		return nil, err
@@ -66,6 +80,7 @@ func PreConsumeBillingBalances(params BillingBalancePreConsumeParams) (*Subscrip
 }
 
 type BillingBalanceReserveParams struct {
+	PersonalFact          *types.PersonalBillingFact
 	RequireAvailableQuota bool
 	UserId                int
 	Amount                int64
@@ -89,6 +104,12 @@ func ReserveBillingBalances(params BillingBalanceReserveParams, transaction ...*
 		return errors.New("invalid billing reserve params")
 	}
 	err := database.Transaction(func(tx *gorm.DB) error {
+		if replay, err := PersonalBillingReplayTx(tx, params.PersonalFact); err != nil || replay {
+			return err
+		}
+		if err := validatePersonalFundingTx(tx, params.UserId, params.BillingSource, params.PersonalFact); err != nil {
+			return err
+		}
 		switch params.BillingSource {
 		case "subscription":
 			if err := postConsumeUserSubscriptionDeltaTx(tx, params.SubscriptionId, params.Amount); err != nil {
@@ -109,7 +130,10 @@ func ReserveBillingBalances(params BillingBalanceReserveParams, transaction ...*
 		default:
 			return fmt.Errorf("unsupported billing source %q", params.BillingSource)
 		}
-		return preConsumeTokenBalanceTx(tx, params.TokenId, params.Amount, params.ApplyToken, params.TokenUnlimited)
+		if err := preConsumeTokenBalanceTx(tx, params.TokenId, params.Amount, params.ApplyToken, params.TokenUnlimited); err != nil {
+			return err
+		}
+		return applyPersonalBillingFactTx(tx, params.PersonalFact)
 	})
 	if err != nil {
 		return err
@@ -131,7 +155,7 @@ func preConsumeTokenBalanceTx(tx *gorm.DB, tokenId int, amount int64, apply bool
 	if !unlimited {
 		query = query.Where("remain_quota >= ?", amount)
 	}
-	result := query.Updates(map[string]interface{}{
+	result := query.Updates(map[string]any{
 		"remain_quota":  gorm.Expr("remain_quota - ?", amount),
 		"used_quota":    gorm.Expr("used_quota + ?", amount),
 		"accessed_time": common.GetTimestamp(),

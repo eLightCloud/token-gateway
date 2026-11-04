@@ -25,6 +25,7 @@ var ErrTaskSettlementJournalConflict = errors.New("task settlement journal confl
 // optional task quota and Applied in one main-database transaction. Recovery
 // calls this same operation and never repeats pricing logic or partial steps.
 type TaskSettlementJournal struct {
+	PersonalFact                    string `gorm:"type:text" json:"personal_fact,omitempty"`
 	InvoiceTaskEntity               string `json:"invoice_task_entity,omitempty" gorm:"type:varchar(32)"`
 	InvoiceTaskId                   int64  `json:"invoice_task_id,omitempty"`
 	InvoiceExpenseQuota             *int64 `json:"invoice_expense_quota,omitempty"`
@@ -95,7 +96,7 @@ func ensureTaskSettlementJournalTx(tx *gorm.DB, journal *TaskSettlementJournal) 
 	if err := tx.Where("request_id = ?", journal.RequestId).First(&stored).Error; err != nil {
 		return nil, err
 	}
-	if stored.InvoiceTaskEntity != journal.InvoiceTaskEntity || stored.InvoiceTaskId != journal.InvoiceTaskId || !sameOrganizationInvoiceExpense(stored.InvoiceExpenseQuota, journal.InvoiceExpenseQuota) ||
+	if stored.PersonalFact != journal.PersonalFact || stored.InvoiceTaskEntity != journal.InvoiceTaskEntity || stored.InvoiceTaskId != journal.InvoiceTaskId || !sameOrganizationInvoiceExpense(stored.InvoiceExpenseQuota, journal.InvoiceExpenseQuota) ||
 		stored.Operation != journal.Operation ||
 		stored.EntityType != journal.EntityType ||
 		stored.EntityId != journal.EntityId ||
@@ -120,6 +121,11 @@ func ensureTaskSettlementJournalTx(tx *gorm.DB, journal *TaskSettlementJournal) 
 		return nil, err
 	}
 	if !stored.Applied {
+		if err := restorePersonalJournalReceiptTx(tx, &stored); err != nil {
+			return nil, err
+		}
+	}
+	if !stored.Applied {
 		alreadyApplied, err := taskInvoiceExpenseReceiptTx(tx, &stored)
 		if err != nil {
 			return nil, err
@@ -140,21 +146,27 @@ func ensureTaskSettlementJournalTx(tx *gorm.DB, journal *TaskSettlementJournal) 
 // EnsureTaskSettlementJournalWithTask persists the task row and its initial
 // billing fact in one transaction. The task starts with quota 0; applying the
 // journal atomically moves both balances and task.quota to their final values.
-func EnsureTaskSettlementJournalWithTask(journal *TaskSettlementJournal, task *Task) (*TaskSettlementJournal, error) {
+func EnsureTaskSettlementJournalWithTask(journal *TaskSettlementJournal, task *Task, omitColumns ...string) (*TaskSettlementJournal, error) {
 	if task == nil {
 		return nil, errors.New("task is nil")
 	}
 	var stored *TaskSettlementJournal
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(task).Error; err != nil {
+		if err := tx.Omit(omitColumns...).Create(task).Error; err != nil {
 			return err
 		}
 		journal.EntityType = TaskSettlementEntityTask
 		journal.EntityId = task.ID
+		if err := bindPersonalTaskJournalTx(tx, journal); err != nil {
+			return err
+		}
 		var err error
 		stored, err = ensureTaskSettlementJournalTx(tx, journal)
 		return err
 	})
+	if err != nil && journal.PersonalFact != "" {
+		task.ID = 0
+	}
 	return stored, err
 }
 
@@ -171,6 +183,9 @@ func EnsureTaskSettlementJournalWithMidjourney(journal *TaskSettlementJournal, t
 		}
 		journal.EntityType = TaskSettlementEntityMidjourney
 		journal.EntityId = int64(task.Id)
+		if err := bindPersonalTaskJournalTx(tx, journal); err != nil {
+			return err
+		}
 		var err error
 		stored, err = ensureTaskSettlementJournalTx(tx, journal)
 		return err
@@ -198,9 +213,22 @@ func ApplyTaskSettlementJournal(requestId string, transaction ...*gorm.DB) (*Tas
 			return nil
 		}
 
+		if err := restorePersonalJournalReceiptTx(tx, &stored); err != nil {
+			return err
+		}
+		if stored.Applied {
+			return nil
+		}
 		alreadyAtTarget, err := taskSettlementEntityAtTarget(tx, &stored)
 		if err != nil {
 			return err
+		}
+		// Personal receipts, rather than the staged task quota, prove money application.
+		if stored.PersonalFact != "" {
+			if err := validatePersonalJournalBalanceTx(tx, &stored); err != nil {
+				return err
+			}
+			alreadyAtTarget = false
 		}
 		if !alreadyAtTarget {
 			if stored.Operation == TaskSettlementOperationReserve {
@@ -224,6 +252,9 @@ func ApplyTaskSettlementJournal(requestId string, transaction ...*gorm.DB) (*Tas
 			appliedNow = true
 		}
 
+		if err := applyPersonalJournalTx(tx, &stored); err != nil {
+			return err
+		}
 		result := tx.Model(&TaskSettlementJournal{}).
 			Where("id = ? AND applied = ?", stored.Id, false).
 			Updates(map[string]interface{}{
@@ -321,6 +352,9 @@ func applyTaskSettlementFundingTx(tx *gorm.DB, journal *TaskSettlementJournal) e
 		}
 		return postConsumeUserSubscriptionDeltaTx(tx, journal.SubscriptionId, int64(journal.Delta))
 	}
+	if journal.PersonalFact != "" {
+		return adjustPersonalWalletTx(tx, journal)
+	}
 	return adjustUserWalletInTx(tx, journal.UserId, -int64(journal.Delta))
 }
 
@@ -342,6 +376,9 @@ func applyTaskSettlementTokenTx(tx *gorm.DB, journal *TaskSettlementJournal) err
 }
 
 func updateTaskSettlementEntityTx(tx *gorm.DB, journal *TaskSettlementJournal) error {
+	if journal.PersonalFact != "" && journal.EntityExpectedQuota == journal.EntityFinalQuota {
+		return nil
+	}
 	if journal.EntityType == "" {
 		return nil
 	}

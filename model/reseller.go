@@ -79,6 +79,8 @@ type ResellerConfigRevision struct {
 }
 
 type ResellerRequest struct {
+	EntityType          string `gorm:"size:32;index:reseller_request_entity,priority:1"`
+	EntityID            int64  `gorm:"index:reseller_request_entity,priority:2"`
 	ID                  string `gorm:"size:64;primaryKey"`
 	TaskID              string `gorm:"size:64;index"`
 	AgentUserID         int    `gorm:"index"`
@@ -110,16 +112,18 @@ type ResellerEvent struct {
 	Snapshot            string `gorm:"type:text"`
 	BaseQuota           int64  `gorm:"type:bigint"`
 	CustomerTarget      int64  `gorm:"type:bigint"`
+	CustomerDelta       int64  `gorm:"type:bigint"`
 	AgentTarget         int64  `gorm:"type:bigint"`
 	ReserveDelta        int64  `gorm:"type:bigint"`
 	SpendDelta          int64  `gorm:"type:bigint"`
 	OriginalOperationID string `gorm:"size:64"`
 	OccurredAt          int64
+	ProcessedRevision   int64
 	ProcessedAt         int64 `gorm:"index:reseller_event_pending,priority:1"`
 }
 
 func migrateReseller(db *gorm.DB) error {
-	return db.AutoMigrate(&UserSecurityState{}, &SecurityRecoveryRecord{}, &ResellerIdentity{}, &ResellerAccount{}, &ResellerQuotaAdjustment{}, &ResellerConfigHead{}, &ResellerModelConfig{}, &ResellerConfigRevision{}, &ResellerRequest{}, &ResellerEvent{})
+	return db.AutoMigrate(&UserSecurityState{}, &SecurityRecoveryRecord{}, &ResellerIdentity{}, &ResellerAccount{}, &ResellerQuotaAdjustment{}, &ResellerConfigHead{}, &ResellerModelConfig{}, &ResellerConfigRevision{}, &ResellerFundingSnapshot{}, &ResellerBillingReceipt{}, &ResellerProjection{}, &ResellerRequest{}, &ResellerEvent{})
 }
 
 func GetResellerIdentity(tx *gorm.DB, userID int) (*ResellerIdentity, error) {
@@ -128,7 +132,10 @@ func GetResellerIdentity(tx *gorm.DB, userID int) (*ResellerIdentity, error) {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
-	return &identity, err
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrDatabase, err)
+	}
+	return &identity, nil
 }
 
 // RequireOrdinaryUser is a domain guard, including for root/admin callers.
@@ -218,6 +225,14 @@ type ResellerQuotaInput struct {
 }
 
 func AdjustResellerQuota(operatorID, userID int, input ResellerQuotaInput) (*ResellerQuotaAdjustment, error) {
+	return adjustResellerQuota(operatorID, userID, "", input)
+}
+
+func AdjustResellerQuotaForKind(operatorID, userID int, kind string, input ResellerQuotaInput) (*ResellerQuotaAdjustment, error) {
+	return adjustResellerQuota(operatorID, userID, kind, input)
+}
+
+func adjustResellerQuota(operatorID, userID int, kind string, input ResellerQuotaInput) (*ResellerQuotaAdjustment, error) {
 	if len(input.OperationID) == 0 || len(input.OperationID) > 64 || strings.TrimSpace(input.Reason) == "" || len(input.Reason) > 1000 || input.Quota <= 0 || input.Quota > common.MaxWalletQuota || (input.Mode != "add" && input.Mode != "subtract") {
 		return nil, ErrResellerInvalid
 	}
@@ -241,7 +256,7 @@ func AdjustResellerQuota(operatorID, userID int, input ResellerQuotaInput) (*Res
 		if err != nil {
 			return err
 		}
-		if target == nil {
+		if target == nil || kind != "" && target.Kind != kind {
 			return gorm.ErrRecordNotFound
 		}
 		parent, err := GetResellerIdentity(tx, operatorID)
@@ -281,7 +296,7 @@ func AdjustResellerQuota(operatorID, userID int, input ResellerQuotaInput) (*Res
 		err = lockForUpdate(tx).Where("operation_key = ?", operationKey).First(&receipt).Error
 		if err == nil {
 			if receipt.OperationID != input.OperationID || receipt.UserID != userID || receipt.OperatorID != operatorID || receipt.Mode != input.Mode || receipt.Quota != input.Quota || receipt.Reason != input.Reason {
-				return ErrResellerConflict
+				return ErrResellerOperationConflict
 			}
 			return nil
 		}
@@ -293,7 +308,7 @@ func AdjustResellerQuota(operatorID, userID int, input ResellerQuotaInput) (*Res
 			delta = -delta
 		}
 		if before > common.MaxWalletQuota || (target.Kind != "agent" && before < common.MinWalletQuota) || reserved < 0 || (delta > 0 && before > common.MaxWalletQuota-delta) || (delta < 0 && (before < input.Quota || before-input.Quota < reserved)) {
-			return ErrResellerConflict
+			return ErrResellerBalanceConflict
 		}
 		after := before + delta
 		if target.Kind == "agent" {
@@ -302,7 +317,7 @@ func AdjustResellerQuota(operatorID, userID int, input ResellerQuotaInput) (*Res
 				return result.Error
 			}
 			if result.RowsAffected != 1 {
-				return ErrResellerConflict
+				return ErrResellerBalanceConflict
 			}
 		} else {
 			result := tx.Model(&User{}).Where("id = ? AND quota = ?", userID, before).Update("quota", after)
@@ -310,7 +325,7 @@ func AdjustResellerQuota(operatorID, userID int, input ResellerQuotaInput) (*Res
 				return result.Error
 			}
 			if result.RowsAffected != 1 {
-				return ErrResellerConflict
+				return ErrResellerBalanceConflict
 			}
 		}
 		receipt = ResellerQuotaAdjustment{OperationKey: operationKey, OperationID: input.OperationID, AccountKind: target.Kind, UserID: userID, OperatorID: operatorID, Mode: input.Mode, Quota: input.Quota, Reason: input.Reason, Before: before, After: after, OccurredAt: common.GetTimestamp()}
@@ -337,7 +352,11 @@ func resellerWriteError(err error) error {
 	var postgresError *pgconn.PgError
 	var sqliteError interface{ Code() int }
 	if errors.Is(err, gorm.ErrDuplicatedKey) || (errors.As(err, &mysqlError) && mysqlError.Number == 1062) || (errors.As(err, &postgresError) && postgresError.Code == "23505") || (errors.As(err, &sqliteError) && (sqliteError.Code() == 2067 || sqliteError.Code() == 1555)) {
-		return ErrResellerConflict
+		return ErrResellerDuplicateResource
 	}
-	return err
+	if errors.Is(err, ErrResellerConflict) || errors.Is(err, ErrResellerInvalid) || errors.Is(err, ErrResellerForbidden) || errors.Is(err, ErrEmailAlreadyTaken) || errors.Is(err, ErrResellerDataCorrupt) || errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	// All remaining failures here come from a database write or its transaction.
+	return fmt.Errorf("%w: %w", ErrDatabase, err)
 }

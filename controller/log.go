@@ -51,11 +51,16 @@ func GetUserLogs(c *gin.Context) {
 	upstreamRequestId := c.Query("upstream_request_id")
 	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId)
 	if err != nil {
-		common.ApiError(c, err)
+		resellerResponse(c, nil, err)
 		return
 	}
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(logs)
+	visible, err := resellerVisibleLogs(userId, logs)
+	if err != nil {
+		resellerResponse(c, nil, err)
+		return
+	}
+	pageInfo.SetItems(visible)
 	common.ApiSuccess(c, pageInfo)
 	return
 }
@@ -93,10 +98,15 @@ func GetLogByKey(c *gin.Context) {
 		})
 		return
 	}
+	visible, err := resellerVisibleLogs(c.GetInt("id"), logs)
+	if err != nil {
+		resellerResponse(c, nil, err)
+		return
+	}
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "",
-		"data":    logs,
+		"data":    visible,
 	})
 }
 
@@ -135,10 +145,15 @@ func GetLogsSelfStat(c *gin.Context) {
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
+	channel, err := resellerVisibleStatChannel(c.GetInt("id"), channel)
+	if err != nil {
+		resellerResponse(c, nil, err)
+		return
+	}
 	group := c.Query("group")
 	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
 	if err != nil {
-		common.ApiError(c, err)
+		resellerResponse(c, nil, err)
 		return
 	}
 	//tokenNum := model.SumUsedToken(logType, startTimestamp, endTimestamp, modelName, username, tokenName)

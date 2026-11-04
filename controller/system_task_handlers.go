@@ -163,7 +163,7 @@ type billingRecoveryHandler struct{}
 func (billingRecoveryHandler) Type() string { return model.SystemTaskTypeBillingRecovery }
 
 func (billingRecoveryHandler) Enabled() bool {
-	return model.HasPendingTaskSettlementJournals() || model.HasRefundPendingFailures()
+	return model.HasPendingTaskSettlementJournals() || model.HasRefundPendingFailures() || model.HasPendingPersonalTerminalTasks()
 }
 
 func (billingRecoveryHandler) Interval() time.Duration { return 15 * time.Second }
@@ -171,7 +171,7 @@ func (billingRecoveryHandler) Interval() time.Duration { return 15 * time.Second
 func (billingRecoveryHandler) NewPayload() any { return nil }
 
 func (billingRecoveryHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
-	settled := service.SweepPendingTaskSettlements(ctx)
+	settled := service.SweepPendingTaskSettlements(ctx) + service.SweepPersonalTerminalTasks(ctx)
 	refunded := service.SweepPendingRefunds(ctx)
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, gin.H{
 		"recovered_settlements": settled,

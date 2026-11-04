@@ -54,6 +54,8 @@ def run_matrix(baseline, output, postgres_image, selected):
                 environment["S1_MATRIX_DSN"] = f"root:s1-synthetic@tcp(127.0.0.1:{hostport})/s1_test?charset=utf8mb4&parseTime=True&loc=Local" if kind == "mysql" else f"host=127.0.0.1 port={hostport} user=s1 password=s1-synthetic dbname=s1_test sslmode=disable"
             for upgrade in (False, True):
                 environment["S1_UPGRADE"] = "1" if upgrade else "0"
+                if kind == "sqlite":
+                    environment["S1_MATRIX_SQLITE"] = str(output / f"sqlite-{'upgrade' if upgrade else 'fresh'}.db")
                 if upgrade:
                     if kind == "sqlite":
                         environment["S1_BASELINE_SQLITE"] = str(snapshots[kind])
@@ -75,6 +77,16 @@ def run_matrix(baseline, output, postgres_image, selected):
                 print(json.dumps(result), flush=True)
                 if run.returncode or passed != 1:
                     raise RuntimeError("S1 matrix failed: " + str(log))
+                funding_log = output / f"{kind}-{'upgrade' if upgrade else 'fresh'}-funding.jsonl"
+                with funding_log.open("w") as stream:
+                    funding_run = subprocess.run(["go", "test", "-p", "2", "-count=1", "-json", "./service", "-run", "^TestPersonalFundingCorrectness$"], cwd=ROOT, env=environment, stdout=stream, stderr=subprocess.STDOUT, timeout=900)
+                funding_events = [json.loads(line) for line in funding_log.read_text().splitlines() if line.startswith("{")]
+                funding_passed = sum(e.get("Test") == "TestPersonalFundingCorrectness" and e.get("Action") == "pass" for e in funding_events)
+                result.update(funding_exit_code=funding_run.returncode, funding_passed=funding_passed, funding_log=str(funding_log), funding_versions=[e["Output"].strip() for e in funding_events if "personal funding database=" in e.get("Output", "")])
+                (output / "summary.json").write_text(json.dumps(results, indent=2)+"\n")
+                print(json.dumps(result), flush=True)
+                if funding_run.returncode or funding_passed != 1:
+                    raise RuntimeError("funding regression matrix failed: " + str(funding_log))
         finally:
             if owned:
                 command(["docker", "rm", "-f", name])

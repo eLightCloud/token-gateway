@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/pquerna/otp/totp"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/glebarez/sqlite"
 	"github.com/go-redis/redis/v8"
@@ -34,6 +36,9 @@ func TestResellerS1(t *testing.T) {
 	switch kind {
 	case "sqlite":
 		path := filepath.Join(t.TempDir(), "s1.sqlite")
+		if matrixPath := os.Getenv("S1_MATRIX_SQLITE"); matrixPath != "" {
+			path = matrixPath
+		}
 		if source := os.Getenv("S1_BASELINE_SQLITE"); source != "" {
 			payload, err := os.ReadFile(source)
 			require.NoError(t, err)
@@ -140,6 +145,32 @@ func TestResellerS1(t *testing.T) {
 	assert.Zero(t, customer.Quota)
 	assert.Empty(t, customer.Password)
 	assert.Equal(t, "agent_customer", customer.ResellerKind)
+	t.Run("dispatch barrier replay", func(t *testing.T) {
+		request := ResellerRequest{ID: "dispatch-replay", CustomerUserID: b.UserID, AgentUserID: a.UserID, State: "reserved"}
+		require.NoError(t, db.Create(&request).Error)
+		require.NoError(t, MarkPersonalRequestDispatched(request.ID, b.UserID))
+		require.NoError(t, MarkPersonalRequestDispatched(request.ID, b.UserID))
+		require.ErrorIs(t, MarkPersonalRequestDispatched(request.ID, ordinary.Id), ErrResellerConflict)
+		require.NoError(t, db.Model(&request).Update("state", "pending").Error)
+		require.ErrorIs(t, MarkPersonalRequestDispatched(request.ID, b.UserID), ErrResellerConflict)
+		require.NoError(t, db.First(&request, "id = ?", request.ID).Error)
+		assert.Equal(t, "pending", request.State)
+		require.NoError(t, db.Delete(&request).Error)
+	})
+	t.Run("customer log prices remain accurate without routing metadata", func(t *testing.T) {
+		logs := []*Log{{ChannelId: 11, Other: `{"model_price":0.2,"personal_ratio":0.9,"billing_mode":"tiered_expr","billing_unit":"request","fixed_price":0.2,"admin_info":{"channel_id":11},"channel_name":"private-channel","upstream_key":"private-key"}`}}
+		require.NoError(t, redactPersonalCustomerLogs(b.UserID, logs))
+		var visible map[string]any
+		require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &visible))
+		assert.Equal(t, 0.2, visible["model_price"])
+		assert.Equal(t, "tiered_expr", visible["billing_mode"])
+		assert.Equal(t, "request", visible["billing_unit"])
+		assert.Equal(t, 0.2, visible["fixed_price"])
+		assert.Equal(t, 0.9, visible["personal_ratio"])
+		assert.Zero(t, logs[0].ChannelId)
+		assert.NotContains(t, logs[0].Other, "private")
+		assert.NotContains(t, visible, "admin_info")
+	})
 	a2, err := CreateResellerUser(root.Id, "agent", ResellerCreateInput{Username: "s1-agent2", Email: "agent2@example.invalid"})
 	require.NoError(t, err)
 	require.NoError(t, db.Model(&ResellerIdentity{}).Where("user_id = ?", a2.UserID).Update("activation", "active").Error)
@@ -432,6 +463,8 @@ func TestResellerS1(t *testing.T) {
 	duplicate.ID = 0
 	require.Error(t, db.Create(&duplicate).Error)
 	t.Run("S2_security", func(t *testing.T) { testResellerSecurityCompletion(t, root.Id) })
+	t.Run("S3_S5_billing", func(t *testing.T) { testResellerBillingLifecycle(t, root.Id) })
+	t.Run("display_pricing_batch", func(t *testing.T) { testResellerDisplayBatch(t, root.Id) })
 }
 
 // Redis hook controls the real cache/database interleaving without sleeps.
@@ -457,6 +490,15 @@ func (*resellerQuotaHydrationHook) BeforeProcessPipeline(ctx context.Context, _ 
 }
 func (*resellerQuotaHydrationHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
 	return nil
+}
+
+func TestResellerCustomerAPIKeyPaths(t *testing.T) {
+	for _, path := range []string{"/api/token", "/api/token/", "/api/token/123", "/api/token/search"} {
+		assert.True(t, ResellerCustomerDashboardPath(path), path)
+	}
+	for _, path := range []string{"/api/token-admin", "/api/tokens", "/api/user/token"} {
+		assert.False(t, ResellerCustomerDashboardPath(path), path)
+	}
 }
 
 func TestResellerSubscriptionNilTransactionReturnsError(t *testing.T) {
@@ -549,9 +591,12 @@ func testResellerSecurityCompletion(t *testing.T, rootID int) {
 	require.NoError(t, err)
 	require.NoError(t, DB.First(&user, a.UserID).Error)
 	assert.Equal(t, "s2-agent@example.com", user.Email)
-	require.Error(t, CompleteAdministrativeEmailChange(rootID, change))
-	require.NoError(t, CompleteAdministrativeEmailChange(a.UserID, change))
-	require.Error(t, CompleteAdministrativeEmailChange(a.UserID, change))
+	_, err = CompleteAdministrativeEmailChange(rootID, change)
+	require.Error(t, err)
+	_, err = CompleteAdministrativeEmailChange(a.UserID, change)
+	require.NoError(t, err)
+	_, err = CompleteAdministrativeEmailChange(a.UserID, change)
+	require.Error(t, err)
 	require.NoError(t, DB.First(&user, a.UserID).Error)
 	assert.Equal(t, "s2-changed@example.com", user.Email)
 
@@ -609,4 +654,309 @@ func testResellerSecurityCompletion(t *testing.T, rootID int) {
 	require.NoError(t, err)
 	require.NoError(t, DB.Model(&AuthFlow{}).Where("user_id = ?", pending.UserID).Update("expires_at", time.Now().Add(-time.Minute)).Error)
 	require.ErrorIs(t, CompleteSecurityMail(pending.UserID, SecurityActivationPurpose, expired, "new-password", nil), ErrAuthFlowExpired)
+}
+
+func testResellerBillingLifecycle(t *testing.T, rootID int) {
+	for _, tc := range []struct {
+		input string
+		want  int64
+	}{{"0.000001", 1}, {"0.9", 900000}, {"1", 1000000}, {"2.000000", 2000000}} {
+		got, err := ParseResellerRatio(tc.input)
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, got)
+	}
+	for _, value := range []string{"0", "-1", "2.000001", "0.1234567", "NaN", "Inf", "1e0", " 1"} {
+		_, err := ParseResellerRatio(value)
+		require.ErrorIs(t, err, ErrResellerInvalid)
+	}
+	a, err := CreateResellerUser(rootID, "agent", ResellerCreateInput{Username: "s3-agent", Email: "s3-agent@example.invalid"})
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", a.UserID).Update("activation", "active").Error)
+	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s3-customer", Email: "s3-customer@example.invalid"})
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", b.UserID).Update("activation", "active").Error)
+	channel := Channel{Name: "s3-channel", Models: "s3-model", Status: common.ChannelStatusEnabled, Type: 1, Key: "synthetic"}
+	require.NoError(t, DB.Create(&channel).Error)
+	_, err = AdjustResellerQuota(rootID, a.UserID, ResellerQuotaInput{OperationID: "s3-fund-a", Mode: "add", Quota: 10000, Reason: "fixture"})
+	require.NoError(t, err)
+	_, err = AdjustResellerQuota(a.UserID, b.UserID, ResellerQuotaInput{OperationID: "s3-fund-b", Mode: "add", Quota: 1000, Reason: "fixture"})
+	require.NoError(t, err)
+	input := ResellerConfigInput{Items: []ResellerConfigItem{{Model: "s3-model", ChannelID: channel.Id, Authorized: true, Ratio: "0.8"}}}
+	_, err = SaveResellerConfig(rootID, a.UserID, true, input)
+	require.NoError(t, err)
+	_, err = SaveResellerConfig(rootID, a.UserID, true, input)
+	require.ErrorIs(t, err, ErrResellerConflict)
+	input.Items[0].Ratio = "0.9"
+	_, err = SaveResellerConfig(a.UserID, b.UserID, false, input)
+	require.NoError(t, err)
+	_, err = SaveResellerConfig(rootID, b.UserID, true, input)
+	require.ErrorIs(t, err, ErrResellerForbidden)
+	snapshot, err := LoadPersonalPricing(b.UserID, "s3-model")
+	require.NoError(t, err)
+	assert.EqualValues(t, 900000, snapshot.Channels[channel.Id].CustomerRatio)
+	input.ExpectedRevision = 1
+	input.Items[0].Authorized = false
+	input.Items[0].Ratio = "0.8"
+	_, err = SaveResellerConfig(rootID, a.UserID, true, input)
+	require.NoError(t, err)
+	revoked, err := LoadPersonalPricing(b.UserID, "s3-model")
+	require.NoError(t, err)
+	assert.Empty(t, revoked.Channels)
+	input.ExpectedRevision = 2
+	input.Items[0].Authorized = true
+	_, err = SaveResellerConfig(rootID, a.UserID, true, input)
+	require.NoError(t, err)
+	restored, err := LoadPersonalPricing(b.UserID, "s3-model")
+	require.NoError(t, err)
+	assert.Equal(t, snapshot.Channels, restored.Channels)
+	fact := hosttypes.PersonalBillingFact{RequestID: "s3-g1", OperationID: PersonalOperationID("s3-g1", "reserve"), Kind: "reserve", UserID: b.UserID, AgentUserID: a.UserID, Model: "s3-model", ChannelID: channel.Id, CustomerRatio: 900000, AgentRatio: 800000, BaseQuota: 100, CustomerTarget: 90, AgentTarget: 80}
+	params := BillingBalancePreConsumeParams{PersonalFact: &fact, RequestId: fact.RequestID, UserId: b.UserID, ModelName: fact.Model, Amount: 90, BillingSource: "wallet"}
+	_, err = PreConsumeBillingBalances(params)
+	require.NoError(t, err)
+	_, err = PreConsumeBillingBalances(params)
+	require.NoError(t, err)
+	var customer User
+	require.NoError(t, DB.First(&customer, b.UserID).Error)
+	assert.EqualValues(t, 910, customer.Quota)
+	for range 2 {
+		_, err := ProcessResellerEvents(100)
+		require.NoError(t, err)
+	}
+	var account ResellerAccount
+	require.NoError(t, DB.First(&account, "user_id = ?", a.UserID).Error)
+	assert.EqualValues(t, 10000, account.Balance)
+	assert.EqualValues(t, 80, account.Reserved)
+	final := fact
+	final.Kind = "settle"
+	final.OperationID = PersonalOperationID(fact.RequestID, "settle")
+	final.BaseQuota = 60
+	final.CustomerTarget = 54
+	final.AgentTarget = 48
+	encoded, err := common.Marshal(final)
+	require.NoError(t, err)
+	journal := TaskSettlementJournal{PersonalFact: string(encoded), RequestId: "s3-g1-settle", Operation: TaskSettlementOperationSettle, UserId: b.UserID, BillingSource: "wallet", ExpectedQuota: 90, FinalQuota: 54, Delta: -36, LogDone: true}
+	_, err = EnsureTaskSettlementJournal(&journal)
+	require.NoError(t, err)
+	_, _, err = ApplyTaskSettlementJournal(journal.RequestId)
+	require.NoError(t, err)
+	require.NoError(t, DeleteTaskSettlementJournal(journal.RequestId))
+	// Persistent receipt prevents replay after the temporary journal is deleted.
+	_, err = EnsureTaskSettlementJournal(&journal)
+	require.NoError(t, err)
+	_, applied, err := ApplyTaskSettlementJournal(journal.RequestId)
+	require.NoError(t, err)
+	assert.False(t, applied)
+	_, err = ProcessResellerEvents(100)
+	require.NoError(t, err)
+	require.NoError(t, DB.First(&customer, b.UserID).Error)
+	assert.EqualValues(t, 946, customer.Quota)
+	require.NoError(t, DB.First(&account, "user_id = ?", a.UserID).Error)
+	assert.EqualValues(t, 9952, account.Balance)
+	assert.Zero(t, account.Reserved)
+	refund := final
+	refund.Kind = "refund"
+	refund.OperationID = PersonalOperationID(fact.RequestID, "refund")
+	refund.BaseQuota = 0
+	refund.CustomerTarget = 0
+	refund.AgentTarget = 0
+	payload, err := common.Marshal(refund)
+	require.NoError(t, err)
+	refundJournal := TaskSettlementJournal{PersonalFact: string(payload), RequestId: "s3-g1-refund", Operation: TaskSettlementOperationRefund, UserId: b.UserID, BillingSource: "wallet", ExpectedQuota: 54, FinalQuota: 0, Delta: -54, LogDone: true}
+	_, err = EnsureTaskSettlementJournal(&refundJournal)
+	require.NoError(t, err)
+	_, _, err = ApplyTaskSettlementJournal(refundJournal.RequestId)
+	require.NoError(t, err)
+	_, err = ProcessResellerEvents(100)
+	require.NoError(t, err)
+	require.NoError(t, DB.First(&customer, b.UserID).Error)
+	assert.EqualValues(t, 1000, customer.Quota)
+	require.NoError(t, DB.First(&account, "user_id = ?", a.UserID).Error)
+	assert.EqualValues(t, 10000, account.Balance)
+	assert.Zero(t, account.Reserved)
+	diagnostics, err := ReadResellerDiagnostics(rootID, a.UserID)
+	require.NoError(t, err)
+	assert.True(t, diagnostics.Consistent)
+	require.NoError(t, DB.Model(&ResellerAccount{}).Where("user_id = ?", a.UserID).Updates(map[string]any{"balance": 1, "reserved": 9}).Error)
+	require.NoError(t, RebuildResellerAccountProjection(rootID, a.UserID))
+	diagnostics, err = ReadResellerDiagnostics(rootID, a.UserID)
+	require.NoError(t, err)
+	assert.True(t, diagnostics.Consistent)
+	assert.EqualValues(t, 10000, diagnostics.Account.Balance)
+	assert.Zero(t, diagnostics.Account.Reserved)
+	_, err = ReadResellerDiagnostics(b.UserID, a.UserID)
+	require.Error(t, err)
+
+	_, err = PreConsumeBillingBalances(BillingBalancePreConsumeParams{RequestId: "missing-personal-fact", UserId: b.UserID, Amount: 1, BillingSource: "wallet"})
+	require.ErrorIs(t, err, ErrResellerForbidden)
+	err = ReserveBillingBalances(BillingBalanceReserveParams{UserId: b.UserID, Amount: 1, BillingSource: "wallet", RequireAvailableQuota: true})
+	require.ErrorIs(t, err, ErrResellerForbidden)
+
+	// A necessary event failure rolls back the wallet debit.
+	broken := fact
+	broken.RequestID = "s3-rollback"
+	broken.OperationID = PersonalOperationID(broken.RequestID, "reserve")
+	broken.Kind = "invalid"
+	params.PersonalFact = &broken
+	params.RequestId = broken.RequestID
+	_, err = PreConsumeBillingBalances(params)
+	require.Error(t, err)
+	require.NoError(t, DB.First(&customer, b.UserID).Error)
+	assert.EqualValues(t, 1000, customer.Quota)
+	for _, golden := range []struct {
+		name                             string
+		ratioB, ratioA, chargeB, chargeA int64
+	}{
+		{"G2", 700000, 800000, 70, 80}, {"G3", 1000000, 1500000, 100, 150},
+	} {
+		request := golden.name
+		reserve := hosttypes.PersonalBillingFact{RequestID: request, OperationID: PersonalOperationID(request, "reserve"), Kind: "reserve", UserID: b.UserID, AgentUserID: a.UserID, Model: "s3-model", ChannelID: channel.Id, CustomerRatio: golden.ratioB, AgentRatio: golden.ratioA, BaseQuota: 100, CustomerTarget: golden.chargeB, AgentTarget: golden.chargeA}
+		_, err := PreConsumeBillingBalances(BillingBalancePreConsumeParams{PersonalFact: &reserve, RequestId: request, UserId: b.UserID, ModelName: reserve.Model, Amount: golden.chargeB, BillingSource: "wallet"})
+		require.NoError(t, err)
+		previous := golden.chargeB
+		for index, base := range []int64{100, 50, 0} {
+			next := reserve
+			next.Kind = "refund"
+			if index == 0 {
+				next.Kind = "settle"
+			}
+			next.OperationID = PersonalOperationID(request, fmt.Sprintf("operation-%d", index))
+			next.BaseQuota, next.CustomerTarget, next.AgentTarget = base, base*golden.ratioB/ResellerRatioScale, base*golden.ratioA/ResellerRatioScale
+			payload, err := common.Marshal(next)
+			require.NoError(t, err)
+			journal := &TaskSettlementJournal{PersonalFact: string(payload), RequestId: request + fmt.Sprint(index), Operation: TaskSettlementOperationSettle, UserId: b.UserID, BillingSource: "wallet", ExpectedQuota: int(previous), FinalQuota: int(next.CustomerTarget), Delta: int(next.CustomerTarget - previous), LogDone: true}
+			_, err = EnsureTaskSettlementJournal(journal)
+			require.NoError(t, err)
+			_, _, err = ApplyTaskSettlementJournal(journal.RequestId)
+			require.NoError(t, err)
+			previous = next.CustomerTarget
+		}
+	}
+	// Two publishers can claim the same first event; account row locking keeps
+	// their projection updates disjoint and no completed event is applied twice.
+	publications := make(chan error, 2)
+	for range 2 {
+		go func() { _, err := ProcessResellerEvents(100); publications <- err }()
+	}
+	for range 2 {
+		err := <-publications
+		if common.UsingMainDatabase(common.DatabaseTypeSQLite) && err != nil {
+			assert.Contains(t, err.Error(), "database is locked")
+		} else {
+			require.NoError(t, err)
+		}
+	}
+	// SQLite permits only one writer; a rolled-back busy attempt is retried by
+	// the publisher on the next tick, with all facts still pending.
+	_, err = ProcessResellerEvents(100)
+	require.NoError(t, err)
+	require.NoError(t, DB.First(&customer, b.UserID).Error)
+	require.NoError(t, DB.First(&account, "user_id = ?", a.UserID).Error)
+	assert.EqualValues(t, 1000, customer.Quota)
+	assert.EqualValues(t, 10000, account.Balance)
+	assert.Zero(t, account.Reserved)
+	page, err := QueryResellerBilling(DB, a.UserID, ResellerBillingFilter{Until: common.GetTimestamp() + 1, Limit: 100})
+	require.NoError(t, err)
+	negatives := 0
+	for _, row := range page.Items {
+		if row.Kind == "settle" && row.Margin != nil && *row.Margin < 0 {
+			negatives++
+		}
+	}
+	assert.Equal(t, 2, negatives)
+	filtered, total, err := QueryResellerAdministrativeUsers(ResellerAdminUserFilter{Kind: "agent_customer", AgentID: a.UserID}, &common.PageInfo{Page: 1, PageSize: 100}, NewUserSortOptions("id", "asc"))
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, total)
+	require.Len(t, filtered, 1)
+	assert.Equal(t, b.UserID, filtered[0].Id)
+
+	terminalTask := Task{TaskID: "s3-terminal-task", UserId: b.UserID, Status: TaskStatusFailure}
+	require.NoError(t, DB.Create(&terminalTask).Error)
+	terminal := fact
+	terminal.RequestID = "s3-terminal-recovery"
+	terminal.OperationID = PersonalOperationID(terminal.RequestID, "pending")
+	terminal.Kind = "pending"
+	terminal.EntityType, terminal.EntityID = TaskSettlementEntityTask, terminalTask.ID
+	terminal.BaseQuota, terminal.CustomerTarget, terminal.AgentTarget = 0, 0, 0
+	require.NoError(t, RecordPersonalReservation(&terminal))
+	assert.True(t, HasPendingPersonalTerminalTasks())
+	terminalRequests, err := ListPersonalTerminalRequests("", 100)
+	require.NoError(t, err)
+	require.Len(t, terminalRequests, 1)
+	assert.Equal(t, terminal.RequestID, terminalRequests[0].ID)
+	procurement, err := QueryResellerProcurementAdjustments(DB, a.UserID, 0, 0, common.GetTimestamp()+1, 100)
+	require.NoError(t, err)
+	require.Len(t, procurement.Items, 1)
+	assert.EqualValues(t, 10000, procurement.Items[0].Quota)
+
+	for _, ratio := range []int64{700000, 1000000, 2000000} {
+		quota, clamp, err := PersonalQuota(100, ratio)
+		require.NoError(t, err)
+		assert.Nil(t, clamp)
+		assert.EqualValues(t, ratio/10000, quota)
+	}
+}
+
+func testResellerDisplayBatch(t *testing.T, rootID int) {
+	a, err := CreateResellerUser(rootID, "agent", ResellerCreateInput{Username: "display-agent", Email: "display-agent@example.invalid"})
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", a.UserID).Update("activation", "active").Error)
+	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "display-customer", Email: "display-customer@example.invalid"})
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", b.UserID).Update("activation", "active").Error)
+	channel := Channel{Name: "display-channel", Models: "display-a,display-b,display-c,display-hidden", Group: "default", Status: common.ChannelStatusEnabled, Type: 1, Key: "synthetic-display-key"}
+	require.NoError(t, DB.Create(&channel).Error)
+	items := []ResellerConfigItem{}
+	for _, name := range []string{"display-a", "display-b", "display-c", "display-hidden"} {
+		require.NoError(t, DB.Create(&Ability{ChannelId: channel.Id, Model: name, Group: "display-test", Enabled: true}).Error)
+		items = append(items, ResellerConfigItem{Model: name, ChannelID: channel.Id, Authorized: true, Ratio: "0.8"})
+	}
+	_, err = SaveResellerConfig(rootID, a.UserID, true, ResellerConfigInput{Items: items})
+	require.NoError(t, err)
+	child := append([]ResellerConfigItem(nil), items[:3]...)
+	for i := range child {
+		child[i].Ratio = "0.900000"
+	}
+	_, err = SaveResellerConfig(a.UserID, b.UserID, false, ResellerConfigInput{Items: child})
+	require.NoError(t, err)
+	queries := 0
+	require.NoError(t, DB.Callback().Query().After("gorm:query").Register("display-query-count", func(tx *gorm.DB) { queries++ }))
+	ranges, err := PersonalRatioRanges(b.UserID, map[string]string{"display-test": "display"})
+	require.NoError(t, DB.Callback().Query().Remove("display-query-count"))
+	require.NoError(t, err)
+	assert.LessOrEqual(t, queries, 12, "display must read the user's matrix once instead of opening a transaction for every model")
+	require.Len(t, ranges, 3)
+	for _, row := range ranges {
+		assert.Equal(t, "0.9", row.Min)
+		assert.Equal(t, "0.9", row.Max)
+		assert.NotEqual(t, "display-hidden", row.Model)
+	}
+	items[1].Authorized = false
+	_, err = SaveResellerConfig(rootID, a.UserID, true, ResellerConfigInput{ExpectedRevision: 1, Items: items})
+	require.NoError(t, err)
+	ranges, err = PersonalRatioRanges(b.UserID, map[string]string{"display-test": "display"})
+	require.NoError(t, err)
+	require.Len(t, ranges, 2)
+	for _, row := range ranges {
+		assert.NotEqual(t, "display-b", row.Model)
+	}
+	view, err := ReadResellerConfig(DB, b.UserID)
+	require.NoError(t, err)
+	for _, row := range view.Items {
+		assert.Equal(t, "0.9", row.Ratio, "all configuration and history displays use the canonical ratio representation")
+	}
+	child[0].Ratio = ""
+	_, err = SaveResellerConfig(a.UserID, b.UserID, false, ResellerConfigInput{ExpectedRevision: 1, Items: child})
+	require.NoError(t, err)
+	history, err := ReadPersonalRatioHistory(b.UserID, 0)
+	require.NoError(t, err, "an omitted ratio defaults to one in both the active matrix and history")
+	require.NotEmpty(t, history)
+	// Older snapshots stored an omitted ratio before request normalization.
+	legacy, err := common.Marshal([]ResellerConfigItem{{Model: "display-a", ChannelID: channel.Id, Authorized: true}})
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&ResellerConfigRevision{}).Where("user_id = ? AND revision = ?", b.UserID, 2).Update("snapshot", string(legacy)).Error)
+	history, err = ReadPersonalRatioHistory(b.UserID, 0)
+	require.NoError(t, err)
+	require.NotEmpty(t, history)
+	require.Len(t, history[0].Models, 1)
+	assert.Equal(t, "1", history[0].Models[0].Min)
 }

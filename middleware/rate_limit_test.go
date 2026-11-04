@@ -45,6 +45,35 @@ func performRateLimitRequest(router http.Handler, path string, remoteAddr string
 	return recorder
 }
 
+func TestResellerPollingDoesNotConsumeWriteRateLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	useRateLimitMiniRedis(t)
+	previousEnabled, previousNum, previousDuration := common.CriticalRateLimitEnable, common.CriticalRateLimitNum, common.CriticalRateLimitDuration
+	common.CriticalRateLimitEnable, common.CriticalRateLimitNum, common.CriticalRateLimitDuration = true, 2, 1200
+	t.Cleanup(func() {
+		common.CriticalRateLimitEnable, common.CriticalRateLimitNum, common.CriticalRateLimitDuration = previousEnabled, previousNum, previousDuration
+	})
+	router := gin.New()
+	require.NoError(t, router.SetTrustedProxies(nil))
+	router.Use(ResellerWriteRateLimit())
+	router.GET("/customers", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	router.POST("/customers", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	for range 3 {
+		assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/customers", "192.0.2.39:12345").Code)
+	}
+	for i := range 3 {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/customers", nil)
+		request.RemoteAddr = "192.0.2.39:12345"
+		router.ServeHTTP(recorder, request)
+		expected := http.StatusNoContent
+		if i == 2 {
+			expected = http.StatusTooManyRequests
+		}
+		assert.Equal(t, expected, recorder.Code)
+	}
+}
+
 func TestRedisIPRateLimiterThresholdTTLAndNamespace(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	redisServer, _ := useRateLimitMiniRedis(t)

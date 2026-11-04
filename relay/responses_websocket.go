@@ -277,6 +277,9 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if apiErr = service.PrepareTieredBillingForSelectedGroup(c, info); apiErr != nil {
 			return apiErr
 		}
+		if apiErr = service.PreparePersonalChannelBilling(c, info); apiErr != nil {
+			return apiErr
+		}
 		var payload []byte
 		payload, apiErr = buildResponsesWSCreatePayload(c, info, create.Request, create.Generate, create.StreamID)
 		if apiErr != nil {
@@ -306,11 +309,15 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			} else {
 				info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 			}
+			service.PinPersonalPricingChannel(c, info)
 			service.ApplyOrganizationDiscountForChannel(info, channel.Id)
 			if apiErr = service.PrepareOrganizationDiscountReservation(info); apiErr != nil {
 				return apiErr
 			}
 			if apiErr = service.PrepareTieredBillingForSelectedGroup(c, info); apiErr != nil {
+				return apiErr
+			}
+			if apiErr = service.PreparePersonalChannelBilling(c, info); apiErr != nil {
 				return apiErr
 			}
 			info.RetryIndex = retry.GetRetry()

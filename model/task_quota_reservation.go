@@ -2,6 +2,8 @@ package model
 
 import (
 	"errors"
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/types"
 
 	"gorm.io/gorm"
 )
@@ -56,7 +58,14 @@ func reserveTaskSettlementBalancesTx(tx *gorm.DB, journal *TaskSettlementJournal
 		}
 		unlimited = token.UnlimitedQuota
 	}
-	return ReserveBillingBalances(BillingBalanceReserveParams{
+	var personal *types.PersonalBillingFact
+	if journal.PersonalFact != "" {
+		personal = &types.PersonalBillingFact{}
+		if err := common.UnmarshalJsonStr(journal.PersonalFact, personal); err != nil {
+			return err
+		}
+	}
+	return ReserveBillingBalances(BillingBalanceReserveParams{PersonalFact: personal,
 		RequireAvailableQuota: true, UserId: journal.UserId, Amount: int64(journal.Delta),
 		BillingSource: journal.BillingSource, SubscriptionId: journal.SubscriptionId,
 		TokenId: journal.TokenId, ApplyToken: journal.ApplyToken, TokenUnlimited: unlimited,

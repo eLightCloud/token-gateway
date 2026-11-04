@@ -434,7 +434,12 @@ func GetUserTask(c *gin.Context) {
 	queryParams := model.SyncTaskQueryParams{Platform: constant.TaskPlatform(c.Query("platform")), TaskID: c.Query("task_id"), Status: c.Query("status"), Action: c.Query("action"), StartTimestamp: startTimestamp, EndTimestamp: endTimestamp}
 	items := model.TaskGetAllUserTask(userID, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	pageInfo.SetTotal(int(model.TaskCountAllUserTask(userID, queryParams)))
-	pageInfo.SetItems(tasksToDto(items, false, common.RoleCommonUser))
+	visible, err := resellerVisibleTasks(userID, tasksToDto(items, false, common.RoleCommonUser))
+	if err != nil {
+		resellerResponse(c, nil, err)
+		return
+	}
+	pageInfo.SetItems(visible)
 	common.ApiSuccess(c, pageInfo)
 }
 

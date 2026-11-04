@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,6 +23,8 @@ import (
 	"github.com/go-redis/redis/v8"
 
 	"github.com/gin-gonic/gin"
+	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -673,7 +676,7 @@ func TestResellerS1ManagementHandlers(t *testing.T) {
 	}{
 		{`{"operation_id":"http-1","mode":"override","quota":1,"reason":"invalid"}`, http.StatusBadRequest, "RESELLER_INVALID_INPUT"},
 		{`{"operation_id":"http-1","mode":"add","quota":100,"reason":"allocation"}`, http.StatusOK, ""},
-		{`{"operation_id":"http-1","mode":"add","quota":101,"reason":"changed"}`, http.StatusConflict, "RESELLER_CONFLICT"},
+		{`{"operation_id":"http-1","mode":"add","quota":101,"reason":"changed"}`, http.StatusConflict, "RESELLER_OPERATION_CONFLICT"},
 	} {
 		recorder = httptest.NewRecorder()
 		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/agents/%d/quota", agent.Id), strings.NewReader(tc.body)))
@@ -705,4 +708,246 @@ func TestResellerS1ManagementHandlers(t *testing.T) {
 	assert.Contains(t, denied.Body.String(), `"success":false`)
 	require.NoError(t, db.First(&agent, agent.Id).Error)
 	assert.Equal(t, common.RoleCommonUser, agent.Role)
+}
+
+func TestResellerThirdBatch(t *testing.T) {
+	t.Run("public errors classify reasons without exposing private details", func(t *testing.T) {
+		require.NoError(t, i18n.Init())
+		for _, tc := range []struct {
+			name   string
+			err    error
+			status int
+			code   string
+		}{
+			{"invalid input", model.ErrResellerInvalid, 400, "RESELLER_INVALID_INPUT"},
+			{"forbidden", model.ErrResellerForbidden, 403, "RESELLER_FORBIDDEN"},
+			{"agent disabled", model.ErrResellerAgentDisabled, 403, "RESELLER_AGENT_DISABLED"},
+			{"customer disabled", model.ErrResellerCustomerDisabled, 403, "RESELLER_CUSTOMER_DISABLED"},
+			{"procurement insufficient", model.ErrResellerProcurementInsufficient, 403, "RESELLER_PROCUREMENT_INSUFFICIENT"},
+			{"not visible", gorm.ErrRecordNotFound, 404, "RESELLER_NOT_FOUND"},
+			{"email conflict", model.ErrEmailAlreadyTaken, 409, "RESELLER_EMAIL_CONFLICT"},
+			{"duplicate resource", gorm.ErrDuplicatedKey, 409, "RESELLER_DUPLICATE_RESOURCE"},
+			{"database unavailable", model.ErrDatabase, 503, "RESELLER_PERSISTENCE_UNAVAILABLE"},
+			{"mysql connection failure", &mysqlDriver.MySQLError{Number: 2006, Message: "private connection details"}, 503, "RESELLER_PERSISTENCE_UNAVAILABLE"},
+			{"postgres connection failure", &pgconn.PgError{Code: "08006", Message: "private connection details"}, 503, "RESELLER_PERSISTENCE_UNAVAILABLE"},
+			{"driver connection failure", driver.ErrBadConn, 503, "RESELLER_PERSISTENCE_UNAVAILABLE"},
+			{"unknown internal error", errors.New("private internal material db-password@example.invalid"), 500, "RESELLER_INTERNAL_ERROR"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				response := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(response)
+				c.Request = httptest.NewRequest("GET", "/reseller", nil)
+				resellerResponse(c, gin.H{"private": "credential-material"}, fmt.Errorf("private wrapper: %w", tc.err))
+				assert.Equal(t, tc.status, response.Code)
+				assert.Contains(t, response.Body.String(), tc.code)
+				for _, private := range []string{"private wrapper", "db-password", "credential-material"} {
+					assert.NotContains(t, response.Body.String(), private)
+				}
+			})
+		}
+	})
+	t.Run("configuration conflicts return current revision without overwriting", func(t *testing.T) {
+		db := setupManageUserTestDB(t)
+		require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.ResellerConfigRevision{}, &model.Channel{}))
+		root := createQuotaTestOperator(t, db, common.RoleRootUser)
+		operatorID, admin := root.Id, true
+		agent, err := model.CreateResellerUser(root.Id, "agent", model.ResellerCreateInput{Username: "third-agent", Email: "third-agent@example.invalid"})
+		require.NoError(t, err)
+		engine := gin.New()
+		engine.Use(func(c *gin.Context) { c.Set("id", operatorID); c.Set("reseller_admin", admin) })
+		engine.PUT("/agents/:id/config", SaveResellerConfiguration)
+		engine.POST("/agents/:id/config/preview", PreviewResellerConfiguration)
+		engine.GET("/agents/:id", GetResellerWorkspace)
+		path := fmt.Sprintf("/agents/%d/config", agent.UserID)
+		perform := func(method, path, body string) *httptest.ResponseRecorder {
+			r := httptest.NewRecorder()
+			engine.ServeHTTP(r, httptest.NewRequest(method, path, strings.NewReader(body)))
+			return r
+		}
+		initial := perform("PUT", path, `{"expected_revision":0,"items":[]}`)
+		require.Equal(t, 200, initial.Code, initial.Body.String())
+		for _, method := range []string{"PUT", "POST"} {
+			endpoint := path
+			if method == "POST" {
+				endpoint += "/preview"
+			}
+			response := perform(method, endpoint, `{"expected_revision":0,"items":[]}`)
+			assert.Equal(t, 409, response.Code, response.Body.String())
+			var result struct {
+				Success bool   `json:"success"`
+				Code    string `json:"code"`
+				Data    struct {
+					Revision int64 `json:"revision"`
+				} `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+			assert.False(t, result.Success)
+			assert.Equal(t, "RESELLER_REVISION_CONFLICT", result.Code)
+			assert.EqualValues(t, 1, result.Data.Revision)
+		}
+		var count int64
+		require.NoError(t, db.Model(&model.ResellerConfigRevision{}).Where("user_id = ?", agent.UserID).Count(&count).Error)
+		assert.EqualValues(t, 1, count, "conflicting writes cannot append history")
+		current, err := model.ReadResellerConfig(db, agent.UserID)
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, current.Revision)
+		historyResponse := perform("GET", fmt.Sprintf("/agents/%d", agent.UserID), "")
+		require.Equal(t, 200, historyResponse.Code, historyResponse.Body.String())
+		var historyPayload struct {
+			Data struct {
+				History []map[string]any `json:"history"`
+			} `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(historyResponse.Body.Bytes(), &historyPayload))
+		require.Len(t, historyPayload.Data.History, 1)
+		assert.EqualValues(t, 1, historyPayload.Data.History[0]["revision"])
+		assert.Contains(t, historyPayload.Data.History[0], "operator_id")
+		assert.NotContains(t, historyPayload.Data.History[0], "Snapshot")
+		assert.NotContains(t, historyPayload.Data.History[0], "snapshot")
+		other, err := model.CreateResellerUser(root.Id, "agent", model.ResellerCreateInput{Username: "third-other-agent", Email: "third-other@example.invalid"})
+		require.NoError(t, err)
+		require.NoError(t, db.Model(&model.ResellerIdentity{}).Where("user_id = ?", other.UserID).Update("activation", "active").Error)
+		operatorID, admin = other.UserID, false
+		invisible := perform("PUT", path, `{"expected_revision":0,"items":[]}`)
+		assert.Equal(t, 404, invisible.Code, invisible.Body.String())
+		assert.NotContains(t, invisible.Body.String(), `"revision"`)
+		operatorID, admin = root.Id, true
+		// A stored invalid configuration is an internal data fault, not bad input.
+		require.NoError(t, db.Create(&model.ResellerModelConfig{UserID: agent.UserID, Model: "third-model", ModelKey: "corrupt-model-key", ChannelID: 11, Ratio: 1_000_000, Revision: 1}).Error)
+		corrupt := perform("GET", fmt.Sprintf("/agents/%d", agent.UserID), "")
+		assert.Equal(t, 500, corrupt.Code, corrupt.Body.String())
+		assert.Contains(t, corrupt.Body.String(), "RESELLER_DATA_CORRUPT")
+		assert.NotContains(t, corrupt.Body.String(), "corrupt-model-key")
+		// A real connection failure remains a persistence outage.
+		connection, err := db.DB()
+		require.NoError(t, err)
+		require.NoError(t, connection.Close())
+		unavailable := perform("PUT", path, `{"expected_revision":1,"items":[]}`)
+		assert.Equal(t, 503, unavailable.Code, unavailable.Body.String())
+		assert.Contains(t, unavailable.Body.String(), "RESELLER_PERSISTENCE_UNAVAILABLE")
+		readUnavailable := perform("GET", fmt.Sprintf("/agents/%d", agent.UserID), "")
+		assert.Equal(t, 503, readUnavailable.Code, readUnavailable.Body.String())
+		assert.Contains(t, readUnavailable.Body.String(), "RESELLER_PERSISTENCE_UNAVAILABLE")
+	})
+	t.Run("quota idempotency balance and identity conflicts have distinct codes", func(t *testing.T) {
+		db := setupManageUserTestDB(t)
+		require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerQuotaAdjustment{}))
+		root := createQuotaTestOperator(t, db, common.RoleRootUser)
+		agent, err := model.CreateResellerUser(root.Id, "agent", model.ResellerCreateInput{Username: "third-quota-agent", Email: "third-quota@example.invalid"})
+		require.NoError(t, err)
+		engine := gin.New()
+		engine.Use(func(c *gin.Context) { c.Set("id", root.Id); c.Set("role", root.Role); c.Set("reseller_admin", true) })
+		engine.POST("/agents", CreateResellerAgent)
+		engine.POST("/agents/:id/quota", AdjustResellerQuota)
+		engine.GET("/agents/:id/adjustments", GetResellerAdjustments)
+		for _, tc := range []struct {
+			path, body string
+			status     int
+			code       string
+		}{
+			{fmt.Sprintf("/agents/%d/quota", agent.UserID), `{"operation_id":"third-op","mode":"add","quota":100,"reason":"allocation"}`, 200, ""},
+			{fmt.Sprintf("/agents/%d/quota", agent.UserID), `{"operation_id":"third-op","mode":"add","quota":100,"reason":"allocation"}`, 200, ""},
+			{fmt.Sprintf("/agents/%d/quota", agent.UserID), `{"operation_id":"third-op","mode":"add","quota":101,"reason":"allocation"}`, 409, "RESELLER_OPERATION_CONFLICT"},
+			{fmt.Sprintf("/agents/%d/quota", agent.UserID), `{"operation_id":"third-overdraw","mode":"subtract","quota":101,"reason":"withdrawal"}`, 409, "RESELLER_BALANCE_CONFLICT"},
+			{"/agents", `{"username":"third-new-agent","email":"third-quota@example.invalid"}`, 409, "RESELLER_EMAIL_CONFLICT"},
+			{"/agents", `{"username":"third-quota-agent","email":"third-new@example.invalid"}`, 409, "RESELLER_DUPLICATE_RESOURCE"},
+		} {
+			r := httptest.NewRecorder()
+			engine.ServeHTTP(r, httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body)))
+			assert.Equal(t, tc.status, r.Code, r.Body.String())
+			if tc.code != "" {
+				assert.Contains(t, r.Body.String(), tc.code)
+			}
+		}
+		var account model.ResellerAccount
+		require.NoError(t, db.First(&account, agent.UserID).Error)
+		assert.EqualValues(t, 100, account.Balance)
+		pageResponse := httptest.NewRecorder()
+		engine.ServeHTTP(pageResponse, httptest.NewRequest("GET", fmt.Sprintf("/agents/%d/adjustments", agent.UserID), nil))
+		var pagePayload struct {
+			Data struct {
+				Items      []model.ResellerQuotaAdjustment `json:"items"`
+				NextCursor int64                           `json:"next_cursor"`
+			} `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(pageResponse.Body.Bytes(), &pagePayload))
+		require.Len(t, pagePayload.Data.Items, 1)
+		assert.Zero(t, pagePayload.Data.NextCursor)
+	})
+}
+
+func TestResellerFinalContracts(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerQuotaAdjustment{}, &model.ResellerRequest{}, &model.ResellerEvent{}, &model.ResellerProjection{}))
+	agent := model.User{Username: "final-agent", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, ResellerKind: "agent", AffCode: "final-agent"}
+	require.NoError(t, db.Create(&agent).Error)
+	require.NoError(t, db.Create(&model.ResellerIdentity{UserID: agent.Id, Kind: "agent", Activation: "active"}).Error)
+	require.NoError(t, db.Create(&model.ResellerAccount{UserID: agent.Id, Enabled: true, Balance: 1000}).Error)
+	engine := gin.New()
+	engine.Use(func(c *gin.Context) { c.Set("id", agent.Id); c.Set("username", agent.Username) })
+	engine.GET("/billing", ExportResellerBilling)
+	engine.GET("/procurement", GetResellerProcurement)
+	engine.GET("/procurement/export", ExportResellerProcurement)
+	engine.GET("/logs", GetUserLogs)
+	request := func(path string) *httptest.ResponseRecorder {
+		r := httptest.NewRecorder()
+		engine.ServeHTTP(r, httptest.NewRequest("GET", path, nil))
+		return r
+	}
+	t.Run("procurement uses the same half-open date range for JSON and CSV", func(t *testing.T) {
+		for i, at := range []int64{100, 200, 300} {
+			require.NoError(t, db.Create(&model.ResellerQuotaAdjustment{UserID: agent.Id, AccountKind: "agent", OperationID: fmt.Sprintf("final-adjust-%d", i), OperationKey: fmt.Sprintf("final-adjust-%d", i), Mode: "add", Quota: 10, Reason: "synthetic", OccurredAt: at}).Error)
+		}
+		jsonResponse := request("/procurement?from=200&until=300")
+		require.Equal(t, 200, jsonResponse.Code)
+		assert.Contains(t, jsonResponse.Body.String(), "final-adjust-1")
+		assert.NotContains(t, jsonResponse.Body.String(), "final-adjust-0")
+		assert.NotContains(t, jsonResponse.Body.String(), "final-adjust-2")
+		csvResponse := request("/procurement/export?from=200&until=300")
+		require.Equal(t, 200, csvResponse.Code)
+		assert.Contains(t, csvResponse.Body.String(), "final-adjust-1")
+		assert.NotContains(t, csvResponse.Body.String(), "final-adjust-0")
+		assert.NotContains(t, csvResponse.Body.String(), "final-adjust-2")
+	})
+	t.Run("export query failures never produce a successful empty or truncated CSV", func(t *testing.T) {
+		for _, path := range []string{"/billing", "/procurement/export"} {
+			require.NoError(t, db.Callback().Query().Before("gorm:query").Register("final-export-failure", func(tx *gorm.DB) {
+				if _, inside := tx.Statement.ConnPool.(gorm.TxCommitter); inside {
+					tx.AddError(fmt.Errorf("%w: private export database details", model.ErrDatabase))
+				}
+			}))
+			response := request(path)
+			require.NoError(t, db.Callback().Query().Remove("final-export-failure"))
+			assert.Equal(t, 503, response.Code, response.Body.String())
+			assert.Contains(t, response.Header().Get("Content-Type"), "application/json")
+			assert.NotContains(t, response.Body.String(), "private export")
+		}
+		for i := range 101 {
+			require.NoError(t, db.Create(&model.ResellerEvent{OperationID: fmt.Sprintf("export-op-%d", i), RequestID: fmt.Sprintf("export-request-%d", i), Version: 1, AgentUserID: agent.Id, Kind: "settle", Model: "synthetic", Snapshot: "{}", OccurredAt: 200}).Error)
+		}
+		pages := 0
+		require.NoError(t, db.Callback().Query().Before("gorm:query").Register("final-later-page-failure", func(tx *gorm.DB) {
+			if _, inside := tx.Statement.ConnPool.(gorm.TxCommitter); inside && !tx.DryRun && tx.Statement.Table == "reseller_events" {
+				pages++
+				if pages == 2 {
+					tx.AddError(fmt.Errorf("%w: private later page failure", model.ErrDatabase))
+				}
+			}
+		}))
+		response := request("/billing?from=100&until=300")
+		require.NoError(t, db.Callback().Query().Remove("final-later-page-failure"))
+		assert.Equal(t, 503, response.Code, response.Body.String())
+		assert.NotContains(t, response.Body.String(), "export-request-0")
+	})
+	t.Run("old log endpoint hides reseller database failures and uses an error status", func(t *testing.T) {
+		require.NoError(t, db.Callback().Query().Before("gorm:query").Register("final-old-route-failure", func(tx *gorm.DB) {
+			if tx.Statement.Table == "users" {
+				tx.AddError(fmt.Errorf("%w: private host db-password", model.ErrDatabase))
+			}
+		}))
+		response := request("/logs")
+		require.NoError(t, db.Callback().Query().Remove("final-old-route-failure"))
+		assert.Equal(t, 503, response.Code, response.Body.String())
+		assert.NotContains(t, response.Body.String(), "db-password")
+	})
 }

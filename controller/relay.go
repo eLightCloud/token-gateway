@@ -162,6 +162,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		service.AppendUsedChannel(c, channel.Id)
+		service.PinPersonalPricingChannel(c, relayInfo)
 		// 渠道确定后只查请求内存快照映射，不再访问数据库。
 		service.ApplyOrganizationDiscountForChannel(relayInfo, channel.Id)
 		if billingErr := service.PrepareOrganizationDiscountReservation(relayInfo); billingErr != nil {
@@ -173,6 +174,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 
+		if billingErr := service.PreparePersonalChannelBilling(c, relayInfo); billingErr != nil {
+			newAPIError = billingErr
+			break
+		}
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
@@ -465,7 +470,9 @@ func RelayTask(c *gin.Context) {
 // come from c.Request.Context: native task endpoints use the client context,
 // while the Responses bridge supplies an independently bounded context.
 func executeTaskSubmission(c *gin.Context, relayInfo *relaycommon.RelayInfo) (*taskSubmissionOutcome, *taskdto.TaskError) {
-	return executeTaskSubmissionWith(c, relayInfo, relay.RelayTaskSubmit, service.SettleOrganizationInvoiceTaskSubmission)
+	return executeTaskSubmissionWith(c, relayInfo, relay.RelayTaskSubmit, func(c *gin.Context, info *relaycommon.RelayInfo, task *model.Task, quota int, confirmed bool) error {
+		return service.SettleOrganizationInvoiceTaskSubmission(c, info, task, quota, confirmed)
+	})
 }
 
 type taskSubmitAttempt func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *taskdto.TaskError)
@@ -677,9 +684,19 @@ func executeTaskSubmissionWith(
 	diagnostics.insertStart(task)
 	enhanceDurable, insertErr := service.PersistSeedanceEnhanceSubmission(c, relayInfo, task)
 	if !enhanceDurable && insertErr == nil {
+		enhanceDurable, insertErr = service.PersistPersonalTaskSubmission(c, relayInfo, task, result.Quota, result.ExpenseConfirmed, insertOmits...)
+	}
+	durable = relayInfo.PersonalPricing != nil && enhanceDurable && task.ID > 0
+	if !enhanceDurable && insertErr == nil {
 		insertErr = task.InsertWithContext(c.Request.Context(), insertOmits...)
 	}
 	if insertErr != nil {
+		if durable {
+			common.SysError("settle task billing error: " + insertErr.Error())
+			taskErr = service.TaskErrorWrapperLocal(errors.New("failed to settle task billing"), "task_billing_settlement_failed", http.StatusInternalServerError)
+			diagnostics.failed("settle", "billing_error", taskErr, true)
+			return nil, taskErr
+		}
 		common.SysError("insert task error: " + insertErr.Error())
 		taskErr = service.TaskErrorWrapperLocal(errors.New("failed to persist task"), "task_insert_failed", http.StatusInternalServerError)
 		diagnostics.failed("insert", "database_error", taskErr, false)

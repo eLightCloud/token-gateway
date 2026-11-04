@@ -57,6 +57,15 @@ func GetPricing(c *gin.Context) {
 
 	usableGroup = service.GetUserUsableGroups(group)
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
+	if exists {
+		var err error
+		pricing, err = resellerVisiblePricing(userId.(int), pricing)
+		if err != nil {
+			resellerResponse(c, nil, err)
+			return
+		}
+		c.Header("Cache-Control", "private, no-store")
+	}
 	// check groupRatio contains usableGroup
 	for group := range ratio_setting.GetGroupRatioCopy() {
 		if _, ok := usableGroup[group]; !ok {

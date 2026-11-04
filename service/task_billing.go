@@ -92,6 +92,7 @@ func SnapshotTaskBillingContext(info *relaycommon.RelayInfo) *model.TaskBillingC
 		}
 	}
 	return &model.TaskBillingContext{
+		PersonalPricing: personalTaskSnapshot(info),
 		ModelPrice:      info.PriceData.ModelPrice,
 		GroupRatio:      info.PriceData.GroupRatioInfo.GroupRatio,
 		ModelRatio:      info.PriceData.ModelRatio,
@@ -207,6 +208,9 @@ func taskModelName(task *model.Task) string {
 // 多节点、进程崩溃与日志重放均复用同一 operation id，不存在先 claim 后
 // 退款导致 quota=0 但余额未恢复的窗口。
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
+	if TaskHasPersonalPricing(task) {
+		return settlePersonalTask(ctx, task, 0, true, reason, model.TaskSettlementEntityTask)
+	}
 	quota := task.Quota
 	if quota == 0 {
 		return model.ConfirmTaskInvoiceExpense(model.TaskSettlementEntityTask, task.ID, 0, fmt.Sprintf("task-refund:%d", task.ID)) == nil
@@ -255,6 +259,9 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 // reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
 // clamps 可选：若计算 actualQuota 时发生额度饱和，将其记入日志 admin_info（仅管理员可见）。
 func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamps ...*common.QuotaClamp) bool {
+	if TaskHasPersonalPricing(task) {
+		return settlePersonalTask(ctx, task, actualQuota, false, reason, model.TaskSettlementEntityTask)
+	}
 	// actualQuota == 0 表示零用量成功：全额退还预扣额度（仅拒绝负数，防止负计费）。
 	if actualQuota < 0 {
 		return true

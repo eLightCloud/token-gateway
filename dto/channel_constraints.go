@@ -42,7 +42,11 @@ const (
 	FilterVideoEnhance       ChannelFilterKind = "video_enhance"
 )
 
+const FilterPersonalAuthorization ChannelFilterKind = "personal_authorization"
+
 type ChannelFilter struct {
+	AllowedChannelIDs []int
+
 	Kind                   ChannelFilterKind
 	RequestPath            string
 	TaskPluginKey          string

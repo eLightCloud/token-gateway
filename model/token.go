@@ -246,7 +246,7 @@ func ValidateUserToken(key string) (token *Token, err error) {
 			}
 			return token, ErrTokenInvalid
 		}
-		if err := RequireOrdinaryUser(DB, token.UserId); err != nil {
+		if err := ResellerKeyAllowed(token.UserId); err != nil {
 			return nil, err
 		}
 		return token, nil
@@ -302,7 +302,7 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 }
 
 func (token *Token) Insert() error {
-	if err := RequireOrdinaryUser(DB, token.UserId); err != nil {
+	if err := ResellerKeyAllowed(token.UserId); err != nil {
 		return err
 	}
 	var err error

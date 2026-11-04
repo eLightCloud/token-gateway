@@ -86,6 +86,9 @@ func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
 }
 
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
+	if relayInfo != nil && relayInfo.PersonalPricing != nil {
+		return reservePersonalRealtimeUsage(ctx, relayInfo, usage)
+	}
 	if relayInfo == nil || !relayInfo.PriceData.DiscountSnapshotLoaded {
 		return fmt.Errorf("%w: realtime billing started without a resolved request snapshot", ErrOrganizationDiscountLoadFailed)
 	}

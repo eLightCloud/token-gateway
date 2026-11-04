@@ -205,13 +205,17 @@ func runMidjourneyTaskUpdateOnce(ctx context.Context, report func(processed, tot
 			if (task.Progress != "100%" && responseItem.FailReason != "") || (task.Progress == "100%" && task.Status == "FAILURE") {
 				logger.LogInfo(ctx, task.MjId+" 构建失败，"+task.FailReason)
 				task.Progress = "100%"
-				if task.Quota != 0 {
+				if task.Quota != 0 || service.MidjourneyHasPersonalPricing(task) {
 					shouldReturnQuota = true
 				}
 			}
 			won, err := task.UpdateWithStatus(preStatus)
 			if err != nil {
 				logger.LogError(ctx, "UpdateMidjourneyTask task error: "+err.Error())
+			} else if won && task.Status == "SUCCESS" && service.MidjourneyHasPersonalPricing(task) {
+				if err := service.ConfirmPersonalMidjourneySuccess(ctx, task); err != nil {
+					logger.LogWarn(ctx, "personal Midjourney confirmation failed: "+err.Error())
+				}
 			} else if won && shouldReturnQuota {
 				service.RefundMidjourneyQuota(ctx, task, "构图失败")
 			}
@@ -324,6 +328,11 @@ func GetUserMidjourney(c *gin.Context) {
 		}
 	}
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(items)
+	visible, err := resellerVisibleMidjourney(userId, items)
+	if err != nil {
+		resellerResponse(c, nil, err)
+		return
+	}
+	pageInfo.SetItems(visible)
 	common.ApiSuccess(c, pageInfo)
 }

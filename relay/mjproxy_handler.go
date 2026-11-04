@@ -210,6 +210,10 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		}
 	}
 
+	if apiErr := service.PreparePersonalMidjourney(c, info, priceData.Quota); apiErr != nil {
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, "personal_billing_failed")
+	}
+	defer service.RefundUnsettledPersonalBilling(c, info)
 	userQuota, err := model.GetUserQuota(info.UserId, false)
 	if err != nil {
 		return &dto.MidjourneyResponse{
@@ -218,7 +222,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		}
 	}
 
-	if userQuota-int64(priceData.Quota) < 0 {
+	if info.PersonalPricing == nil && userQuota-int64(priceData.Quota) < 0 {
 		return &dto.MidjourneyResponse{
 			Code:        4,
 			Description: "quota_not_enough",
@@ -227,6 +231,9 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	requestURL := getMjRequestPath(c.Request.URL.String())
 	baseURL := c.GetString("base_url")
 	fullRequestURL := fmt.Sprintf("%s%s", baseURL, requestURL)
+	if err := service.MarkPersonalRequestDispatch(info); err != nil {
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, "billing_dispatch_failed")
+	}
 	service.RequestPolicy(c).BeginAttempt(&model.Channel{Id: c.GetInt("channel_id")}, info.UsingGroup)
 	mjResp, _, err := service.DoMidjourneyHttpRequest(c, time.Second*60, fullRequestURL)
 	accepted := service.RecordMidjourneyPolicyResponse(c, mjResp, err)
@@ -261,7 +268,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	if billingErr != nil {
 		common.SysLog("error consuming Midjourney quota: " + billingErr.Error())
 	}
-	err = midjourneyTask.Insert()
+	err = service.PersistMidjourneyTaskSubmission(info, midjourneyTask, billingPrepared)
 	if err != nil {
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "insert_midjourney_task_failed")
 	}
@@ -532,6 +539,10 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		}
 	}
 
+	if apiErr := service.PreparePersonalMidjourney(c, relayInfo, priceData.Quota); apiErr != nil {
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, "personal_billing_failed")
+	}
+	defer service.RefundUnsettledPersonalBilling(c, relayInfo)
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
 	if err != nil {
 		return &dto.MidjourneyResponse{
@@ -540,13 +551,16 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		}
 	}
 
-	if consumeQuota && userQuota-int64(priceData.Quota) < 0 {
+	if relayInfo.PersonalPricing == nil && consumeQuota && userQuota-int64(priceData.Quota) < 0 {
 		return &dto.MidjourneyResponse{
 			Code:        4,
 			Description: "quota_not_enough",
 		}
 	}
 
+	if err := service.MarkPersonalRequestDispatch(relayInfo); err != nil {
+		return service.MidjourneyErrorWrapper(constant.MjRequestError, "billing_dispatch_failed")
+	}
 	service.RequestPolicy(c).BeginAttempt(&model.Channel{Id: c.GetInt("channel_id")}, relayInfo.UsingGroup)
 	midjResponseWithStatus, responseBody, err := service.DoMidjourneyHttpRequest(c, time.Second*60, fullRequestURL)
 	accepted := service.RecordMidjourneyPolicyResponse(c, midjResponseWithStatus, err)
@@ -635,7 +649,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	if billingErr != nil {
 		common.SysLog("error consuming Midjourney quota: " + billingErr.Error())
 	}
-	err = midjourneyTask.Insert()
+	err = service.PersistMidjourneyTaskSubmission(relayInfo, midjourneyTask, billingPrepared)
 	if err != nil {
 		return &dto.MidjourneyResponse{
 			Code:        4,

@@ -347,6 +347,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 9. 发送请求
+	if err := service.MarkPersonalRequestDispatch(info); err != nil {
+		return nil, service.TaskErrorWrapperLocal(err, "billing_dispatch_failed", http.StatusServiceUnavailable)
+	}
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)

@@ -34,17 +34,13 @@ type LoginRequest struct {
 }
 
 func GetPasswordEncryptionKey(c *gin.Context) {
-	if !common.PasswordLoginEncryptionEnabled {
-		common.ApiSuccess(c, gin.H{"enabled": false})
-		return
-	}
 	keyID, publicKey := common.PasswordEncryptionPublicKey()
 	if keyID == "" || publicKey == "" {
 		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"enabled":    true,
+		"enabled":    common.PasswordLoginEncryptionEnabled,
 		"kid":        keyID,
 		"public_key": publicKey,
 	})
@@ -335,6 +331,9 @@ func Register(c *gin.Context) {
 }
 
 func GetAllUsers(c *gin.Context) {
+	if serveResellerAdministrativeUsers(c) {
+		return
+	}
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
 	users, total, err := model.GetAllUsers(pageInfo, sortOptions)
@@ -343,14 +342,14 @@ func GetAllUsers(c *gin.Context) {
 		return
 	}
 
-	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(users)
-
-	common.ApiSuccess(c, pageInfo)
+	writeResellerAdminUserPage(c, pageInfo, users, total)
 	return
 }
 
 func SearchUsers(c *gin.Context) {
+	if serveResellerAdministrativeUsers(c) {
+		return
+	}
 	keyword := c.Query("keyword")
 	group := c.Query("group")
 	var role *int
@@ -373,9 +372,7 @@ func SearchUsers(c *gin.Context) {
 		return
 	}
 
-	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(users)
-	common.ApiSuccess(c, pageInfo)
+	writeResellerAdminUserPage(c, pageInfo, users, total)
 	return
 }
 
@@ -641,10 +638,15 @@ func GetUserModels(c *gin.Context) {
 			groupsToQuery = []string{group}
 		}
 	}
+	names, err := filterResellerModelNames(id, service.GetGroupsEnabledModels(groupsToQuery))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    service.GetGroupsEnabledModels(groupsToQuery),
+		"data":    names,
 	})
 }
 

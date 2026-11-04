@@ -244,6 +244,9 @@ func ApplyOneShotBillingAndRecordConsumeLog(ctx *gin.Context, relayInfo *relayco
 	if relayInfo.RequestId == "" {
 		relayInfo.RequestId = common.NewRequestId()
 	}
+	if relayInfo.PersonalPricing != nil {
+		return settlePersonalOneShot(ctx, relayInfo, operation, quota, params)
+	}
 	billingSource := relayInfo.BillingSource
 	if billingSource == "" {
 		billingSource = BillingSourceWallet

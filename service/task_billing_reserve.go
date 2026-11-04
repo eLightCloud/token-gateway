@@ -12,7 +12,10 @@ import (
 // reserved against its selected channel. The first attempt creates the session;
 // retries reuse it and only top up to a higher target.
 func PrepareTaskBillingForAttempt(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
-	if relayInfo.PriceData.FreeModel {
+	if apiErr := PreparePersonalRequestPricing(c, relayInfo); apiErr != nil {
+		return apiErr
+	}
+	if relayInfo.PriceData.FreeModel && relayInfo.PersonalPricing == nil {
 		return nil
 	}
 	targetQuota := max(relayInfo.PriceData.QuotaToPreConsume, relayInfo.PriceData.Quota)

@@ -122,6 +122,7 @@ func notifySystemTaskRunner() {
 
 func StartSystemTaskRunner() {
 	systemTaskRunnerOnce.Do(func() {
+		gopool.Go(func() { RunResellerPublisher(context.Background()) })
 		if common.IsMasterNode {
 			gopool.Go(func() { RunSystemTaskRunner(context.Background()) })
 		}

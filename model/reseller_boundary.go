@@ -35,8 +35,7 @@ func GuardResellerProfile(current, changed *User, password bool) error {
 	return nil
 }
 
-// S1 intentionally keeps both new identities out of consumption, regardless of
-// token cache state. Activation and the full relay policy arrive in S2/S3.
+// Dashboard access is scoped separately from relay admission and API-key use.
 func ResellerDashboardAllowed(userID int, path string) error {
 	kind, err := ResellerUserKind(DB, userID)
 	if err != nil {
@@ -72,9 +71,12 @@ func ResellerDashboardAllowed(userID int, path string) error {
 		}
 		// A receives only dedicated own-customer management, never ordinary admin,
 		// credentials, personal wallet, organization or log endpoints.
-		if strings.HasPrefix(path, "/api/reseller/self/") {
+		if strings.HasPrefix(path, "/api/reseller/self/") || path == "/api/security/factor/replace" {
 			return nil
 		}
+	}
+	if kind == "agent_customer" && !identity.AgentDisabled && ResellerCustomerDashboardPath(path) {
+		return nil
 	}
 	return ErrResellerForbidden
 }
@@ -83,6 +85,16 @@ func ResellerLoginAllowed(userID int) error {
 	kind, err := ResellerUserKind(DB, userID)
 	if err != nil {
 		return err
+	}
+	if kind == "agent_customer" {
+		identity, err := GetResellerIdentity(DB, userID)
+		if err != nil {
+			return err
+		}
+		if identity == nil || identity.AgentDisabled {
+			return ErrResellerForbidden
+		}
+		return nil
 	}
 	if kind != "agent" {
 		return nil

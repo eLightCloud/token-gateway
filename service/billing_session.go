@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -27,17 +28,18 @@ import (
 // BillingSession 封装单次请求的预扣费/结算/退款生命周期。
 // 实现 relaycommon.BillingSettler 接口。
 type BillingSession struct {
-	moneySnapshot    *model.BillingMoneySnapshot
-	relayInfo        *relaycommon.RelayInfo
-	funding          FundingSource
-	preConsumedQuota int  // 实际预扣额度（信任用户可能为 0）
-	tokenConsumed    int  // 令牌额度实际扣减量
-	extraReserved    int  // 发送前补充预扣的额度（订阅退款时需要单独回滚）
-	trusted          bool // 是否命中信任额度旁路
-	fundingSettled   bool // journal 结算事务已提交
-	settled          bool // Settle 全部完成（资金 + 令牌）
-	refunded         bool // Refund 已调用
-	mu               sync.Mutex
+	personalReservation *hosttypes.PersonalBillingFact
+	moneySnapshot       *model.BillingMoneySnapshot
+	relayInfo           *relaycommon.RelayInfo
+	funding             FundingSource
+	preConsumedQuota    int  // 实际预扣额度（信任用户可能为 0）
+	tokenConsumed       int  // 令牌额度实际扣减量
+	extraReserved       int  // 发送前补充预扣的额度（订阅退款时需要单独回滚）
+	trusted             bool // 是否命中信任额度旁路
+	fundingSettled      bool // journal 结算事务已提交
+	settled             bool // Settle 全部完成（资金 + 令牌）
+	refunded            bool // Refund 已调用
+	mu                  sync.Mutex
 }
 
 // Settle 根据实际消耗额度进行结算。
@@ -54,7 +56,7 @@ func (s *BillingSession) settle(ctx context.Context, actualQuota int, channelId 
 		return nil
 	}
 	delta := actualQuota - s.preConsumedQuota
-	if delta == 0 && !applyUsage && logParams == nil {
+	if delta == 0 && !applyUsage && logParams == nil && s.relayInfo.PersonalPricing == nil {
 		s.settled = true
 		return nil
 	}
@@ -77,6 +79,9 @@ func (s *BillingSession) settle(ctx context.Context, actualQuota int, channelId 
 		UsageDelta:     actualQuota,
 		ApplyUsage:     applyUsage,
 		ApplyToken:     !s.relayInfo.IsPlayground,
+	}
+	if err := attachPersonalJournal(ctx, s.relayInfo, journal, actualQuota, "settle", logParams); err != nil {
+		return err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -123,6 +128,10 @@ func (s *BillingSession) settleTaskSubmission(ctx context.Context, actualQuota i
 		ApplyUsage:          true,
 		ApplyToken:          !s.relayInfo.IsPlayground,
 	}
+	if err := attachPersonalJournal(ctx, s.relayInfo, journal, actualQuota, "pending", logParams); err != nil {
+		return err
+	}
+	journal.EntityFinalQuota = journal.FinalQuota
 	task.Quota = 0
 	if ctx == nil {
 		ctx = context.Background()
@@ -134,7 +143,7 @@ func (s *BillingSession) settleTaskSubmission(ctx context.Context, actualQuota i
 	if err := applyTaskSettlementJournalWithTask(ctx, journal, task, logParams); err != nil {
 		return err
 	}
-	task.Quota = actualQuota
+	task.Quota = journal.FinalQuota
 	s.fundingSettled = true
 	if s.funding.Source() == BillingSourceSubscription {
 		s.relayInfo.SubscriptionPostDelta += int64(delta)
@@ -154,6 +163,10 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	if s.relayInfo.RequestId == "" {
 		s.relayInfo.RequestId = common.NewRequestId()
 	}
+	if s.relayInfo.PersonalPricing != nil && !s.personalRefundAllowed() {
+		s.mu.Unlock()
+		return
+	}
 	refundQuota := s.preConsumedQuota
 	journal := &model.TaskSettlementJournal{
 		RequestId:      "refund:" + s.relayInfo.RequestId,
@@ -170,6 +183,11 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	if subscription, ok := s.funding.(*SubscriptionFunding); ok {
 		journal.SubscriptionPreConsumeRequestId = s.relayInfo.RequestId
 		journal.SubscriptionPreConsumed = int(subscription.preConsumed)
+	}
+	if err := attachPersonalJournal(c, s.relayInfo, journal, 0, "refund", nil); err != nil {
+		s.mu.Unlock()
+		common.SysError("personal refund intent failed: " + err.Error())
+		return
 	}
 	s.refunded = true
 	s.mu.Unlock()
@@ -201,6 +219,9 @@ func (s *BillingSession) needsRefundLocked() bool {
 		// fundingSettled 时资金来源已提交结算，不能再退预扣费
 		return false
 	}
+	if s.relayInfo.PersonalPricing != nil {
+		return true
+	}
 	if s.tokenConsumed > 0 {
 		return true
 	}
@@ -217,6 +238,9 @@ func (s *BillingSession) GetPreConsumedQuota() int {
 }
 
 func (s *BillingSession) Reserve(targetQuota int) error {
+	if s.relayInfo.PersonalPricing != nil {
+		return s.reservePersonal(targetQuota)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -278,18 +302,25 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 
 // preConsume 执行预扣费：信任检查后，在同一事务中预扣资金与令牌额度。
 func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIError {
-	effectiveQuota := quota
+	fact, effectiveQuota, err := s.personalReservationFact(quota)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithSkipRetry())
+	}
 
 	// ---- 信任额度旁路 ----
 	if s.shouldTrust(c) {
 		s.trusted = true
 		effectiveQuota = 0
+		if fact != nil {
+			fact.CustomerTarget = 0
+		}
 		logger.LogInfo(c, fmt.Sprintf("用户 %d 额度充足, 信任且不需要预扣费 (funding=%s)", s.relayInfo.UserId, s.funding.Source()))
 	} else if effectiveQuota > 0 {
 		logger.LogInfo(c, fmt.Sprintf("用户 %d 需要预扣费 %s (funding=%s)", s.relayInfo.UserId, logger.FormatQuota(effectiveQuota), s.funding.Source()))
 	}
 
 	result, err := model.PreConsumeBillingBalances(model.BillingBalancePreConsumeParams{
+		PersonalFact:   fact,
 		RequestId:      s.relayInfo.RequestId,
 		UserId:         s.relayInfo.UserId,
 		ModelName:      s.relayInfo.OriginModelName,
@@ -326,6 +357,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 			funding.PlanTitle = planInfo.PlanTitle
 		}
 	}
+	s.personalReservation = fact
 	s.preConsumedQuota = effectiveQuota
 
 	// ---- 同步 RelayInfo 兼容字段 ----
@@ -337,7 +369,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 // shouldTrust 统一信任额度检查，适用于钱包和订阅。
 func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 	// 异步任务（ForcePreConsume=true）必须预扣全额，不允许信任旁路
-	if s.relayInfo.ForcePreConsume {
+	if s.relayInfo.ForcePreConsume || s.relayInfo.PersonalPricing != nil && s.relayInfo.PersonalPricing.AgentUserID > 0 {
 		return false
 	}
 
@@ -405,24 +437,18 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 	}
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
+	if relayInfo.PersonalPricing != nil && relayInfo.PersonalPricing.AgentUserID > 0 {
+		pref = "wallet_only"
+	}
 
 	// 钱包路径需要先检查用户额度
 	tryWallet := func() (*BillingSession, *types.NewAPIError) {
-		userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
+		userQuota, err := model.GetUserQuota(relayInfo.UserId, relayInfo.PersonalPricing != nil && relayInfo.PersonalPricing.AgentUserID > 0)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 		}
-		if userQuota <= 0 {
-			return nil, types.NewErrorWithStatusCode(
-				fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
-				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
-				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
-		}
-		if userQuota-int64(preConsumedQuota) < 0 {
-			return nil, types.NewErrorWithStatusCode(
-				fmt.Errorf("预扣费额度失败, 用户剩余额度: %s, 需要预扣费额度: %s", logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
-				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
-				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		if apiErr := validateWalletQuota(relayInfo, preConsumedQuota, userQuota); apiErr != nil {
+			return nil, apiErr
 		}
 		relayInfo.UserQuota = userQuota
 
