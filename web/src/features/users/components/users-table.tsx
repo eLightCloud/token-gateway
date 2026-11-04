@@ -28,6 +28,8 @@ import {
   DataTablePage,
   useDataTable,
 } from '@/components/data-table'
+import { useResellerAdminUserFilter } from '@/features/reseller/admin-user-filter'
+import { queryResellerAdminUsers } from '@/features/reseller/api'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { createServerError } from '@/lib/server-error-message'
@@ -61,6 +63,7 @@ function isDisabledUserRow(user: User) {
 
 export function UsersTable() {
   const { t } = useTranslation()
+  const resellerFilter = useResellerAdminUserFilter()
   const columns = useUsersColumns()
   const { refreshTrigger } = useUsers()
   const isMobile = useMediaQuery('(max-width: 640px)')
@@ -123,6 +126,7 @@ export function UsersTable() {
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [
       'users',
+      resellerFilter.params,
       pagination.pageIndex + 1,
       pagination.pageSize,
       globalFilter,
@@ -142,16 +146,27 @@ export function UsersTable() {
         ...sortParams,
       }
 
-      const result =
-        hasFilter || hasColumnFilter
-          ? await searchUsers({
-              ...params,
-              keyword: globalFilter,
-              status: statusFilter[0] ?? '',
-              role: roleFilter[0] ?? '',
-              group: groupFilter,
-            })
-          : await getUsers(params)
+      let result: Awaited<ReturnType<typeof getUsers>>
+      if (resellerFilter.active) {
+        result = await queryResellerAdminUsers({
+          ...params,
+          ...resellerFilter.params,
+          keyword: globalFilter,
+          status: statusFilter[0] ?? '',
+          role: roleFilter[0] ?? '',
+          group: groupFilter,
+        })
+      } else if (hasFilter || hasColumnFilter) {
+        result = await searchUsers({
+          ...params,
+          keyword: globalFilter,
+          status: statusFilter[0] ?? '',
+          role: roleFilter[0] ?? '',
+          group: groupFilter,
+        })
+      } else {
+        result = await getUsers(params)
+      }
 
       if (!result.success) {
         throw createServerError(
@@ -215,6 +230,7 @@ export function UsersTable() {
       skeletonKeyPrefix='users-skeleton'
       applyHeaderSize
       toolbarProps={{
+        additionalSearch: resellerFilter.controls,
         searchPlaceholder: t('Filter by username, name or email...'),
         searchDebounceMs: 500,
         filters: [

@@ -19,7 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
 
+import {
+  OrdinaryPersonalPricingHistory,
+  ResellerWallet,
+} from '@/features/reseller/personal'
 import { Wallet } from '@/features/wallet'
+import { useAuthStore } from '@/stores/auth-store'
 
 const walletSearchSchema = z.object({
   show_history: z.boolean().optional(),
@@ -32,5 +37,13 @@ export const Route = createFileRoute('/_authenticated/wallet/')({
 
 function RouteComponent() {
   const { show_history } = Route.useSearch()
-  return <Wallet initialShowHistory={show_history} />
+  const kind = useAuthStore((s) => s.auth.user?.reseller_kind)
+  return kind === 'agent_customer' ? (
+    <ResellerWallet />
+  ) : (
+    <>
+      <Wallet initialShowHistory={show_history} />
+      <OrdinaryPersonalPricingHistory />
+    </>
+  )
 }

@@ -98,9 +98,13 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const isMobile = useMediaQuery('(max-width: 640px)')
   const searchParams = route.useSearch()
   const userId = useAuthStore((state) => state.auth.user?.id)
+  const resellerKind = useAuthStore((state) => state.auth.user?.reseller_kind)
   const { data: showBillingSource = false } = useQuery({
     queryKey: ['usage-log-billing-source', isAdmin, userId],
-    enabled: logCategory === 'common' && userId != null,
+    enabled:
+      logCategory === 'common' &&
+      userId != null &&
+      resellerKind !== 'agent_customer',
     queryFn: async () => {
       if (isAdmin) {
         const plansResult = await getAdminPlans()

@@ -1,0 +1,38 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import { createFileRoute, redirect } from '@tanstack/react-router'
+
+import { resellerSearchSchema } from '@/features/reseller/search'
+import { ResellerWorkspacePage } from '@/features/reseller/workspace-page'
+import { useAuthStore } from '@/stores/auth-store'
+
+export const Route = createFileRoute('/_authenticated/reseller/agents/$id')({
+  validateSearch: resellerSearchSchema,
+  beforeLoad: async ({ params }) => {
+    if ((useAuthStore.getState().auth.user?.role ?? 0) < 10) {
+      throw redirect({ to: '/403' })
+    }
+    if (!/^[1-9][0-9]*$/.test(params.id)) throw redirect({ to: '/403' })
+  },
+  component: Page,
+})
+function Page() {
+  const { id } = Route.useParams()
+  return <ResellerWorkspacePage key={id} userID={Number(id)} admin />
+}

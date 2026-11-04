@@ -42,7 +42,7 @@ export function LanguageSwitcher() {
   const handleChangeLanguage = useCallback(
     async (code: string) => {
       await i18n.changeLanguage(code)
-      if (user) {
+      if (user && user.reseller_kind !== 'agent') {
         try {
           await api.put('/api/user/self', { language: code })
         } catch {

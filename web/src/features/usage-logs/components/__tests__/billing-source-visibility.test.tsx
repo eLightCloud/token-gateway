@@ -56,10 +56,16 @@ async function renderLogs(props: {
   role: number
   enabledPlans: boolean[]
   activeSubscription: boolean
+  resellerKind?: string
 }) {
   useAuthStore
     .getState()
-    .auth.setUser({ id: 1, username: 'tester', role: props.role })
+    .auth.setUser({
+      id: 1,
+      username: 'tester',
+      role: props.role,
+      reseller_kind: props.resellerKind,
+    })
   const records = ['wallet', 'subscription'].map((source, index) =>
     usageLogSchema.parse({
       id: index + 1,
@@ -126,6 +132,16 @@ afterEach(() => {
   useAuthStore.setState(useAuthStore.getInitialState(), true)
   useSystemConfigStore.setState(useSystemConfigStore.getInitialState(), true)
   localStorage.clear()
+})
+
+test('customer logs do not request forbidden subscription configuration', async () => {
+  await renderLogs({
+    role: ROLE.USER,
+    enabledPlans: [],
+    activeSubscription: false,
+    resellerKind: 'agent_customer',
+  })
+  expect(api.get).not.toHaveBeenCalledWith('/api/subscription/self')
 })
 
 test.each([{ enabledPlans: [] }, { enabledPlans: [false] }])(

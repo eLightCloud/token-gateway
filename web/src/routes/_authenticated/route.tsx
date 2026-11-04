@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { AuthenticatedLayout } from '@/components/layout'
+import { guardResellerRoute } from '@/features/reseller/navigation'
 import { getSecurityCompletion } from '@/features/security-completion/api'
 import { resolveAuthentication } from '@/lib/auth-session'
 import { useAuthStore } from '@/stores/auth-store'
@@ -40,9 +41,11 @@ export const Route = createFileRoute('/_authenticated')({
       })
     }
     const security = await getSecurityCompletion()
-    if (security.required && (!security.complete || security.kind !== '')) {
+    if (security.required && !security.complete) {
       throw redirect({ to: '/security-setup' })
     }
+    auth.setUser({ ...auth.user, reseller_kind: security.kind })
+    guardResellerRoute(security.kind, location.pathname)
   },
   component: AuthenticatedLayout,
 })

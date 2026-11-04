@@ -115,6 +115,7 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
+ personal_ratio?: number
   admin_info?: {
     request_policy?: PolicyEvent[]
     is_multi_key?: boolean

@@ -28,6 +28,7 @@ export type UserPermissions = {
 }
 
 export interface AuthUser {
+  reseller_kind?: string
   has_password?: boolean
   id: number
   username: string

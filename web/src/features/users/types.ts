@@ -33,6 +33,8 @@ export const userRoleSchema = z.number()
 export type UserRole = z.infer<typeof userRoleSchema>
 
 export const userSchema = z.object({
+  reseller_kind: z.string().optional(),
+  agent_user_id: z.number().optional(),
   id: z.number(),
   username: z.string(),
   display_name: z.string(),

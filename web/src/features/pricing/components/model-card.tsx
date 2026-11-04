@@ -20,6 +20,7 @@ import { ChevronRight } from 'lucide-react'
 import { memo, useMemo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { PersonalRatioBadge } from '@/features/reseller/personal'
 import { CopyButton } from '@/components/copy-button'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
@@ -318,6 +319,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           className='mt-auto flex min-w-0 flex-col gap-1.5'
         >
           <ModelBillingModeBadge model={props.model} appearance='caption' />
+          <PersonalRatioBadge model={props.model.model_name} />
           {dynamicSummary?.providerCount && (
             <span className='text-muted-foreground text-xs break-words'>
               {t('{{count}} providers', {

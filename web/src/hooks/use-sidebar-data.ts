@@ -48,6 +48,7 @@ import {
   getOrganizationSelf,
   organizationKeys,
 } from '@/features/organizations/api'
+import { resellerSidebar } from '@/features/reseller/navigation'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -63,7 +64,7 @@ export function useSidebarData(): SidebarData {
   const organizationQuery = useQuery({
     queryKey: organizationKeys.self,
     queryFn: getOrganizationSelf,
-    enabled: Boolean(auth.user),
+    enabled: Boolean(auth.user) && !auth.user?.reseller_kind,
     staleTime: 60_000,
   })
   const organizationSelf = organizationQuery.data?.data
@@ -99,7 +100,7 @@ export function useSidebarData(): SidebarData {
       : []),
   ]
 
-  return {
+  const result: SidebarData = {
     navGroups: [
       {
         id: 'chat',
@@ -190,6 +191,11 @@ export function useSidebarData(): SidebarData {
         title: t('Admin'),
         items: [
           {
+            title: t('Reseller management'),
+            url: '/reseller/agents',
+            icon: Users,
+          },
+          {
             title: t('Channels'),
             url: '/channels',
             icon: Radio,
@@ -246,5 +252,8 @@ export function useSidebarData(): SidebarData {
         ],
       },
     ],
+  }
+  return {
+    navGroups: resellerSidebar(auth.user?.reseller_kind, result.navGroups, t),
   }
 }

@@ -23,6 +23,7 @@ import i18next from 'i18next'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 import {
   DEFAULT_CURRENCY_CONFIG,
   useSystemConfigStore,
@@ -99,6 +100,42 @@ const model: PricingModel = {
   },
 }
 const clients: QueryClient[] = []
+
+it('customer model details hide performance controls and make no metrics request', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({
+      id: 3,
+      username: 'customer',
+      role: 1,
+      reseller_kind: 'agent_customer',
+    })
+  const request = vi
+    .spyOn(api, 'get')
+    .mockResolvedValue({ data: { success: true, data: {} } })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  clients.push(client)
+  render(
+    <QueryClientProvider client={client}>
+      <ModelDetailsContent
+        model={model}
+        groupRatio={{ default: 1 }}
+        usableGroup={{ default: { desc: '', ratio: 1 } }}
+        endpointMap={{}}
+        autoGroups={[]}
+        priceRate={1}
+        usdExchangeRate={1}
+        tokenUnit='M'
+      />
+    </QueryClientProvider>
+  )
+  expect(
+    screen.queryByRole('tab', { name: 'Performance' })
+  ).not.toBeInTheDocument()
+  expect(request).not.toHaveBeenCalled()
+})
 
 it('shows nested task conditions and prices in detail and group tables without ambiguous log matches', () => {
   vi.spyOn(api, 'get').mockResolvedValue({ data: { data: { groups: [] } } })
@@ -258,6 +295,7 @@ it('updates count unit labels across cards, table cells and breakdowns with loca
 
 afterEach(async () => {
   cleanup()
+  useAuthStore.getState().auth.reset()
   clients.forEach((client) => client.clear())
   clients.length = 0
   vi.restoreAllMocks()

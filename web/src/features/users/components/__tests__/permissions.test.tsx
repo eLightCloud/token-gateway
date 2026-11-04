@@ -43,7 +43,14 @@ const label = "View other accounts' audit logs"
 const description =
   'View audit records from user and admin roles. Root records are always excluded.'
 
-function renderPermissions(viewerRole: number, allowed?: boolean) {
+function renderPermissions(
+  viewerRole: number,
+  allowed?: boolean,
+  resellerKind?: string
+) {
+  const managedTarget = resellerKind
+    ? { ...target, role: 1, reseller_kind: resellerKind }
+    : target
   useAuthStore
     .getState()
     .auth.setUser({ id: 1, username: 'operator', role: viewerRole })
@@ -78,7 +85,7 @@ function renderPermissions(viewerRole: number, allowed?: boolean) {
       data: {
         success: true,
         data: {
-          ...target,
+          ...managedTarget,
           admin_permissions:
             allowed === undefined ? {} : { audit: { read: allowed } },
         },
@@ -94,7 +101,7 @@ function renderPermissions(viewerRole: number, allowed?: boolean) {
         <UsersMutateDrawer
           open
           onOpenChange={() => undefined}
-          currentRow={target}
+          currentRow={managedTarget}
         />
       </UsersProvider>
     </QueryClientProvider>
@@ -142,4 +149,34 @@ it('admin cannot edit the audit permission even when the catalog is available', 
   expect(
     screen.queryByRole('checkbox', { name: new RegExp(label) })
   ).not.toBeInTheDocument()
+})
+
+it('root can edit reseller customer profile without exposing password, group or quota controls', async () => {
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  renderPermissions(100, undefined, 'agent_customer')
+  const display = await screen.findByDisplayValue('Managed admin')
+  expect(
+    screen.queryByLabelText('Password', { exact: true })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByLabelText('Group', { exact: true })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', { name: 'Adjust Quota' })
+  ).not.toBeInTheDocument()
+  await userEvent.clear(display)
+  await userEvent.type(display, 'Customer profile')
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith(
+      '/api/user/',
+      expect.objectContaining({ id: 2, display_name: 'Customer profile' })
+    )
+  )
+  const payload = put.mock.calls[0][1] as Record<string, unknown>
+  expect(payload.password).toBeUndefined()
+  expect(payload.quota).toBeUndefined()
+  expect(payload.group).toBe('default')
 })

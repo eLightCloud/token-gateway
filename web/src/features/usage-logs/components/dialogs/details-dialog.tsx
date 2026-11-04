@@ -228,6 +228,7 @@ function BillingBreakdown(props: {
     }
   }
 
+  if (other.personal_ratio != null && Number.isFinite(other.personal_ratio)) { rows.push({ label: t('Personal ratio'), value: `${formatRatio(other.personal_ratio)}x` }) }
   const userGR = other.user_group_ratio
   const isUserGR = userGR != null && Number.isFinite(userGR) && userGR !== -1
   const effectiveGR = isUserGR ? userGR : other.group_ratio

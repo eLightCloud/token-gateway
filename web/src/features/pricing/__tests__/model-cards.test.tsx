@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createJSONStorage } from 'zustand/middleware'
 
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 import {
   DEFAULT_CURRENCY_CONFIG,
   useSystemConfigStore,
@@ -84,10 +85,48 @@ afterEach(() => {
     .setConfig({ currency: { ...DEFAULT_CURRENCY_CONFIG } })
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  useAuthStore.getState().auth.reset()
   useSystemConfigStore.persist.setOptions({ storage: originalStorage })
 })
 
 describe('model cards', () => {
+  it('customer cards skip aggregate metrics and never reuse another viewer’s cached metrics', async () => {
+    useAuthStore
+      .getState()
+      .auth.setUser({
+        id: 3,
+        username: 'customer',
+        role: 1,
+        reseller_kind: 'agent_customer',
+      })
+    const request = vi
+      .spyOn(api, 'get')
+      .mockResolvedValue({ data: { success: true, data: [] } })
+    queryClient.setQueryData(['perf-metrics-summary', 24], {
+      success: true,
+      data: {
+        models: [
+          {
+            model_name: 'example-model',
+            success_rate: 99.7,
+            avg_latency_ms: 1234,
+            avg_tps: 87,
+          },
+        ],
+      },
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ModelCardGrid models={[pricingModel()]} onModelClick={vi.fn()} />
+      </QueryClientProvider>
+    )
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0))
+    expect(request).not.toHaveBeenCalledWith(
+      '/api/perf-metrics/summary',
+      expect.anything()
+    )
+    expect(screen.queryByText(/99.7/)).not.toBeInTheDocument()
+  })
   it('shows separate generic and image cache prices including a free image cache', () => {
     render(
       <CachedPriceCell

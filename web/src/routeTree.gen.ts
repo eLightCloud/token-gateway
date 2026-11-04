@@ -53,6 +53,8 @@ import { Route as AuthenticatedPlaygroundIndexRouteImport } from './routes/_auth
 import { Route as AuthenticatedProfileIndexRouteImport } from './routes/_authenticated/profile/index'
 import { Route as AuthenticatedReconciliationIndexRouteImport } from './routes/_authenticated/reconciliation/index'
 import { Route as AuthenticatedRedemptionCodesIndexRouteImport } from './routes/_authenticated/redemption-codes/index'
+import { Route as AuthenticatedResellerBillingRouteImport } from './routes/_authenticated/reseller/billing'
+import { Route as AuthenticatedResellerProcurementRouteImport } from './routes/_authenticated/reseller/procurement'
 import { Route as AuthenticatedSecurityIndexRouteImport } from './routes/_authenticated/security/index'
 import { Route as AuthenticatedSubscriptionsIndexRouteImport } from './routes/_authenticated/subscriptions/index'
 import { Route as AuthenticatedSystemInfoIndexRouteImport } from './routes/_authenticated/system-info/index'
@@ -66,6 +68,10 @@ import { Route as AuthenticatedWalletIndexRouteImport } from './routes/_authenti
 import { Route as PricingModelIdIndexRouteImport } from './routes/pricing/$modelId/index'
 import { Route as AuthenticatedAdminOrganizationsIndexRouteImport } from './routes/_authenticated/admin/organizations/index'
 import { Route as AuthenticatedAdminOrganizationsIdRouteImport } from './routes/_authenticated/admin/organizations/$id'
+import { Route as AuthenticatedResellerAgentsIndexRouteImport } from './routes/_authenticated/reseller/agents/index'
+import { Route as AuthenticatedResellerAgentsIdRouteImport } from './routes/_authenticated/reseller/agents/$id'
+import { Route as AuthenticatedResellerCustomersIndexRouteImport } from './routes/_authenticated/reseller/customers/index'
+import { Route as AuthenticatedResellerCustomersIdRouteImport } from './routes/_authenticated/reseller/customers/$id'
 import { Route as AuthenticatedSystemSettingsAuthIndexRouteImport } from './routes/_authenticated/system-settings/auth/index'
 import { Route as AuthenticatedSystemSettingsAuthSectionRouteImport } from './routes/_authenticated/system-settings/auth/$section'
 import { Route as AuthenticatedSystemSettingsBillingIndexRouteImport } from './routes/_authenticated/system-settings/billing/index'
@@ -317,6 +323,18 @@ const AuthenticatedRedemptionCodesIndexRoute =
     path: '/redemption-codes/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedResellerBillingRoute =
+  AuthenticatedResellerBillingRouteImport.update({
+    id: '/reseller/billing',
+    path: '/reseller/billing',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedResellerProcurementRoute =
+  AuthenticatedResellerProcurementRouteImport.update({
+    id: '/reseller/procurement',
+    path: '/reseller/procurement',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedSecurityIndexRoute =
   AuthenticatedSecurityIndexRouteImport.update({
     id: '/security/',
@@ -391,6 +409,30 @@ const AuthenticatedAdminOrganizationsIdRoute =
   AuthenticatedAdminOrganizationsIdRouteImport.update({
     id: '/admin/organizations/$id',
     path: '/admin/organizations/$id',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedResellerAgentsIndexRoute =
+  AuthenticatedResellerAgentsIndexRouteImport.update({
+    id: '/reseller/agents/',
+    path: '/reseller/agents/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedResellerAgentsIdRoute =
+  AuthenticatedResellerAgentsIdRouteImport.update({
+    id: '/reseller/agents/$id',
+    path: '/reseller/agents/$id',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedResellerCustomersIndexRoute =
+  AuthenticatedResellerCustomersIndexRouteImport.update({
+    id: '/reseller/customers/',
+    path: '/reseller/customers/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedResellerCustomersIdRoute =
+  AuthenticatedResellerCustomersIdRouteImport.update({
+    id: '/reseller/customers/$id',
+    path: '/reseller/customers/$id',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedSystemSettingsAuthIndexRoute =
@@ -524,6 +566,8 @@ export interface FileRoutesByFullPath {
   '/organization/logs': typeof AuthenticatedOrganizationLogsRoute
   '/organization/members': typeof AuthenticatedOrganizationMembersRoute
   '/organization/usage': typeof AuthenticatedOrganizationUsageRoute
+  '/reseller/billing': typeof AuthenticatedResellerBillingRoute
+  '/reseller/procurement': typeof AuthenticatedResellerProcurementRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
@@ -545,6 +589,8 @@ export interface FileRoutesByFullPath {
   '/wallet/': typeof AuthenticatedWalletIndexRoute
   '/pricing/$modelId/': typeof PricingModelIdIndexRoute
   '/admin/organizations/$id': typeof AuthenticatedAdminOrganizationsIdRoute
+  '/reseller/agents/$id': typeof AuthenticatedResellerAgentsIdRoute
+  '/reseller/customers/$id': typeof AuthenticatedResellerCustomersIdRoute
   '/system-settings/auth/$section': typeof AuthenticatedSystemSettingsAuthSectionRoute
   '/system-settings/billing/$section': typeof AuthenticatedSystemSettingsBillingSectionRoute
   '/system-settings/content/$section': typeof AuthenticatedSystemSettingsContentSectionRoute
@@ -554,6 +600,8 @@ export interface FileRoutesByFullPath {
   '/system-settings/security/$section': typeof AuthenticatedSystemSettingsSecuritySectionRoute
   '/system-settings/site/$section': typeof AuthenticatedSystemSettingsSiteSectionRoute
   '/admin/organizations/': typeof AuthenticatedAdminOrganizationsIndexRoute
+  '/reseller/agents/': typeof AuthenticatedResellerAgentsIndexRoute
+  '/reseller/customers/': typeof AuthenticatedResellerCustomersIndexRoute
   '/system-settings/auth/': typeof AuthenticatedSystemSettingsAuthIndexRoute
   '/system-settings/billing/': typeof AuthenticatedSystemSettingsBillingIndexRoute
   '/system-settings/content/': typeof AuthenticatedSystemSettingsContentIndexRoute
@@ -596,6 +644,8 @@ export interface FileRoutesByTo {
   '/organization/logs': typeof AuthenticatedOrganizationLogsRoute
   '/organization/members': typeof AuthenticatedOrganizationMembersRoute
   '/organization/usage': typeof AuthenticatedOrganizationUsageRoute
+  '/reseller/billing': typeof AuthenticatedResellerBillingRoute
+  '/reseller/procurement': typeof AuthenticatedResellerProcurementRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
@@ -617,6 +667,8 @@ export interface FileRoutesByTo {
   '/wallet': typeof AuthenticatedWalletIndexRoute
   '/pricing/$modelId': typeof PricingModelIdIndexRoute
   '/admin/organizations/$id': typeof AuthenticatedAdminOrganizationsIdRoute
+  '/reseller/agents/$id': typeof AuthenticatedResellerAgentsIdRoute
+  '/reseller/customers/$id': typeof AuthenticatedResellerCustomersIdRoute
   '/system-settings/auth/$section': typeof AuthenticatedSystemSettingsAuthSectionRoute
   '/system-settings/billing/$section': typeof AuthenticatedSystemSettingsBillingSectionRoute
   '/system-settings/content/$section': typeof AuthenticatedSystemSettingsContentSectionRoute
@@ -626,6 +678,8 @@ export interface FileRoutesByTo {
   '/system-settings/security/$section': typeof AuthenticatedSystemSettingsSecuritySectionRoute
   '/system-settings/site/$section': typeof AuthenticatedSystemSettingsSiteSectionRoute
   '/admin/organizations': typeof AuthenticatedAdminOrganizationsIndexRoute
+  '/reseller/agents': typeof AuthenticatedResellerAgentsIndexRoute
+  '/reseller/customers': typeof AuthenticatedResellerCustomersIndexRoute
   '/system-settings/auth': typeof AuthenticatedSystemSettingsAuthIndexRoute
   '/system-settings/billing': typeof AuthenticatedSystemSettingsBillingIndexRoute
   '/system-settings/content': typeof AuthenticatedSystemSettingsContentIndexRoute
@@ -672,6 +726,8 @@ export interface FileRoutesById {
   '/_authenticated/organization/logs': typeof AuthenticatedOrganizationLogsRoute
   '/_authenticated/organization/members': typeof AuthenticatedOrganizationMembersRoute
   '/_authenticated/organization/usage': typeof AuthenticatedOrganizationUsageRoute
+  '/_authenticated/reseller/billing': typeof AuthenticatedResellerBillingRoute
+  '/_authenticated/reseller/procurement': typeof AuthenticatedResellerProcurementRoute
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/_authenticated/usage-logs/audit': typeof AuthenticatedUsageLogsAuditRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
@@ -693,6 +749,8 @@ export interface FileRoutesById {
   '/_authenticated/wallet/': typeof AuthenticatedWalletIndexRoute
   '/pricing/$modelId/': typeof PricingModelIdIndexRoute
   '/_authenticated/admin/organizations/$id': typeof AuthenticatedAdminOrganizationsIdRoute
+  '/_authenticated/reseller/agents/$id': typeof AuthenticatedResellerAgentsIdRoute
+  '/_authenticated/reseller/customers/$id': typeof AuthenticatedResellerCustomersIdRoute
   '/_authenticated/system-settings/auth/$section': typeof AuthenticatedSystemSettingsAuthSectionRoute
   '/_authenticated/system-settings/billing/$section': typeof AuthenticatedSystemSettingsBillingSectionRoute
   '/_authenticated/system-settings/content/$section': typeof AuthenticatedSystemSettingsContentSectionRoute
@@ -702,6 +760,8 @@ export interface FileRoutesById {
   '/_authenticated/system-settings/security/$section': typeof AuthenticatedSystemSettingsSecuritySectionRoute
   '/_authenticated/system-settings/site/$section': typeof AuthenticatedSystemSettingsSiteSectionRoute
   '/_authenticated/admin/organizations/': typeof AuthenticatedAdminOrganizationsIndexRoute
+  '/_authenticated/reseller/agents/': typeof AuthenticatedResellerAgentsIndexRoute
+  '/_authenticated/reseller/customers/': typeof AuthenticatedResellerCustomersIndexRoute
   '/_authenticated/system-settings/auth/': typeof AuthenticatedSystemSettingsAuthIndexRoute
   '/_authenticated/system-settings/billing/': typeof AuthenticatedSystemSettingsBillingIndexRoute
   '/_authenticated/system-settings/content/': typeof AuthenticatedSystemSettingsContentIndexRoute
@@ -747,6 +807,8 @@ export interface FileRouteTypes {
     | '/organization/logs'
     | '/organization/members'
     | '/organization/usage'
+    | '/reseller/billing'
+    | '/reseller/procurement'
     | '/usage-logs/$section'
     | '/usage-logs/audit'
     | '/channels/'
@@ -768,6 +830,8 @@ export interface FileRouteTypes {
     | '/wallet/'
     | '/pricing/$modelId/'
     | '/admin/organizations/$id'
+    | '/reseller/agents/$id'
+    | '/reseller/customers/$id'
     | '/system-settings/auth/$section'
     | '/system-settings/billing/$section'
     | '/system-settings/content/$section'
@@ -777,6 +841,8 @@ export interface FileRouteTypes {
     | '/system-settings/security/$section'
     | '/system-settings/site/$section'
     | '/admin/organizations/'
+    | '/reseller/agents/'
+    | '/reseller/customers/'
     | '/system-settings/auth/'
     | '/system-settings/billing/'
     | '/system-settings/content/'
@@ -819,6 +885,8 @@ export interface FileRouteTypes {
     | '/organization/logs'
     | '/organization/members'
     | '/organization/usage'
+    | '/reseller/billing'
+    | '/reseller/procurement'
     | '/usage-logs/$section'
     | '/usage-logs/audit'
     | '/channels'
@@ -840,6 +908,8 @@ export interface FileRouteTypes {
     | '/wallet'
     | '/pricing/$modelId'
     | '/admin/organizations/$id'
+    | '/reseller/agents/$id'
+    | '/reseller/customers/$id'
     | '/system-settings/auth/$section'
     | '/system-settings/billing/$section'
     | '/system-settings/content/$section'
@@ -849,6 +919,8 @@ export interface FileRouteTypes {
     | '/system-settings/security/$section'
     | '/system-settings/site/$section'
     | '/admin/organizations'
+    | '/reseller/agents'
+    | '/reseller/customers'
     | '/system-settings/auth'
     | '/system-settings/billing'
     | '/system-settings/content'
@@ -894,6 +966,8 @@ export interface FileRouteTypes {
     | '/_authenticated/organization/logs'
     | '/_authenticated/organization/members'
     | '/_authenticated/organization/usage'
+    | '/_authenticated/reseller/billing'
+    | '/_authenticated/reseller/procurement'
     | '/_authenticated/usage-logs/$section'
     | '/_authenticated/usage-logs/audit'
     | '/_authenticated/channels/'
@@ -915,6 +989,8 @@ export interface FileRouteTypes {
     | '/_authenticated/wallet/'
     | '/pricing/$modelId/'
     | '/_authenticated/admin/organizations/$id'
+    | '/_authenticated/reseller/agents/$id'
+    | '/_authenticated/reseller/customers/$id'
     | '/_authenticated/system-settings/auth/$section'
     | '/_authenticated/system-settings/billing/$section'
     | '/_authenticated/system-settings/content/$section'
@@ -924,6 +1000,8 @@ export interface FileRouteTypes {
     | '/_authenticated/system-settings/security/$section'
     | '/_authenticated/system-settings/site/$section'
     | '/_authenticated/admin/organizations/'
+    | '/_authenticated/reseller/agents/'
+    | '/_authenticated/reseller/customers/'
     | '/_authenticated/system-settings/auth/'
     | '/_authenticated/system-settings/billing/'
     | '/_authenticated/system-settings/content/'
@@ -1263,6 +1341,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRedemptionCodesIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/reseller/billing': {
+      id: '/_authenticated/reseller/billing'
+      path: '/reseller/billing'
+      fullPath: '/reseller/billing'
+      preLoaderRoute: typeof AuthenticatedResellerBillingRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/reseller/procurement': {
+      id: '/_authenticated/reseller/procurement'
+      path: '/reseller/procurement'
+      fullPath: '/reseller/procurement'
+      preLoaderRoute: typeof AuthenticatedResellerProcurementRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/security/': {
       id: '/_authenticated/security/'
       path: '/security'
@@ -1352,6 +1444,34 @@ declare module '@tanstack/react-router' {
       path: '/admin/organizations/$id'
       fullPath: '/admin/organizations/$id'
       preLoaderRoute: typeof AuthenticatedAdminOrganizationsIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/reseller/agents/': {
+      id: '/_authenticated/reseller/agents/'
+      path: '/reseller/agents'
+      fullPath: '/reseller/agents/'
+      preLoaderRoute: typeof AuthenticatedResellerAgentsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/reseller/agents/$id': {
+      id: '/_authenticated/reseller/agents/$id'
+      path: '/reseller/agents/$id'
+      fullPath: '/reseller/agents/$id'
+      preLoaderRoute: typeof AuthenticatedResellerAgentsIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/reseller/customers/': {
+      id: '/_authenticated/reseller/customers/'
+      path: '/reseller/customers'
+      fullPath: '/reseller/customers/'
+      preLoaderRoute: typeof AuthenticatedResellerCustomersIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/reseller/customers/$id': {
+      id: '/_authenticated/reseller/customers/$id'
+      path: '/reseller/customers/$id'
+      fullPath: '/reseller/customers/$id'
+      preLoaderRoute: typeof AuthenticatedResellerCustomersIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/system-settings/auth/': {
@@ -1573,6 +1693,8 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedOrganizationLogsRoute: typeof AuthenticatedOrganizationLogsRoute
   AuthenticatedOrganizationMembersRoute: typeof AuthenticatedOrganizationMembersRoute
   AuthenticatedOrganizationUsageRoute: typeof AuthenticatedOrganizationUsageRoute
+  AuthenticatedResellerBillingRoute: typeof AuthenticatedResellerBillingRoute
+  AuthenticatedResellerProcurementRoute: typeof AuthenticatedResellerProcurementRoute
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
   AuthenticatedUsageLogsAuditRoute: typeof AuthenticatedUsageLogsAuditRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
@@ -1592,7 +1714,11 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedUsersIndexRoute: typeof AuthenticatedUsersIndexRoute
   AuthenticatedWalletIndexRoute: typeof AuthenticatedWalletIndexRoute
   AuthenticatedAdminOrganizationsIdRoute: typeof AuthenticatedAdminOrganizationsIdRoute
+  AuthenticatedResellerAgentsIdRoute: typeof AuthenticatedResellerAgentsIdRoute
+  AuthenticatedResellerCustomersIdRoute: typeof AuthenticatedResellerCustomersIdRoute
   AuthenticatedAdminOrganizationsIndexRoute: typeof AuthenticatedAdminOrganizationsIndexRoute
+  AuthenticatedResellerAgentsIndexRoute: typeof AuthenticatedResellerAgentsIndexRoute
+  AuthenticatedResellerCustomersIndexRoute: typeof AuthenticatedResellerCustomersIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -1607,6 +1733,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedOrganizationLogsRoute: AuthenticatedOrganizationLogsRoute,
   AuthenticatedOrganizationMembersRoute: AuthenticatedOrganizationMembersRoute,
   AuthenticatedOrganizationUsageRoute: AuthenticatedOrganizationUsageRoute,
+  AuthenticatedResellerBillingRoute: AuthenticatedResellerBillingRoute,
+  AuthenticatedResellerProcurementRoute: AuthenticatedResellerProcurementRoute,
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,
   AuthenticatedUsageLogsAuditRoute: AuthenticatedUsageLogsAuditRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
@@ -1628,8 +1756,13 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedWalletIndexRoute: AuthenticatedWalletIndexRoute,
   AuthenticatedAdminOrganizationsIdRoute:
     AuthenticatedAdminOrganizationsIdRoute,
+  AuthenticatedResellerAgentsIdRoute: AuthenticatedResellerAgentsIdRoute,
+  AuthenticatedResellerCustomersIdRoute: AuthenticatedResellerCustomersIdRoute,
   AuthenticatedAdminOrganizationsIndexRoute:
     AuthenticatedAdminOrganizationsIndexRoute,
+  AuthenticatedResellerAgentsIndexRoute: AuthenticatedResellerAgentsIndexRoute,
+  AuthenticatedResellerCustomersIndexRoute:
+    AuthenticatedResellerCustomersIndexRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =

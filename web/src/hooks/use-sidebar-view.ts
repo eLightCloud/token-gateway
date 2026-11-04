@@ -48,6 +48,7 @@ export function useSidebarView(): ResolvedSidebarView {
   const { t } = useTranslation()
   const pathname = useLocation({ select: (l) => l.pathname })
   const userRole = useAuthStore((s) => s.auth.user?.role)
+  const resellerKind = useAuthStore((s) => s.auth.user?.reseller_kind)
   const rootSidebarData = useSidebarData()
   const configFilteredRoot = useSidebarConfig(rootSidebarData.navGroups)
 
@@ -66,7 +67,7 @@ export function useSidebarView(): ResolvedSidebarView {
 
   const view = resolveSidebarView(pathname)
 
-  if (view) {
+  if (view && !resellerKind) {
     return {
       key: view.id,
       view,

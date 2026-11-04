@@ -33,7 +33,6 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { ConfirmDialog } from '@/components/confirm-dialog'
 import { DataTableRowActionMenu } from '@/components/data-table/core/row-action-menu'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,13 +45,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { UserPersonalPricingAction } from '@/features/reseller/user-pricing-action'
 import { SecurityRecoveryDialog } from '@/features/security-completion/recovery-dialog'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
 import { hasPermission } from '@/lib/admin-permissions'
 import { handleServerError } from '@/lib/handle-server-error'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { manageUser, resetUserPasskey } from '../api'
+import { manageUser } from '../api'
 import {
   USER_STATUS,
   USER_ROLE,
@@ -72,7 +72,10 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
   const user = row.original
   const operator = useAuthStore((s) => s.auth.user)
-  const canRecoverSecurity = hasPermission(operator, 'account_security', 'recover') && operator?.id !== user.id && (operator?.role === USER_ROLE.ROOT || (operator?.role ?? 0) > user.role)
+  const canRecoverSecurity =
+    hasPermission(operator, 'account_security', 'recover') &&
+    operator?.id !== user.id &&
+    (operator?.role === USER_ROLE.ROOT || (operator?.role ?? 0) > user.role)
   const { setOpen, setCurrentRow, triggerRefresh } = useUsers()
   const [resetPasskeyOpen, setResetPasskeyOpen] = useState(false)
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
@@ -101,22 +104,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       }
     } catch (error) {
       handleServerError(error, t(ERROR_MESSAGES.UNEXPECTED))
-    }
-  }
-
-  const handleResetPasskey = async () => {
-    try {
-      const result = await resetUserPasskey(user.id)
-      if (result.success) {
-        toast.success(t('Passkey reset successfully'))
-        triggerRefresh()
-      } else {
-        handleServerError(result, t('Failed to reset Passkey'))
-      }
-    } catch (error) {
-      handleServerError(error, t(ERROR_MESSAGES.UNEXPECTED))
-    } finally {
-      setResetPasskeyOpen(false)
     }
   }
 
@@ -150,6 +137,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         ariaLabel={t('Open menu')}
         contentClassName='w-48'
       >
+        {!user.reseller_kind && <UserPersonalPricingAction userID={user.id} />}
         {isDisabled ? (
           <DropdownMenuItem onClick={() => handleManage('enable')}>
             {t('Enable')}
@@ -169,7 +157,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuItem>
         )}
 
-        {isAdmin && !isRoot && (
+        {!user.reseller_kind && isAdmin && !isRoot && (
           <DropdownMenuItem onClick={() => handleManage('demote')}>
             {t('Demote')}
             <DropdownMenuShortcut>
@@ -178,7 +166,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuItem>
         )}
 
-        {!isAdmin && (
+        {!user.reseller_kind && !isAdmin && (
           <DropdownMenuItem onClick={() => handleManage('promote')}>
             {t('Promote')}
             <DropdownMenuShortcut>
@@ -199,17 +187,19 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuShortcut>
         </DropdownMenuItem>
 
-        <DropdownMenuItem
-          onSelect={(event) => {
-            event.preventDefault()
-            setSubscriptionsDialogOpen(true)
-          }}
-        >
-          {t('Manage Subscriptions')}
-          <DropdownMenuShortcut>
-            <CreditCard size={16} />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
+        {!user.reseller_kind && (
+          <DropdownMenuItem
+            onSelect={(event) => {
+              event.preventDefault()
+              setSubscriptionsDialogOpen(true)
+            }}
+          >
+            {t('Manage Subscriptions')}
+            <DropdownMenuShortcut>
+              <CreditCard size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
 
         <DropdownMenuSeparator />
 
@@ -218,7 +208,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             event.preventDefault()
             setResetPasskeyOpen(true)
           }}
-          disabled={isRoot}
+          disabled={!canRecoverSecurity}
         >
           {t('Reset Passkey')}
           <DropdownMenuShortcut>
@@ -231,9 +221,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             event.preventDefault()
             setEmailChangeOpen(true)
           }}
-          disabled={
-            !canRecoverSecurity
-          }
+          disabled={!canRecoverSecurity}
         >
           {t('Request email change')}
         </DropdownMenuItem>
@@ -242,9 +230,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             event.preventDefault()
             setResetTwoFAOpen(true)
           }}
-          disabled={
-            !canRecoverSecurity
-          }
+          disabled={!canRecoverSecurity}
         >
           {t('Reset 2FA')}
           <DropdownMenuShortcut>
@@ -254,28 +240,27 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
         <DropdownMenuSeparator />
 
-        <DropdownMenuItem
-          onClick={handleDelete}
-          className='text-destructive focus:text-destructive'
-          disabled={isRoot}
-        >
-          {t('Delete')}
-          <DropdownMenuShortcut>
-            <Trash2 size={16} />
-          </DropdownMenuShortcut>
-        </DropdownMenuItem>
+        {!user.reseller_kind && (
+          <DropdownMenuItem
+            onClick={handleDelete}
+            className='text-destructive focus:text-destructive'
+            disabled={isRoot}
+          >
+            {t('Delete')}
+            <DropdownMenuShortcut>
+              <Trash2 size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
       </DataTableRowActionMenu>
 
-      <ConfirmDialog
+      <SecurityRecoveryDialog
+        key={`passkey-${user.id}`}
+        passkeyRecovery
         open={resetPasskeyOpen}
         onOpenChange={setResetPasskeyOpen}
-        title={t('Reset Passkey')}
-        desc={t(
-          'Reset Passkey for {{username}}? The user will need to register a new Passkey before using passwordless login.',
-          { username: user.username }
-        )}
-        confirmText={t('Reset Passkey')}
-        handleConfirm={handleResetPasskey}
+        userID={user.id}
+        onSuccess={triggerRefresh}
       />
 
       <SecurityRecoveryDialog
