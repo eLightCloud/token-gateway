@@ -126,6 +126,12 @@ func BindVerificationOperation(operation VerificationOperation) (VerificationBin
 		if err != nil {
 			return VerificationBinding{}, err
 		}
+	case VerificationScopeEmailDeliverySettings, VerificationScopeEmailDeliveryTest:
+		var err error
+		normalized, err = NormalizeEmailDeliveryVerification(operation)
+		if err != nil {
+			return VerificationBinding{}, err
+		}
 	case VerificationScopeVantageIntegrationSettings, VerificationScopeVideoEnhanceSettings, VerificationScopePasskeyRegister, VerificationScopePasskeyDelete, VerificationScopeTwoFASetup,
 		VerificationScopeTwoFADisable, VerificationScopeTwoFABackupCodes,
 		VerificationScopeAccessTokenGenerate, VerificationScopeAccessTokenRevoke,
@@ -192,7 +198,7 @@ func securityVerificationPolicy(scope string, state model.UserVerificationState)
 		if !state.HasTwoFA {
 			return nil, model.ErrTwoFANotEnabled
 		}
-	case VerificationScopeVantageIntegrationSettings, VerificationScopeVideoEnhanceSettings, VerificationScopePasskeyRegister, VerificationScopeTwoFASetup,
+	case VerificationScopeEmailDeliverySettings, VerificationScopeEmailDeliveryTest, VerificationScopeVantageIntegrationSettings, VerificationScopeVideoEnhanceSettings, VerificationScopePasskeyRegister, VerificationScopeTwoFASetup,
 		VerificationScopeAccessTokenGenerate, VerificationScopeAccessTokenRevoke,
 		VerificationScopeAccountBind, VerificationScopeAccountUnbind,
 		VerificationScopePasswordSet, VerificationScopePasswordChange, VerificationScopeAccountDelete:
@@ -247,7 +253,7 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 		}
 	}
 
-	if (scope == VerificationScopeChannelKeyRead || scope == VerificationScopeVideoEnhanceSettings || scope == VerificationScopeVantageIntegrationSettings) && state.Role != common.RoleRootUser {
+	if (IsEmailDeliveryVerificationScope(scope) || scope == VerificationScopeChannelKeyRead || scope == VerificationScopeVideoEnhanceSettings || scope == VerificationScopeVantageIntegrationSettings) && state.Role != common.RoleRootUser {
 		return nil, ErrVerificationForbidden
 	}
 	methods, err := securityVerificationPolicy(scope, *state)

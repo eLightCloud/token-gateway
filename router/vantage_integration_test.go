@@ -243,6 +243,7 @@ func TestVantageIntegrationHTTPContract(t *testing.T) {
 		require.NoError(t, err)
 		settingsRoutes := engine.Group("/api/option", middleware.RootAuth())
 		SetVantageIntegrationSettingsRouter(settingsRoutes)
+		setEmailDeliverySettingsRouter(settingsRoutes)
 		settingsRoutes.GET("/", controller.GetOptions)
 		originalOptions := common.OptionMap
 		common.OptionMap = map[string]string{strings.ToUpper(model.VantageIntegrationOptionKey): "private-config-marker"}
@@ -253,6 +254,41 @@ func TestVantageIntegrationHTTPContract(t *testing.T) {
 		engine.ServeHTTP(optionsResponse, optionsRequest)
 		require.Equal(t, http.StatusOK, optionsResponse.Code)
 		assert.NotContains(t, optionsResponse.Body.String(), "private-config-marker")
+		for _, scenario := range []struct {
+			method, path, token, origin string
+			status                      int
+		}{
+			{"GET", "/api/option/email_delivery", "", "", http.StatusUnauthorized},
+			{"GET", "/api/option/email_delivery", adminToken, "", http.StatusForbidden},
+			{"GET", "/api/option/email_delivery", rootToken, "", http.StatusOK},
+			{"PUT", "/api/option/email_delivery", adminToken, "", http.StatusForbidden},
+			{"POST", "/api/option/email_delivery/test", adminToken, "", http.StatusForbidden},
+		} {
+			req := httptest.NewRequest(scenario.method, scenario.path, strings.NewReader(`{}`))
+			if scenario.token != "" {
+				req.Header.Set("Authorization", "Bearer "+scenario.token)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			result := httptest.NewRecorder()
+			engine.ServeHTTP(result, req)
+			assert.Equal(t, scenario.status, result.Code, result.Body.String())
+		}
+		previousSecure := common.SessionCookieSecure
+		common.SessionCookieSecure = true
+		for _, path := range []string{"/api/option/email_delivery", "/api/option/email_delivery/test"} {
+			method := "PUT"
+			if strings.HasSuffix(path, "/test") {
+				method = "POST"
+			}
+			req := httptest.NewRequest(method, path, strings.NewReader(`{}`))
+			req.Header.Set("Authorization", "Bearer "+rootToken)
+			req.Header.Set("Origin", "https://attacker.example")
+			result := httptest.NewRecorder()
+			engine.ServeHTTP(result, req)
+			assert.Equal(t, http.StatusForbidden, result.Code)
+			assert.Contains(t, result.Body.String(), "AUTH_ORIGIN_FORBIDDEN")
+		}
+		common.SessionCookieSecure = previousSecure
 
 		call := func(method, bearer, body string, proofOverride ...string) *httptest.ResponseRecorder {
 			req := httptest.NewRequest(method, "/api/option/vantage_integration", strings.NewReader(body))

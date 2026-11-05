@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -251,4 +252,33 @@ func TestRedisFailurePolicies(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, userResponse.Code)
 	assert.Empty(t, userResponse.Body.String())
 	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/email", "192.0.2.62:12345").Code)
+}
+
+func TestEmailDeliveryTestRateLimitAcrossReplicas(t *testing.T) {
+	_, _ = useRateLimitMiniRedis(t)
+	first, second := gin.New(), gin.New()
+	for _, engine := range []*gin.Engine{first, second} {
+		engine.POST("/email-test", func(c *gin.Context) { userID, _ := strconv.Atoi(c.GetHeader("Test-User")); c.Set("id", userID) }, EmailDeliveryTestRateLimit(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	}
+	scenarios := []struct {
+		user     int
+		expected int
+	}{
+		{1, 204}, {1, 204}, {1, 204}, {1, 429},
+		{2, 204}, {2, 204}, {2, 204}, {3, 204}, {3, 204}, {3, 204}, {4, 204}, {4, 429},
+	}
+	for index, scenario := range scenarios {
+		engine := first
+		if index%2 == 1 {
+			engine = second
+		}
+		request := httptest.NewRequest(http.MethodPost, "/email-test", nil)
+		request.Header.Set("Test-User", strconv.Itoa(scenario.user))
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		assert.Equal(t, scenario.expected, response.Code)
+		if scenario.expected == 429 {
+			assert.NotEmpty(t, response.Header().Get("Retry-After"))
+		}
+	}
 }

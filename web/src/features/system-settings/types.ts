@@ -362,15 +362,6 @@ export type OperationsSettings = {
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean
   QuotaRemindThreshold: string
-  SMTPServer: string
-  SMTPPort: string
-  SMTPAccount: string
-  SMTPFrom: string
-  SMTPToken: string
-  SMTPSSLEnabled: boolean
-  SMTPStartTLSEnabled: boolean
-  SMTPInsecureSkipVerify: boolean
-  SMTPForceAuthLogin: boolean
   WorkerUrl: string
   WorkerValidKey: string
   WorkerAllowHttpImageRequestEnabled: boolean

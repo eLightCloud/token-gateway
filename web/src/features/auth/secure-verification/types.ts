@@ -16,6 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type {
+  EmailIntent,
+  EmailTestIntent,
+} from '@/features/system-settings/email-delivery/types'
 import type { AuthBundle } from '@/stores/auth-store'
 
 export type VerificationMethod =
@@ -25,6 +29,8 @@ export type VerificationMethod =
   | 'oauth'
   | 'session'
 export type SecurityProofScope =
+  | 'email.delivery.settings.write'
+  | 'email.delivery.test.send'
   | 'vantage.integration.settings.write'
   | 'video.enhance.settings.write'
   | 'channel.key.read'
@@ -45,6 +51,8 @@ export type SecurityProofScope =
   | 'account.delete'
 
 export type VerificationOperation =
+  | { scope: 'email.delivery.settings.write'; context: EmailIntent }
+  | { scope: 'email.delivery.test.send'; context: EmailTestIntent }
   | {
       scope: 'account.security.email_change'
       context: { user_id: number; incident: string; email: string }
@@ -62,6 +70,8 @@ export type VerificationOperation =
   | {
       scope: Exclude<
         SecurityProofScope,
+        | 'email.delivery.settings.write'
+        | 'email.delivery.test.send'
         | 'account.security.email_change'
         | 'account.security.recover'
         | 'account.security.passkey_recover'

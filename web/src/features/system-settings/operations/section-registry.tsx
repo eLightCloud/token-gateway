@@ -74,21 +74,7 @@ const OPERATIONS_SECTIONS = [
   {
     id: 'email',
     titleKey: 'SMTP Email',
-    build: (settings: OperationsSettings) => (
-      <EmailSettingsSection
-        defaultValues={{
-          SMTPServer: settings.SMTPServer,
-          SMTPPort: settings.SMTPPort,
-          SMTPAccount: settings.SMTPAccount,
-          SMTPFrom: settings.SMTPFrom,
-          SMTPToken: settings.SMTPToken,
-          SMTPSSLEnabled: settings.SMTPSSLEnabled,
-          SMTPStartTLSEnabled: settings.SMTPStartTLSEnabled,
-          SMTPInsecureSkipVerify: settings.SMTPInsecureSkipVerify,
-          SMTPForceAuthLogin: settings.SMTPForceAuthLogin,
-        }}
-      />
-    ),
+    build: () => <EmailSettingsSection />,
   },
   {
     id: 'worker',

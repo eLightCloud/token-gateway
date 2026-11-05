@@ -86,6 +86,9 @@ func GetOptions(c *gin.Context) {
 	optionValues := make(map[string]string)
 	common.OptionMapRWMutex.Lock()
 	for k, v := range common.OptionMap {
+		if strings.EqualFold(strings.TrimSpace(k), common.EmailDeliveryOptionKey) {
+			continue
+		}
 		if k == "theme.frontend" || k == "billing_setting.billing_mode" || k == "billing_setting.billing_expr" {
 			continue
 		}

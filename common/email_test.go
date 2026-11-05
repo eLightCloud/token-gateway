@@ -2,21 +2,29 @@ package common
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"net/smtp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -560,4 +568,201 @@ func TestSendEmailExplicitStartTLSRejectsUntrustedCertificateByDefault(t *testin
 	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
 	require.Error(t, err)
 	require.Contains(t, fmt.Sprint(err), "certificate")
+}
+
+func TestEmailDeliveryConfiguredSMTP(t *testing.T) {
+	server := newFakeSMTPServer(t)
+	config := EmailDeliveryConfig{Revision: 1, Options: EmailDeliveryOptions{AuthMode: EmailAuthLegacy, Legacy: LegacyEmailSettings{Host: server.host, Port: server.port, From: "sender@example.com", StartTLS: true, InsecureSkipVerify: true}}}
+	report, err := DeliverConfiguredEmail(context.Background(), config, "Test", "receiver@example.com", "<p>content</p>")
+	require.NoError(t, err)
+	assert.Equal(t, "EMAIL_ACCEPTED", report.Code)
+	assert.Equal(t, "skipped", report.Stages[1].Status)
+	assert.Equal(t, "passed", report.Stages[4].Status)
+	assert.Contains(t, <-server.messages, "<p>content</p>")
+	// Once a protected configuration exists, production does not fall back to SMTP globals.
+	previous := DefaultEmailDelivery.state.Load()
+	t.Cleanup(func() { DefaultEmailDelivery.state.Store(previous) })
+	PublishEmailDelivery(config, ErrEmailDeliveryUnavailable)
+	assert.ErrorIs(t, SendEmail("Test", "receiver@example.com", "secret"), ErrEmailDeliveryUnavailable)
+}
+
+func TestMicrosoftOAuthSMTPAuthContract(t *testing.T) {
+	auth := &microsoftEmailAuth{mailbox: "sender@example.com", token: "access-token"}
+	mechanism, payload, err := auth.Start(&smtp.ServerInfo{Name: "smtp.office365.com", TLS: true, Auth: []string{"XOAUTH2"}})
+	require.NoError(t, err)
+	assert.Equal(t, "XOAUTH2", mechanism)
+	assert.Equal(t, "user=sender@example.com\x01auth=Bearer access-token\x01\x01", string(payload))
+	assert.NotContains(t, string(payload), base64.StdEncoding.EncodeToString([]byte("access-token")))
+	for _, server := range []*smtp.ServerInfo{nil, {Name: "smtp.office365.com", TLS: false, Auth: []string{"XOAUTH2"}}, {Name: "attacker.example", TLS: true, Auth: []string{"XOAUTH2"}}, {Name: "smtp.office365.com", TLS: true, Auth: []string{"LOGIN"}}} {
+		_, _, err = auth.Start(server)
+		assert.Error(t, err)
+	}
+	_, err = auth.Next([]byte("secret provider response"), true)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "secret provider response")
+	_, err = auth.Next(nil, false)
+	require.NoError(t, err)
+}
+
+type emailTokenRoundTripper struct {
+	calls    atomic.Int32
+	rejected bool
+	expires  int
+}
+
+func (rt *emailTokenRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	rt.calls.Add(1)
+	if err := request.ParseForm(); err != nil {
+		return nil, err
+	}
+	if request.URL.Host != "login.microsoftonline.com" || request.Form.Get("scope") != "https://outlook.office365.com/.default" || request.Form.Get("grant_type") != "client_credentials" || request.Form.Get("client_secret") != "application-secret" {
+		return nil, errors.New("unexpected token request")
+	}
+	status, body := 200, fmt.Sprintf(`{"access_token":"test-access-token","token_type":"Bearer","expires_in":%d}`, rt.expires)
+	if rt.rejected {
+		status = 400
+		body = `{"error":"invalid_client","error_description":"application-secret test-access-token"}`
+	}
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+}
+
+func TestMicrosoftOAuthTokenLifecycleAndPrivacy(t *testing.T) {
+	previousTransport := http.DefaultTransport
+	previousTokens := microsoftTokens.source
+	previousFingerprint := microsoftTokens.fingerprint
+	t.Cleanup(func() {
+		http.DefaultTransport = previousTransport
+		microsoftTokens.source = previousTokens
+		microsoftTokens.fingerprint = previousFingerprint
+	})
+	rt := &emailTokenRoundTripper{expires: 3600}
+	http.DefaultTransport = rt
+	config := EmailDeliveryConfig{Revision: 1, Options: EmailDeliveryOptions{AuthMode: EmailAuthMicrosoft, Microsoft: MicrosoftEmailSettings{TenantID: "11111111-1111-1111-1111-111111111111", ClientID: "22222222-2222-2222-2222-222222222222", Mailbox: "sender@example.com", ClientSecret: "application-secret"}}}
+	token, err := microsoftEmailToken(config, true)
+	require.NoError(t, err)
+	assert.Equal(t, "test-access-token", token)
+	var wg sync.WaitGroup
+	results := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() { _, err := microsoftEmailToken(config, false); results <- err })
+	}
+	wg.Wait()
+	close(results)
+	for err := range results {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, int32(1), rt.calls.Load())
+	config.Revision++
+	_, err = microsoftEmailToken(config, false)
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), rt.calls.Load())
+	// A short-lived token is refreshed without sleeps or timing assertions.
+	rt.expires = 1
+	_, err = microsoftEmailToken(config, true)
+	require.NoError(t, err)
+	before := rt.calls.Load()
+	_, err = microsoftEmailToken(config, false)
+	require.NoError(t, err)
+	assert.Greater(t, rt.calls.Load(), before)
+	rt.expires = 0
+	_, err = microsoftEmailToken(config, true)
+	require.Error(t, err)
+	rt.rejected = true
+	_, err = microsoftEmailToken(config, true)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "application-secret")
+	assert.NotContains(t, err.Error(), "test-access-token")
+	report, err := DeliverConfiguredEmail(context.Background(), config, "Test", "receiver@example.com", "body")
+	require.Error(t, err)
+	assert.Equal(t, "failed", report.Stages[1].Status)
+	assert.Equal(t, "skipped", report.Stages[2].Status)
+	assert.NotContains(t, err.Error(), "application-secret")
+}
+
+func TestEmailDeliveryRejectsUnsafeOrIncompleteRequests(t *testing.T) {
+	config := EmailDeliveryConfig{Options: EmailDeliveryOptions{AuthMode: EmailAuthLegacy, Legacy: LegacyEmailSettings{Host: "smtp.example.com", Port: 587, From: "sender@example.com"}}}
+	for _, receiver := range []string{"display <receiver@example.com>", "receiver@example.com\r\nBcc: bad@example.com", "a@example.com,b@example.com"} {
+		report, err := DeliverConfiguredEmail(context.Background(), config, "Test", receiver, "body")
+		require.Error(t, err)
+		assert.Equal(t, "failed", report.Stages[0].Status)
+	}
+	intent := EmailDeliveryTestIntent{}
+	for _, raw := range []string{`{"expected_revision":1,"recipient":"a@example.com","extra":true}`, `{"expected_revision":1,"recipient":null}`, `null`, `{"recipient":"a@example.com"}`} {
+		assert.Error(t, DecodeEmailDeliveryJSON([]byte(raw), &intent))
+	}
+}
+
+func TestEmailDeliverySMTPSubmissionFailureSemantics(t *testing.T) {
+	for _, scenario := range []struct{ name, reply, status, code string }{
+		{"explicit rejection", "550 message rejected", "failed", "EMAIL_DELIVERY_FAILED"},
+		{"connection lost after DATA", "", "unknown", "EMAIL_DELIVERY_UNKNOWN"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = listener.Close() })
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+				rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+				_ = writeSMTPLine(rw, "220 smtp fixture")
+				for {
+					line, err := rw.ReadString('\n')
+					if err != nil {
+						return
+					}
+					command := strings.TrimSpace(line)
+					switch {
+					case strings.HasPrefix(command, "EHLO"):
+						_ = writeSMTPLine(rw, "250 smtp fixture")
+					case strings.HasPrefix(command, "MAIL"), strings.HasPrefix(command, "RCPT"):
+						_ = writeSMTPLine(rw, "250 OK")
+					case command == "DATA":
+						_ = writeSMTPLine(rw, "354 send data")
+						for {
+							line, err = rw.ReadString('\n')
+							if err != nil {
+								return
+							}
+							if strings.TrimSpace(line) == "." {
+								break
+							}
+						}
+						if scenario.reply != "" {
+							_ = writeSMTPLine(rw, scenario.reply)
+						}
+						return
+					default:
+						return
+					}
+				}
+			}()
+			host, portText, err := net.SplitHostPort(listener.Addr().String())
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portText)
+			require.NoError(t, err)
+			config := EmailDeliveryConfig{Options: EmailDeliveryOptions{AuthMode: EmailAuthLegacy, Legacy: LegacyEmailSettings{Host: host, Port: port, From: "sender@example.com"}}}
+			report, err := DeliverConfiguredEmail(context.Background(), config, "Test", "receiver@example.com", "body")
+			require.Error(t, err)
+			assert.Equal(t, scenario.status, report.Stages[4].Status)
+			assert.Equal(t, scenario.code, report.Code)
+			<-done
+		})
+	}
+}
+
+func TestEmailDeliveryPreservesMicrosoftLegacyNTLM(t *testing.T) {
+	server := newFakeSMTPServer(t)
+	server.authMechanisms = []string{"NTLM"}
+	config := EmailDeliveryConfig{Options: EmailDeliveryOptions{AuthMode: EmailAuthLegacy, Legacy: LegacyEmailSettings{Host: server.host, Port: server.port, Account: "sender@contoso.onmicrosoft.com", Password: "fixture-secret", From: "sender@example.com", StartTLS: true, InsecureSkipVerify: true}}}
+	report, err := DeliverConfiguredEmail(context.Background(), config, "Test", "receiver@example.com", "body")
+	require.NoError(t, err)
+	assert.Equal(t, "EMAIL_ACCEPTED", report.Code)
+	assert.True(t, strings.HasPrefix(<-server.authCommands, "AUTH NTLM "))
 }

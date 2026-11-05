@@ -1,6 +1,7 @@
 package common
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
@@ -76,6 +77,13 @@ func newSMTPClient(addr string) (*smtp.Client, error) {
 }
 
 func SendEmail(subject string, receiver string, content string) error {
+	if snapshot := DefaultEmailDelivery.state.Load(); snapshot != nil {
+		if snapshot.err != nil {
+			return ErrEmailDeliveryUnavailable
+		}
+		_, err := DeliverConfiguredEmail(context.Background(), snapshot.config, subject, receiver, content)
+		return err
+	}
 	if SMTPFrom == "" { // for compatibility
 		SMTPFrom = SMTPAccount
 	}

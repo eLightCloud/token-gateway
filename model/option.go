@@ -197,6 +197,7 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	defer RefreshEmailDeliveryConfig()
 	requestPolicyOptionMutex.Lock()
 	defer requestPolicyOptionMutex.Unlock()
 	defer func() {
@@ -209,7 +210,10 @@ func loadOptionsFromDatabase() {
 	options, _ := AllOption()
 	passkeyOptions := make(map[string]string)
 	for _, option := range options {
-		if err := validateOptionValue(option.Key, option.Value); err != nil {
+		if option.Key == common.EmailDeliveryOptionKey {
+			continue
+		}
+		if err := validateOptionValue(option.Key, option.Value); err != nil && !IsEmailDeliveryOption(option.Key) {
 			common.SysLog("ignored invalid option " + option.Key + ": " + err.Error())
 			continue
 		}
@@ -234,6 +238,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if IsEmailDeliveryOption(key) {
+		return fmt.Errorf("email settings require the dedicated email configuration endpoint")
+	}
 	if strings.EqualFold(strings.TrimSpace(key), VantageIntegrationOptionKey) {
 		return ErrVantageIntegrationOptionProtected
 	}

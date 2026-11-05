@@ -206,6 +206,7 @@ func SetApiRouter(router *gin.Engine) {
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{
+			setEmailDeliverySettingsRouter(optionRoute)
 			SetVantageIntegrationSettingsRouter(optionRoute)
 			setSeedanceEnhanceSettingsRouter(optionRoute)
 			optionRoute.GET("/", controller.GetOptions)
