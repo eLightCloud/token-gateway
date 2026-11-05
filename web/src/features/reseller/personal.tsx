@@ -16,10 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TwoFACard } from '@/features/security/components/two-fa-card'
 import { toIntlLocale } from '@/i18n/languages'
@@ -117,13 +118,24 @@ export function ResellerSecurity() {
 export function PersonalPricingHistory() {
   const { t } = useTranslation()
   const userID = useAuthStore((s) => s.auth.user?.id)
-  const query = useQuery({
+  const query = useInfiniteQuery({
     meta: { errorToast: false },
     queryKey: resellerKey(userID, 'ratio-history'),
-    queryFn: () =>
+    initialPageParam: '',
+    queryFn: ({ pageParam }) =>
       resellerRequest<
-        { revision: number; created_at: number; models: RatioRange[] }[]
-      >('/api/reseller/personal/history'),
+        {
+          pricing_version?: number
+          cursor?: string
+          revision: number
+          created_at: number
+          models: RatioRange[]
+        }[]
+      >(
+        `/api/reseller/personal/history${pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ''}`
+      ),
+    getNextPageParam: (page) =>
+      page.length === 50 ? page.at(-1)?.cursor : undefined,
   })
   return (
     <Card>
@@ -136,9 +148,12 @@ export function PersonalPricingHistory() {
           error={query.isError}
           retry={() => void query.refetch()}
         />
-        {query.data?.length === 0 && <p>{t('No results')}</p>}
-        {query.data?.map((entry) => (
-          <div key={entry.revision} className='space-y-1 border-b pb-3'>
+        {query.data?.pages[0]?.length === 0 && <p>{t('No results')}</p>}
+        {query.data?.pages.flat().map((entry) => (
+          <div
+            key={`${entry.pricing_version ?? 0}:${entry.revision}`}
+            className='space-y-1 border-b pb-3'
+          >
             <ResellerTimestamp value={entry.created_at} />
             {entry.models.map((model) => (
               <p key={model.model}>
@@ -148,6 +163,15 @@ export function PersonalPricingHistory() {
             ))}
           </div>
         ))}
+        {query.hasNextPage && (
+          <Button
+            variant='outline'
+            disabled={query.isFetchingNextPage}
+            onClick={() => void query.fetchNextPage()}
+          >
+            {t('Load more')}
+          </Button>
+        )}
       </CardContent>
     </Card>
   )

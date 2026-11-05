@@ -51,6 +51,7 @@ export type ConfigItem = {
 }
 export type Config = { revision: number; items: ConfigItem[] }
 export type Workspace = {
+  pricing_phase?: string
   user: ResellerUser
   config: Config
   candidates: ConfigItem[]

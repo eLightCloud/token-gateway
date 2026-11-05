@@ -93,7 +93,12 @@ func GetResellerWorkspace(c *gin.Context) {
 		resellerResponse(c, nil, err)
 		return
 	}
-	resellerResponse(c, gin.H{"user": view, "config": config, "candidates": candidates, "history": history}, nil)
+	phase, err := model.RealtimePricingPhase(model.DB)
+	if err != nil {
+		resellerResponse(c, nil, err)
+		return
+	}
+	resellerResponse(c, gin.H{"user": view, "config": config, "candidates": candidates, "history": history, "pricing_phase": phase}, nil)
 }
 
 func SaveResellerConfiguration(c *gin.Context) {
@@ -250,7 +255,7 @@ func GetPersonalRatioHistory(c *gin.Context) {
 		resellerResponse(c, nil, model.ErrResellerInvalid)
 		return
 	}
-	data, err := model.ReadPersonalRatioHistory(c.GetInt("id"), before)
+	data, err := model.ReadPersonalRatioHistory(c.GetInt("id"), before, c.Query("cursor"))
 	resellerResponse(c, data, err)
 }
 

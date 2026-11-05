@@ -42,7 +42,7 @@ func main() {
 	common.RedisEnabled = false
 	common.SMTPServer, common.SMTPPort = "127.0.0.1", 1
 	common.QuotaPerUnit = 500000
-	tables := []any{&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.AuthFlow{}, &model.AuditLog{}, &model.User{}, &model.Channel{}, &model.Ability{}, &model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerQuotaAdjustment{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.ResellerConfigRevision{}, &model.ResellerFundingSnapshot{}, &model.ResellerRequest{}, &model.ResellerEvent{}, &model.ResellerBillingReceipt{}, &model.ResellerProjection{}, &model.TaskSettlementJournal{}}
+	tables := []any{&model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.AuthFlow{}, &model.AuditLog{}, &model.User{}, &model.Channel{}, &model.Ability{}, &model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerQuotaAdjustment{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.ResellerConfigRevision{}, &model.ResellerFundingSnapshot{}, &model.ResellerRequest{}, &model.ResellerEvent{}, &model.ResellerBillingReceipt{}, &model.ResellerProjection{}, &model.TaskSettlementJournal{}}
 	if err := db.AutoMigrate(tables...); err != nil {
 		log.Fatal(err)
 	}
@@ -72,6 +72,14 @@ func main() {
 	input.Items[0].Ratio = "0.9"
 	if _, err := model.SaveResellerConfig(2, 3, false, input); err != nil {
 		log.Fatal(err)
+	}
+	if os.Getenv("RESELLER_REALTIME_FIXTURE") == "active" {
+		if _, err := model.MigrateRealtimePricing(1, "freeze"); err != nil {
+			log.Fatal(err)
+		}
+		if conflicts, err := model.MigrateRealtimePricing(1, "activate"); err != nil || len(conflicts) > 0 {
+			log.Fatalf("fixture migration: %v %v", err, conflicts)
+		}
 	}
 	for i := range 3 {
 		fact := types.PersonalBillingFact{RequestID: fmt.Sprintf("synthetic-request-%d", i), OperationID: model.PersonalOperationID(fmt.Sprintf("synthetic-request-%d", i), "reserve"), Kind: "reserve", UserID: 3, AgentUserID: 2, Model: "demo-model", ChannelID: 11, CustomerRatio: 900000, AgentRatio: 800000, BaseQuota: 100000, CustomerTarget: 90000, AgentTarget: 80000}
@@ -183,6 +191,10 @@ func main() {
 	events.GET("/export", controller.ExportResellerBilling)
 	engine.GET("/api/reseller/personal/ratios", controller.GetPersonalRatioRanges)
 	engine.GET("/api/reseller/personal/history", controller.GetPersonalRatioHistory)
+	engine.GET("/api/realtime-pricing/:subject/:id", controller.GetRealtimePricing)
+	engine.PUT("/api/realtime-pricing/:subject/:id", controller.SaveRealtimePricing)
+	engine.POST("/api/realtime-pricing/:subject/:id/preview", controller.PreviewRealtimePricing)
+	engine.POST("/api/realtime-pricing-migration", controller.ChangeRealtimePricingMigration)
 	engine.NoRoute(func(c *gin.Context) {
 		log.Printf("UNIMPLEMENTED_FIXTURE_REQUEST %s %s", c.Request.Method, c.Request.URL.Path)
 		c.JSON(404, gin.H{"success": false, "message": "Unimplemented fixture endpoint"})

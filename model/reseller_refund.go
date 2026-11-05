@@ -44,7 +44,7 @@ func ApplyPersonalRefundToBase(requestID, operationID string, remainingBase int)
 		if err := common.UnmarshalJsonStr(state.Snapshot, &fact); err != nil {
 			return err
 		}
-		customer, customerClamp, err := PersonalQuota(remainingBase, fact.CustomerRatio)
+		customer, customerClamp, err := RealtimeCustomerQuota(remainingBase, fact.CustomerRatio, fact.PricingVersion)
 		if err != nil {
 			return err
 		}

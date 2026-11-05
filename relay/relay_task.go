@@ -333,6 +333,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		noteTaskQuotaClamp(info, clamp)
 	}
 
+	if apiErr := service.PreparePersonalRequestPricing(c, info); apiErr != nil {
+		return nil, service.TaskErrorFromAPIError(apiErr)
+	}
 	if err := service.PrepareTaskOrganizationDiscount(info, previousPriceData); err != nil {
 		return nil, service.TaskErrorWrapperLocal(err, "organization_discount_load_failed", http.StatusInternalServerError)
 	}

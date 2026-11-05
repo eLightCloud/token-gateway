@@ -487,3 +487,64 @@ func TestPersonalBillingRealtime(t *testing.T) {
 		})
 	}
 }
+
+func TestRealtimePricingHTTPRelay(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		userRatio string
+		expected  int
+	}{
+		{"organization inherited", "", 800}, {"personal override", "0.9", 900}, {"explicit base", "1", 1000}, {"markup", "5", 5000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			terminal := `{"type":"response.completed","response":{"id":"realtime-pricing","status":"completed","usage":{"input_tokens":1000,"output_tokens":10,"total_tokens":1010}}}`
+			fixture := newResponsesWSBillingTest(t, `tier("request", fixed(0.002))`, func(*websocket.Conn, *http.Request) {}, terminal)
+			require.NoError(t, model.DB.AutoMigrate(&model.ResellerFundingSnapshot{}, &model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerConfigRevision{}, &model.ResellerRequest{}, &model.ResellerEvent{}, &model.ResellerBillingReceipt{}, &model.ResellerProjection{}))
+			root := model.User{Username: "realtime-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AffCode: "realtime-root"}
+			require.NoError(t, model.DB.Create(&root).Error)
+			org := model.Organization{Name: "realtime-org", Status: model.OrganizationStatusEnabled}
+			require.NoError(t, model.DB.Create(&org).Error)
+			key := strconv.Itoa(fixture.user.Id)
+			require.NoError(t, model.DB.Create(&model.OrganizationMember{OrganizationId: org.Id, UserId: fixture.user.Id, Role: model.OrganizationRoleMember, CurrentKey: &key}).Error)
+			_, err := model.MigrateRealtimePricing(root.Id, "freeze")
+			require.NoError(t, err)
+			_, err = model.MigrateRealtimePricing(root.Id, "activate")
+			require.NoError(t, err)
+			input := model.RealtimePricingInput{Items: []model.RealtimePricingItem{{Model: "ws-billing", Ratio: "0.8", ChannelIDs: []int{fixture.channel.Id}}}}
+			_, err = model.SaveRealtimePricing(root.Id, "organization", org.Id, input)
+			require.NoError(t, err)
+			if tc.userRatio != "" {
+				input.Items[0].Ratio = tc.userRatio
+				_, err = model.SaveRealtimePricing(root.Id, "user", fixture.user.Id, input)
+				require.NoError(t, err)
+			}
+			require.NoError(t, model.DB.Model(fixture.token).Update("remain_quota", tc.expected+50).Error)
+			initial := int64(tc.expected + 50)
+			require.NoError(t, model.DB.Model(fixture.user).Update("quota", initial).Error)
+			called := make(chan int64, 1)
+			fixture.httpUpstream = func(w http.ResponseWriter, r *http.Request) {
+				var user model.User
+				require.NoError(t, model.DB.First(&user, fixture.user.Id).Error)
+				called <- user.Quota
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", terminal)
+			}
+			request, err := http.NewRequest(http.MethodPost, fixture.gatewayURL+"/v1/responses", strings.NewReader(`{"model":"ws-billing","input":"hello","stream":true}`))
+			require.NoError(t, err)
+			request.Header.Set("Authorization", "Bearer sk-"+fixture.token.Key)
+			request.Header.Set("Content-Type", "application/json")
+			response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+			require.NoError(t, err)
+			body, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			require.NoError(t, response.Body.Close())
+			require.Equal(t, http.StatusOK, response.StatusCode, string(body))
+			assert.EqualValues(t, 50, <-called, "upstream sees discounted reservation")
+			<-fixture.httpDone
+			fixture.closeAndWait(t)
+			var user model.User
+			require.NoError(t, model.DB.First(&user, fixture.user.Id).Error)
+			assert.EqualValues(t, 50, user.Quota)
+		})
+	}
+}

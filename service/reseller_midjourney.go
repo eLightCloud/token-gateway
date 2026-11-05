@@ -20,6 +20,10 @@ func PreparePersonalMidjourney(c *gin.Context, info *relaycommon.RelayInfo, base
 	}
 	info.PriceData.Quota = base
 	info.PriceData.QuotaToPreConsume = base
+	// The legacy Midjourney contract is wallet-only. Fix the source before the
+	// upstream accepts work; its persisted task cannot settle a subscription.
+	info.UserSetting.BillingPreference = "wallet_only"
+	info.ForcePreConsume = true
 	return PreConsumeBilling(c, base, info)
 }
 func RefundUnsettledPersonalBilling(c *gin.Context, info *relaycommon.RelayInfo) {

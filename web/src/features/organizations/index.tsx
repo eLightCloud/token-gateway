@@ -80,6 +80,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { RealtimePricingEditor } from '@/features/realtime-pricing/editor'
 import { searchUsers } from '@/features/users/api'
 import { USER_ROLE } from '@/features/users/constants'
 import type { User } from '@/features/users/types'
@@ -2265,6 +2266,7 @@ function AdminOrganizationDetailView({ id }: { id: number }) {
   )
   const [tab, setTab] = useState<OrganizationDetailTab>('members')
   const [invoiceVisited, setInvoiceVisited] = useState(false)
+  const [discountVisited, setDiscountVisited] = useState(false)
   const [memberDialogOpen, setMemberDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
@@ -2404,6 +2406,7 @@ function AdminOrganizationDetailView({ id }: { id: number }) {
           onValueChange={(value) => {
             setTab(value as OrganizationDetailTab)
             if (value === 'invoice') setInvoiceVisited(true)
+            if (value === 'discount') setDiscountVisited(true)
           }}
           className='gap-0'
         >
@@ -2592,8 +2595,11 @@ function AdminOrganizationDetailView({ id }: { id: number }) {
           </Panel>
         </div>
       ) : null}
-      {tab === 'discount' && isRoot ? (
-        <OrganizationDiscountPanel organizationId={id} />
+      {discountVisited && isRoot ? (
+        <div hidden={tab !== 'discount'} className='space-y-6'>
+          <RealtimePricingEditor subject='organization' subjectID={id} />
+          <OrganizationDiscountPanel organizationId={id} />
+        </div>
       ) : null}
       <MemberDialog
         open={memberDialogOpen}

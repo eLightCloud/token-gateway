@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { RealtimePricingEditor } from '@/features/realtime-pricing/editor'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatQuotaWithCurrency } from '@/lib/currency'
 import { formatNumber } from '@/lib/format'
@@ -299,6 +300,9 @@ export function ResellerWorkspacePage({
                   key={`${userID}:${query.data.config.revision}`}
                   userID={userID}
                   admin={admin}
+                  consumptionEditable={
+                    admin || query.data.pricing_phase !== 'active'
+                  }
                   config={query.data.config}
                   candidates={query.data.candidates}
                   onSuccess={() => void query.refetch()}
@@ -307,6 +311,9 @@ export function ResellerWorkspacePage({
                     if (result.isError) throw result.error
                   }}
                 />
+                {!admin && query.data.pricing_phase && (
+                  <RealtimePricingEditor subject='user' subjectID={userID} />
+                )}
                 <section
                   aria-label={t('Configuration history')}
                   className='mt-4 space-y-2'

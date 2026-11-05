@@ -56,6 +56,8 @@ export type Option = {
 
 interface MultiSelectProps {
   options: Option[]
+  /** Labels/hints for selected values outside a filtered candidate list. */
+  displayOptions?: Option[]
   selected: string[]
   onChange: (values: string[]) => void
   placeholder?: string
@@ -144,27 +146,27 @@ export function MultiSelect(props: MultiSelectProps) {
   // even when the underlying option list changes (e.g. custom-added values).
   const labelMap = React.useMemo(() => {
     const map = new Map<string, string>()
-    for (const option of props.options) {
+    for (const option of props.displayOptions ?? props.options) {
       map.set(option.value, option.label)
     }
     return map
-  }, [props.options])
+  }, [props.options, props.displayOptions])
 
   const hintMap = React.useMemo(() => {
     const map = new Map<string, string>()
-    for (const option of props.options) {
+    for (const option of props.displayOptions ?? props.options) {
       if (option.hint) map.set(option.value, option.hint)
     }
     return map
-  }, [props.options])
+  }, [props.options, props.displayOptions])
 
   const iconMap = React.useMemo(() => {
     const map = new Map<string, React.ReactNode>()
-    for (const option of props.options) {
+    for (const option of props.displayOptions ?? props.options) {
       if (option.icon) map.set(option.value, option.icon)
     }
     return map
-  }, [props.options])
+  }, [props.options, props.displayOptions])
 
   const trimmedInput = inputValue.trim()
   const inputMatchesExisting =

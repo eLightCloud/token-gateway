@@ -82,7 +82,7 @@ func loadPersonalPricings(userID int, modelNames []string, admission bool) (map[
 					snapshots[name] = nil
 				}
 			}
-			return nil
+			return applyRealtimePricingTx(tx, user, snapshots)
 		}
 		if user.Status != common.UserStatusEnabled {
 			return ErrResellerForbidden
@@ -145,7 +145,7 @@ func loadPersonalPricings(userID int, modelNames []string, admission bool) (map[
 			}
 			snapshots[row.Model].Channels[row.ChannelID] = types.PersonalChannelPrice{CustomerRatio: row.Ratio, AgentRatio: grant.Ratio}
 		}
-		return nil
+		return applyRealtimePricingTx(tx, user, snapshots)
 	}, options)
 	return snapshots, err
 }

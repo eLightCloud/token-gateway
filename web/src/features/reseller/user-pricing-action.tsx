@@ -23,45 +23,55 @@ import { useTranslation } from 'react-i18next'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Dialog } from '@/components/dialog'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
+import { RealtimePricingEditor } from '@/features/realtime-pricing/editor'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { resellerKey, resellerRequest, type Workspace } from './api'
 import { ResellerConfigEditor } from './config-editor'
 import { ResellerQueryStatus } from './shared'
 
-export function UserPersonalPricingAction({ userID }: { userID: number }) {
+export function UserPersonalPricingAction(props: { onOpen: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <DropdownMenuItem onSelect={props.onOpen}>
+      {t('Personal ratio')}
+    </DropdownMenuItem>
+  )
+}
+
+// Keep the dialog outside the menu popup: closing the menu must not unmount
+// an unsaved pricing draft or its discard confirmation.
+export function UserPersonalPricingDialog(props: {
+  userID: number
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const userID = props.userID
   const { t } = useTranslation()
   const viewer = useAuthStore((s) => s.auth.user?.id)
-  const [open, setOpen] = useState(false)
-  const [dirty, setDirty] = useState(false)
+  const [legacyDirty, setLegacyDirty] = useState(false)
+  const [realtimeDirty, setRealtimeDirty] = useState(false)
+  const dirty = legacyDirty || realtimeDirty
   const [discardOpen, setDiscardOpen] = useState(false)
   const query = useQuery({
     meta: { errorToast: false },
     queryKey: resellerKey(viewer, 'ordinary-pricing', userID),
     queryFn: () =>
       resellerRequest<Workspace>(`/api/reseller/admin/agents/${userID}`),
-    enabled: open,
+    enabled: props.open,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   })
   return (
     <>
-      <DropdownMenuItem
-        onSelect={(event) => {
-          event.preventDefault()
-          setOpen(true)
-        }}
-      >
-        {t('Personal ratio')}
-      </DropdownMenuItem>
       <Dialog
-        open={open}
+        open={props.open}
         onOpenChange={(next) => {
           if (!next && dirty) {
             setDiscardOpen(true)
             return
           }
-          setOpen(next)
+          props.onOpenChange(next)
         }}
         title={t('Personal ratio')}
       >
@@ -70,13 +80,13 @@ export function UserPersonalPricingAction({ userID }: { userID: number }) {
           error={query.isError}
           retry={() => void query.refetch()}
         />
-        {query.data && (
+        {query.data && query.data.pricing_phase !== 'active' && (
           <ResellerConfigEditor
             key={`${userID}:${query.data.config.revision}`}
             userID={userID}
             admin
             authorization={false}
-            onDirtyChange={setDirty}
+            onDirtyChange={setLegacyDirty}
             config={query.data.config}
             candidates={query.data.candidates}
             onSuccess={() => void query.refetch()}
@@ -86,6 +96,11 @@ export function UserPersonalPricingAction({ userID }: { userID: number }) {
             }}
           />
         )}
+        <RealtimePricingEditor
+          subject='user'
+          subjectID={userID}
+          onDirtyChange={setRealtimeDirty}
+        />
       </Dialog>
       <ConfirmDialog
         open={discardOpen}
@@ -97,8 +112,9 @@ export function UserPersonalPricingAction({ userID }: { userID: number }) {
         destructive
         handleConfirm={() => {
           setDiscardOpen(false)
-          setDirty(false)
-          setOpen(false)
+          setLegacyDirty(false)
+          setRealtimeDirty(false)
+          props.onOpenChange(false)
         }}
       />
     </>

@@ -43,7 +43,11 @@ import {
 
 import { ResellerConfigEditor } from '../config-editor'
 import { guardResellerRoute } from '../navigation'
-import { PersonalRatioBadge, ResellerWallet } from '../personal'
+import {
+  PersonalRatioBadge,
+  PersonalPricingHistory,
+  ResellerWallet,
+} from '../personal'
 import { ResellerQuotaDialog } from '../quota-dialog'
 import { ProcurementSummary } from '../shared'
 import { ResellerUsageFacts } from '../usage-facts'
@@ -735,4 +739,52 @@ it('uses the server cursor to page quota adjustments even when a page is short',
   expect(get).toHaveBeenLastCalledWith(
     '/api/reseller/self/customers/3/quota-adjustments?after=21'
   )
+})
+
+it('loads the next personal history page with the cross-version cursor', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({
+      id: 3,
+      username: 'customer',
+      role: 1,
+      reseller_kind: 'agent_customer',
+    })
+  const entries = Array.from({ length: 50 }, (_, index) => ({
+    pricing_version: 2,
+    revision: 60 - index,
+    cursor: `2000:2:${60 - index}`,
+    created_at: 2000,
+    models: [],
+  }))
+  const get = vi
+    .spyOn(api, 'get')
+    .mockResolvedValueOnce({ data: { success: true, data: entries } })
+    .mockResolvedValueOnce({
+      data: {
+        success: true,
+        data: [
+          {
+            pricing_version: 0,
+            revision: 50,
+            cursor: '1000:0:50',
+            created_at: 1000,
+            models: [{ model: 'legacy-A', min: '0.8', max: '0.8' }],
+          },
+        ],
+      },
+    })
+  render(<PersonalPricingHistory />, { wrapper: provider() })
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Load more' })
+  )
+  await waitFor(() =>
+    expect(get).toHaveBeenCalledWith(
+      '/api/reseller/personal/history?cursor=2000%3A2%3A11'
+    )
+  )
+  expect(await screen.findByText(/legacy-A/)).toBeVisible()
+  expect(
+    screen.queryByRole('button', { name: 'Load more' })
+  ).not.toBeInTheDocument()
 })

@@ -60,6 +60,7 @@ import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-p
 import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
 import { BILLING_PRICING_VARS } from '@/features/pricing/lib/billing-expr'
 import { pluginUsageSchema } from '@/features/pricing/lib/plugin-pricing'
+import { pricingSourceLabel } from '@/features/realtime-pricing/source'
 import { PolicyDecisionRecord } from '@/features/system-settings/request-policies/decision-record'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
@@ -229,6 +230,12 @@ function BillingBreakdown(props: {
   }
 
   if (other.personal_ratio != null && Number.isFinite(other.personal_ratio)) { rows.push({ label: t('Personal ratio'), value: `${formatRatio(other.personal_ratio)}x` }) }
+  if (other.pricing_source) {
+    rows.push({
+      label: t('Pricing source'),
+      value: pricingSourceLabel(other.pricing_source, t),
+    })
+  }
   const userGR = other.user_group_ratio
   const isUserGR = userGR != null && Number.isFinite(userGR) && userGR !== -1
   const effectiveGR = isUserGR ? userGR : other.group_ratio

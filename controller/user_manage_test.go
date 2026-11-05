@@ -748,7 +748,7 @@ func TestResellerThirdBatch(t *testing.T) {
 	})
 	t.Run("configuration conflicts return current revision without overwriting", func(t *testing.T) {
 		db := setupManageUserTestDB(t)
-		require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.ResellerConfigRevision{}, &model.Channel{}))
+		require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.ResellerConfigRevision{}, &model.Channel{}))
 		root := createQuotaTestOperator(t, db, common.RoleRootUser)
 		operatorID, admin := root.Id, true
 		agent, err := model.CreateResellerUser(root.Id, "agent", model.ResellerCreateInput{Username: "third-agent", Email: "third-agent@example.invalid"})
@@ -950,4 +950,76 @@ func TestResellerFinalContracts(t *testing.T) {
 		assert.Equal(t, 503, response.Code, response.Body.String())
 		assert.NotContains(t, response.Body.String(), "db-password")
 	})
+}
+
+func TestRealtimePricingManagementAPI(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.Organization{}, &model.OrganizationMember{}, &model.ResellerIdentity{}, &model.ResellerAccount{}, &model.Channel{}))
+	root := createQuotaTestOperator(t, db, common.RoleRootUser)
+	admin := model.User{Username: "rt-api-admin", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, AffCode: "rt-api-admin"}
+	require.NoError(t, db.Create(&admin).Error)
+	org := model.Organization{Name: "rt-api-org", Status: model.OrganizationStatusEnabled}
+	require.NoError(t, db.Create(&org).Error)
+	channel := model.Channel{Name: "rt-api-channel", Models: "A", Status: common.ChannelStatusEnabled, Key: "synthetic-private-channel-key"}
+	require.NoError(t, db.Create(&channel).Error)
+	require.NoError(t, db.Create(&model.RealtimePricingState{ID: 1, Phase: "active"}).Error)
+	operator := root.Id
+	engine := gin.New()
+	engine.Use(func(c *gin.Context) {
+		c.Set("id", operator)
+		c.Set("role", map[int]int{root.Id: common.RoleRootUser, admin.Id: common.RoleAdminUser}[operator])
+	})
+	engine.GET("/:subject/:id", GetRealtimePricing)
+	engine.PUT("/:subject/:id", SaveRealtimePricing)
+	engine.POST("/:subject/:id/preview", PreviewRealtimePricing)
+	path := fmt.Sprintf("/organization/%d", org.Id)
+	request := func(method, body string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return recorder
+	}
+	operator = admin.Id
+	denied := request("GET", "")
+	assert.Equal(t, http.StatusForbidden, denied.Code)
+	denied = request("PUT", `{"expected_revision":0,"items":[]}`)
+	assert.Equal(t, http.StatusForbidden, denied.Code)
+	operator = root.Id
+	payload := fmt.Sprintf(`{"expected_revision":0,"items":[{"model":"A","ratio":"0.8","channel_ids":[%d]}]}`, channel.Id)
+	saved := request("PUT", payload)
+	require.Equal(t, http.StatusOK, saved.Code, saved.Body.String())
+	conflict := request("PUT", payload)
+	assert.Equal(t, http.StatusConflict, conflict.Code)
+	assert.Contains(t, conflict.Body.String(), "RESELLER_REVISION_CONFLICT")
+	fetched := request("GET", "")
+	require.Equal(t, http.StatusOK, fetched.Code, fetched.Body.String())
+	assert.NotContains(t, fetched.Body.String(), channel.Key)
+	assert.Contains(t, fetched.Body.String(), `"revision":1`)
+	payload = fmt.Sprintf(`{"expected_revision":1,"items":[{"model":"A","ratio":"1.5","channel_ids":[%d]}]}`, channel.Id)
+	require.Equal(t, http.StatusOK, request("PUT", payload).Code)
+	fetched = request("GET", "")
+	var response struct {
+		Data struct {
+			History []struct {
+				Items         []model.RealtimePricingItem `json:"items"`
+				PreviousItems []model.RealtimePricingItem `json:"previous_items"`
+				OperatorName  string                      `json:"operator_name"`
+			} `json:"history"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(fetched.Body.Bytes(), &response))
+	require.Len(t, response.Data.History, 2)
+	latest := response.Data.History[0]
+	require.Len(t, latest.Items, 1)
+	require.Len(t, latest.PreviousItems, 1)
+	assert.Equal(t, "1.5", latest.Items[0].Ratio)
+	assert.Equal(t, "0.8", latest.PreviousItems[0].Ratio)
+	assert.Equal(t, root.Username, latest.OperatorName)
+	path += "/preview"
+	operator = admin.Id
+	assert.Equal(t, http.StatusForbidden, request("POST", `{"items":[],"user_id":0}`).Code)
+	operator = root.Id
+	// A valid user outside this organization must force a new member choice.
+	changed := request("POST", fmt.Sprintf(`{"items":[],"user_id":%d}`, admin.Id))
+	assert.Equal(t, http.StatusConflict, changed.Code)
+	assert.Contains(t, changed.Body.String(), "REALTIME_PRICING_MEMBER_CHANGED")
 }

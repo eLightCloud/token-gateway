@@ -26,6 +26,10 @@ func LoadRequestOrganizationDiscount(info *relaycommon.RelayInfo) error {
 // adaptor's per-attempt price rebuild. Both quotas start from this attempt's
 // undiscounted estimate, so switching channels never compounds old discounts.
 func PrepareTaskOrganizationDiscount(info *relaycommon.RelayInfo, previous hosttypes.PriceData) error {
+	if info.PersonalPricing != nil && info.PersonalPricing.Realtime != nil {
+		previous.DiscountSnapshot = info.PersonalPricing.Realtime.LegacyDiscount
+		previous.DiscountSnapshotLoaded = true
+	}
 	snapshot, err := ResolveOrganizationDiscountSnapshotForChannel(previous, info.UserId, info.ChannelId)
 	if err != nil {
 		return err

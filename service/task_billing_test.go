@@ -16,6 +16,7 @@ import (
 	"errors"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
@@ -61,7 +62,7 @@ func TestMain(m *testing.M) {
 	common.LogConsumeEnabled = true
 
 	if err := db.AutoMigrate(
-		&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerProjection{}, &model.ResellerConfigRevision{}, &model.ResellerFundingSnapshot{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.ResellerBillingReceipt{}, &model.ResellerRequest{}, &model.ResellerEvent{},
+		&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerProjection{}, &model.ResellerConfigRevision{}, &model.ResellerFundingSnapshot{}, &model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.ResellerBillingReceipt{}, &model.ResellerRequest{}, &model.ResellerEvent{},
 		&model.Task{},
 		&model.Midjourney{},
 		&model.User{},
@@ -108,7 +109,7 @@ func TestMain(m *testing.M) {
 func truncate(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
-		for _, table := range []string{"reseller_identities", "reseller_accounts", "reseller_projections", "reseller_config_heads", "reseller_model_configs", "reseller_config_revisions", "reseller_funding_snapshots", "reseller_billing_receipts", "reseller_requests", "reseller_events"} {
+		for _, table := range []string{"realtime_pricing_heads", "realtime_pricing_rules", "realtime_pricing_histories", "realtime_pricing_states", "reseller_identities", "reseller_accounts", "reseller_projections", "reseller_config_heads", "reseller_model_configs", "reseller_config_revisions", "reseller_funding_snapshots", "reseller_billing_receipts", "reseller_requests", "reseller_events"} {
 			require.NoError(t, model.DB.Exec("DELETE FROM "+table).Error)
 		}
 		model.DB.Exec("DELETE FROM tasks")
@@ -2008,6 +2009,8 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 		{"rounded zero fixed", "0.000001", 0, 100, false, false, 1000, 9920},
 		{"rounded zero failure", "0.000001", 0, 0, false, true, 1000, 10000},
 		{"ratio one equal completion", "1", 100, 100, false, false, 900, 9920},
+		{"realtime markup", "5", 500, 100, false, false, 500, 9920},
+		{"realtime markup refund", "5", 500, 0, false, true, 1000, 10000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			truncate(t)
@@ -2027,10 +2030,19 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 			_, err := model.SaveResellerConfig(root.Id, a.Id, true, input)
 			require.NoError(t, err)
 			input.Items[0].Ratio = tc.ratio
+			if strings.HasPrefix(tc.name, "realtime ") {
+				input.Items[0].Ratio = "0.9"
+			}
 			_, err = model.SaveResellerConfig(a.Id, b.Id, false, input)
 			require.NoError(t, err)
 			snapshot, err := model.LoadPersonalPricing(b.Id, "personal-model")
 			require.NoError(t, err)
+			if strings.HasPrefix(tc.name, "realtime ") {
+				ratio, err := model.ParseRealtimePricingRatio(tc.ratio)
+				require.NoError(t, err)
+				snapshot.Realtime = &types.RealtimePricingContext{Version: model.RealtimePricingVersion}
+				snapshot.Channels[channel.Id] = types.PersonalChannelPrice{CustomerRatio: ratio, AgentRatio: 800000, Source: "user"}
+			}
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
 			info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "generate"}, RequestId: "personal-task-request", UserId: b.Id, IsPlayground: true, PersonalPricing: snapshot, OriginModelName: "personal-model", PriceData: types.PriceData{Quota: 100, QuotaToPreConsume: 100}, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id}}
@@ -2178,9 +2190,46 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 	}
 }
 
+func TestPersonalInsufficientQuotaMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		ratio    int64
+		balance  int64
+		required int
+	}{
+		{name: "discount", ratio: 800000, balance: 700000, required: 800000},
+		{name: "markup", ratio: 1500000, balance: 1200000, required: 1500000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &relaycommon.RelayInfo{
+				RequestId: "personal-insufficient-" + tc.name,
+				UserId:    901,
+				PersonalPricing: &types.PersonalPricingSnapshot{
+					UserID: 901,
+					Model:  "personal-model",
+					Channels: map[int]types.PersonalChannelPrice{
+						902: {CustomerRatio: tc.ratio, AgentRatio: model.ResellerRatioScale},
+					},
+				},
+				ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 902},
+			}
+			apiErr := validateWalletQuota(info, 1000000, tc.balance)
+			require.NotNil(t, apiErr)
+			assert.EqualValues(t, "insufficient_user_quota", apiErr.GetErrorCode())
+			assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+			assert.Equal(t, fmt.Sprintf("预扣费额度失败, 用户剩余额度: %s, 需要预扣费额度: %s", logger.FormatQuota(tc.balance), logger.FormatQuota(tc.required)), apiErr.Error())
+			assert.Nil(t, validateWalletQuota(info, 1000000, int64(tc.required)), "the displayed amount must match the admission threshold")
+		})
+	}
+}
+
 func TestPersonalOrdinarySubscription(t *testing.T) {
-	for _, ratio := range []int64{900000, 2000000, 1} {
-		t.Run(fmt.Sprint(ratio), func(t *testing.T) {
+	for _, tc := range []struct {
+		ratio   int64
+		version int
+	}{{900000, 0}, {2000000, 0}, {1, 0}, {800000, model.RealtimePricingVersion}, {5000000, model.RealtimePricingVersion}, {10000, model.RealtimePricingVersion}} {
+		t.Run(fmt.Sprintf("%d/version%d", tc.ratio, tc.version), func(t *testing.T) {
+			ratio := tc.ratio
 			truncate(t)
 			seedUser(t, 901, 1000)
 			seedChannel(t, 902)
@@ -2191,10 +2240,16 @@ func TestPersonalOrdinarySubscription(t *testing.T) {
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 			info := &relaycommon.RelayInfo{RequestId: fmt.Sprintf("personal-sub-%d", ratio), UserId: 901, IsPlayground: true, OriginModelName: "personal-model", UserSetting: dto.UserSetting{BillingPreference: "subscription_only"}, PersonalPricing: &types.PersonalPricingSnapshot{UserID: 901, Model: "personal-model", Channels: map[int]types.PersonalChannelPrice{902: {CustomerRatio: ratio, AgentRatio: 1000000}}}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 902}}
+			if tc.version > 0 {
+				info.PersonalPricing.Realtime = &types.RealtimePricingContext{Version: tc.version}
+			}
 			require.Nil(t, PreConsumeBilling(ctx, 100, info))
 			assert.Equal(t, 904, info.SubscriptionId)
+			reserved, _, err := model.RealtimeCustomerQuota(100, ratio, tc.version)
+			require.NoError(t, err)
+			assert.Equal(t, max(1, reserved), info.FinalPreConsumedQuota, "subscriptions retain source-selection reservations")
 			require.NoError(t, info.Billing.Settle(60))
-			want, clamp, err := model.PersonalQuota(60, ratio)
+			want, clamp, err := model.RealtimeCustomerQuota(60, ratio, tc.version)
 			require.NoError(t, err)
 			require.Nil(t, clamp)
 			var sub model.UserSubscription
@@ -2541,4 +2596,135 @@ func personalFundingFixture(t *testing.T) (*gin.Context, *relaycommon.RelayInfo)
 	info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "generate"}, RequestId: "funding-request", UserId: 950003, TokenId: 950005, OriginModelName: "funding-model", PersonalPricing: snapshot, PriceData: types.PriceData{Quota: 100, QuotaToPreConsume: 100}, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 950004}}
 	require.Nil(t, PreConsumeBilling(ctx, 100, info))
 	return ctx, info
+}
+
+func TestRealtimePricingFunding(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ratio   int64
+		trusted bool
+		want    int
+	}{
+		{"discount", 800000, false, 80}, {"explicit base", 1000000, false, 100}, {"markup", 5000000, false, 500}, {"trusted", 800000, true, 80},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			seedUser(t, 981, 10000000)
+			seedChannel(t, 982)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{RequestId: "realtime-funding-" + tc.name, UserId: 981, IsPlayground: true, TokenUnlimited: true, OriginModelName: "realtime-model", UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, PersonalPricing: &types.PersonalPricingSnapshot{UserID: 981, Model: "realtime-model", Realtime: &types.RealtimePricingContext{Version: model.RealtimePricingVersion}, Channels: map[int]types.PersonalChannelPrice{982: {CustomerRatio: tc.ratio, AgentRatio: model.ResellerRatioScale, Source: "organization", Revision: 3}}}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 982}}
+			if !tc.trusted {
+				info.ForcePreConsume = true
+			}
+			require.Nil(t, PreConsumeBilling(ctx, 100, info))
+			if tc.trusted {
+				assert.Zero(t, info.FinalPreConsumedQuota)
+			} else {
+				assert.Equal(t, tc.want, info.FinalPreConsumedQuota)
+			}
+			require.NoError(t, SettleBillingAndRecordConsumeLog(ctx, info, 100, model.RecordConsumeLogParams{ChannelId: 982, ModelName: info.OriginModelName, Other: model.NewLogOther()}, true))
+			assert.EqualValues(t, 10000000-tc.want, getUserQuota(t, 981))
+			require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, "full", 0))
+			require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, "full", 0))
+			assert.EqualValues(t, 10000000, getUserQuota(t, 981))
+		})
+	}
+}
+
+func TestRealtimePricingZeroRoundedCharge(t *testing.T) {
+	truncate(t)
+	seedUser(t, 983, 0)
+	seedChannel(t, 984)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{RequestId: "realtime-zero", UserId: 983, IsPlayground: true, ForcePreConsume: true, OriginModelName: "realtime-model", UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, PersonalPricing: &types.PersonalPricingSnapshot{UserID: 983, Model: "realtime-model", Realtime: &types.RealtimePricingContext{Version: model.RealtimePricingVersion}, Channels: map[int]types.PersonalChannelPrice{984: {CustomerRatio: 10000, AgentRatio: model.ResellerRatioScale, Source: "organization"}}}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 984}}
+	require.Nil(t, PreConsumeBilling(ctx, 1, info))
+	require.NoError(t, SettleBillingAndRecordConsumeLog(ctx, info, 1, model.RecordConsumeLogParams{ChannelId: 984, ModelName: info.OriginModelName, Other: model.NewLogOther()}, true))
+	var state model.ResellerRequest
+	require.NoError(t, model.DB.First(&state, "id = ?", info.RequestId).Error)
+	assert.Equal(t, "settled", state.State)
+	require.NotNil(t, state.CustomerQuota)
+	assert.Zero(t, *state.CustomerQuota)
+	assert.Zero(t, getUserQuota(t, 983))
+}
+
+func TestRealtimePricingRetryReserve(t *testing.T) {
+	for _, tc := range []struct {
+		source  string
+		channel int
+		want    int
+	}{{"organization", 987, 90}, {"system", 988, 100}} {
+		t.Run(tc.source, func(t *testing.T) {
+			truncate(t)
+			seedUser(t, 985, 85)
+			for _, id := range []int{986, 987, 988} {
+				seedChannel(t, id)
+			}
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{RequestId: "realtime-retry-" + tc.source, UserId: 985, IsPlayground: true, ForcePreConsume: true, OriginModelName: "realtime-model", UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, PriceData: types.PriceData{QuotaToPreConsume: 100}, PersonalPricing: &types.PersonalPricingSnapshot{UserID: 985, Model: "realtime-model", Realtime: &types.RealtimePricingContext{Version: model.RealtimePricingVersion}, Channels: map[int]types.PersonalChannelPrice{986: {CustomerRatio: 800000, AgentRatio: model.ResellerRatioScale, Source: "user"}, 987: {CustomerRatio: 900000, AgentRatio: model.ResellerRatioScale, Source: "organization"}}}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 986}}
+			ctx.Set(common.RequestIdKey, info.RequestId)
+			require.Nil(t, PreparePersonalChannelBilling(ctx, info))
+			assert.Equal(t, 80, info.FinalPreConsumedQuota)
+			assert.EqualValues(t, 5, getUserQuota(t, 985))
+			info.ChannelId = tc.channel
+			require.NotNil(t, PreparePersonalChannelBilling(ctx, info), "insufficient top-up blocks the next attempt")
+			assert.Equal(t, 80, info.FinalPreConsumedQuota)
+			assert.EqualValues(t, 5, getUserQuota(t, 985), "failed top-up is atomic")
+			require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", 985).Update("quota", gorm.Expr("quota + ?", tc.want-85)).Error)
+			require.Nil(t, PreparePersonalChannelBilling(ctx, info))
+			assert.Equal(t, tc.want, info.FinalPreConsumedQuota)
+			require.NoError(t, SettleBillingAndRecordConsumeLog(ctx, info, 100, model.RecordConsumeLogParams{ChannelId: tc.channel, ModelName: info.OriginModelName, Other: model.NewLogOther()}, true))
+			assert.Zero(t, getUserQuota(t, 985))
+			var log model.Log
+			require.NoError(t, model.LOG_DB.Where("request_id = ?", info.RequestId).First(&log).Error)
+			assert.Equal(t, tc.source, decodeLogOther(t, &log)["pricing_source"])
+		})
+	}
+}
+
+func TestRealtimeMidjourneyFunding(t *testing.T) {
+	truncate(t)
+	seedUser(t, 991, 10000000)
+	seedChannel(t, 992)
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", 992).Update("models", "mj_imagine").Error)
+	root := model.User{Id: 993, Username: "rt-mj-root", AffCode: "rt-mj-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled}
+	require.NoError(t, model.DB.Create(&root).Error)
+	require.NoError(t, model.DB.Create(&model.RealtimePricingState{ID: 1, Phase: "active"}).Error)
+	org := model.Organization{Name: "rt-mj-org", Status: model.OrganizationStatusEnabled}
+	require.NoError(t, model.DB.Create(&org).Error)
+	require.NoError(t, model.DB.Create(&model.OrganizationMember{OrganizationId: org.Id, UserId: 991}).Error)
+	_, err := model.SaveRealtimePricing(root.Id, "organization", org.Id, model.RealtimePricingInput{Items: []model.RealtimePricingItem{{Model: "mj_imagine", Ratio: "0.8", ChannelIDs: []int{992}}}})
+	require.NoError(t, err)
+	plan := model.SubscriptionPlan{Id: 994, Title: "rt-mj-subscription", Enabled: true}
+	require.NoError(t, model.DB.Create(&plan).Error)
+	seedSubscription(t, 995, 991, 10000, 0)
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("id = ?", 995).Update("plan_id", plan.Id).Error)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/mj/submit/imagine", nil)
+	common.SetContextKey(ctx, constant.ContextKeyChannelId, 992)
+	info := &relaycommon.RelayInfo{RequestId: "rt-mj-request", UserId: 991, OriginModelName: "mj_imagine", TokenUnlimited: true, IsPlayground: true, UserSetting: dto.UserSetting{BillingPreference: "subscription_first"}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: 992}}
+	require.Nil(t, PreparePersonalMidjourney(ctx, info, 100))
+	require.Equal(t, BillingSourceWallet, info.BillingSource, "Midjourney must preserve its wallet-only funding before sending")
+	assert.Equal(t, 80, info.FinalPreConsumedQuota, "asynchronous tasks cannot gain a trust bypass")
+	task := &model.Midjourney{UserId: 991, ChannelId: 992, MjId: "rt-mj-task", Action: "IMAGINE"}
+	prepared, err := PrepareMidjourneyTaskBilling(info, task, 100, true)
+	require.NoError(t, err)
+	require.True(t, prepared)
+	require.NoError(t, PersistMidjourneyTaskSubmission(info, task, prepared))
+	applied, err := SettleMidjourneyTaskBilling(info, task, prepared)
+	require.NoError(t, err)
+	require.True(t, applied)
+	RefundUnsettledPersonalBilling(ctx, info)
+	assert.EqualValues(t, 9999920, getUserQuota(t, 991))
+	assert.Equal(t, 80, task.Quota)
+	assert.Zero(t, getSubscriptionUsed(t, 995))
+	other := GenerateMjOtherInfo(info, info.PriceData)
+	encoded, err := common.Marshal(other)
+	require.NoError(t, err)
+	var values map[string]any
+	require.NoError(t, common.Unmarshal(encoded, &values))
+	assert.Equal(t, "organization", values["pricing_source"])
+	assert.Equal(t, 0.8, values["personal_ratio"])
 }

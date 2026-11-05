@@ -123,6 +123,9 @@ type ResellerEvent struct {
 }
 
 func migrateReseller(db *gorm.DB) error {
+	if err := db.AutoMigrate(&RealtimePricingHead{}, &RealtimePricingRule{}, &RealtimePricingHistory{}, &RealtimePricingState{}); err != nil {
+		return err
+	}
 	return db.AutoMigrate(&UserSecurityState{}, &SecurityRecoveryRecord{}, &ResellerIdentity{}, &ResellerAccount{}, &ResellerQuotaAdjustment{}, &ResellerConfigHead{}, &ResellerModelConfig{}, &ResellerConfigRevision{}, &ResellerFundingSnapshot{}, &ResellerBillingReceipt{}, &ResellerProjection{}, &ResellerRequest{}, &ResellerEvent{})
 }
 

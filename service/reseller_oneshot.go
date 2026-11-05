@@ -28,6 +28,7 @@ func settlePersonalOneShot(c *gin.Context, info *relaycommon.RelayInfo, operatio
 	logParams := model.BuildConsumeBillingLogParams(c, info.UserId, params)
 	logParams.Quota = journal.FinalQuota
 	logParams.Other.SetPublic("personal_ratio", float64(fact.CustomerRatio)/float64(model.ResellerRatioScale))
+	attachRealtimePricingLog(logParams.Other, fact)
 	snapshot, err := requestMoneySnapshot(info)
 	if err != nil {
 		return err

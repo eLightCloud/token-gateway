@@ -115,6 +115,7 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
+ pricing_source?: string
  personal_ratio?: number
   admin_info?: {
     request_policy?: PolicyEvent[]

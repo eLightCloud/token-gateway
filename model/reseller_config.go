@@ -124,6 +124,9 @@ func SaveResellerConfig(operatorID, userID int, admin bool, input ResellerConfig
 		return nil, ErrResellerInvalid
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := guardRealtimeLegacyWriteTx(tx, userID, input); err != nil {
+			return err
+		}
 		if err := ResellerManageTarget(tx, operatorID, userID, admin); err != nil {
 			return err
 		}

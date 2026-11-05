@@ -36,7 +36,7 @@ func redactPersonalCustomerLogs(userID int, logs []*Log) error {
 			continue
 		}
 		projected := map[string]any{}
-		for _, key := range []string{"personal_ratio", "base_quota", "model_ratio", "model_price", "completion_ratio", "group_ratio", "billing_mode", "billing_unit", "fixed_price", "matched_tier", "billing_source", "is_task", "image_count", "pre_consumed_quota", "actual_quota"} {
+		for _, key := range []string{"pricing_source", "pricing_revision", "pricing_version", "personal_ratio", "base_quota", "model_ratio", "model_price", "completion_ratio", "group_ratio", "billing_mode", "billing_unit", "fixed_price", "matched_tier", "billing_source", "is_task", "image_count", "pre_consumed_quota", "actual_quota"} {
 			value, ok := original[key]
 			if !ok {
 				continue

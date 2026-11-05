@@ -8,6 +8,7 @@ import (
 )
 
 func registerResellerRoutes(api *gin.RouterGroup) {
+	registerRealtimePricingRoutes(api)
 	admin := api.Group("/reseller/admin/agents", middleware.AdminAuth(), middleware.DisableCache(), middleware.ResellerWriteRateLimit())
 	admin.Use(func(c *gin.Context) { c.Set("reseller_admin", true); c.Next() })
 	admin.GET("", middleware.RequirePermission(authz.ResellerCreate), controller.ListResellerUsers)

@@ -1,19 +1,29 @@
 package model
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/QuantumNous/new-api/common"
 )
 
 type PersonalRatioHistory struct {
-	Revision   int64                `json:"revision"`
-	OperatorID int                  `json:"operator_id"`
-	CreatedAt  int64                `json:"created_at"`
-	Models     []PersonalRatioRange `json:"models"`
+	PricingVersion int                  `json:"pricing_version,omitempty"`
+	Cursor         string               `json:"cursor,omitempty"`
+	Revision       int64                `json:"revision"`
+	OperatorID     int                  `json:"operator_id"`
+	CreatedAt      int64                `json:"created_at"`
+	Models         []PersonalRatioRange `json:"models"`
 }
 
-func ReadPersonalRatioHistory(userID int, before int64) ([]PersonalRatioHistory, error) {
+func ReadPersonalRatioHistory(userID int, before int64, cursors ...string) ([]PersonalRatioHistory, error) {
+	if len(cursors) > 1 {
+		return nil, ErrResellerInvalid
+	}
+	cursor := ""
+	if len(cursors) == 1 {
+		cursor = cursors[0]
+	}
 	kind, err := ResellerUserKind(DB, userID)
 	if err != nil {
 		return nil, err
@@ -22,11 +32,15 @@ func ReadPersonalRatioHistory(userID int, before int64) ([]PersonalRatioHistory,
 		return nil, ErrResellerForbidden
 	}
 	query := DB.Where("user_id = ?", userID)
+	query, err = personalHistoryCursorQuery(query, cursor, 0)
+	if err != nil {
+		return nil, err
+	}
 	if before > 0 {
 		query = query.Where("revision < ?", before)
 	}
 	var revisions []ResellerConfigRevision
-	if err := query.Order("revision DESC").Limit(50).Find(&revisions).Error; err != nil {
+	if err := query.Order("created_at DESC, revision DESC").Limit(50).Find(&revisions).Error; err != nil {
 		return nil, err
 	}
 	history := make([]PersonalRatioHistory, 0, len(revisions))
@@ -67,6 +81,14 @@ func ReadPersonalRatioHistory(userID int, before int64) ([]PersonalRatioHistory,
 			entry.Models = append(entry.Models, PersonalRatioRange{Model: name, Min: formatPersonalRatio(bounds[0]), Max: formatPersonalRatio(bounds[1])})
 		}
 		history = append(history, entry)
+	}
+	history, err = appendRealtimePersonalHistory(userID, before, history, cursor)
+	if err != nil {
+		return nil, err
+	}
+	for i := range history {
+		entry := &history[i]
+		entry.Cursor = fmt.Sprintf("%d:%d:%d", entry.CreatedAt, entry.PricingVersion, entry.Revision)
 	}
 	return history, nil
 }

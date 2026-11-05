@@ -144,6 +144,26 @@ test('keeps log details open when the parent refreshes with unchanged data', asy
 })
 
 test.each([
+  ['user', 'User override'],
+  ['organization', 'Organization inherited'],
+  ['system', 'System default'],
+])(
+  'shows the frozen %s pricing source in consumption details',
+  async (source, label) => {
+    fireEvent.click(
+      renderPreview({
+        model_price: 0.25,
+        personal_ratio: 0.8,
+        pricing_source: source,
+      })
+    )
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Pricing source')).toBeVisible()
+    expect(within(dialog).getByText(label)).toBeVisible()
+  }
+)
+
+test.each([
   {
     name: 'fixed expression zero price',
     other: {

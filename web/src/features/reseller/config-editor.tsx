@@ -46,12 +46,14 @@ export function ResellerConfigEditor({
   onSuccess,
   onReload,
   authorization = true,
+  consumptionEditable = true,
   onDirtyChange,
 }: {
   userID: number
   admin: boolean
   onDirtyChange?: (dirty: boolean) => void
   authorization?: boolean
+  consumptionEditable?: boolean
   config: Config
   candidates: ConfigItem[]
   onSuccess: () => void
@@ -140,9 +142,13 @@ export function ResellerConfigEditor({
     <div className='space-y-4'>
       <FormNavigationGuard when={dirty} />
       <p className='text-muted-foreground text-sm'>
-        {t(
-          'Ratios must be greater than 0 and at most 2, with up to six decimal places. Missing ratios use 1.'
-        )}
+        {consumptionEditable
+          ? t(
+              'Ratios must be greater than 0 and at most 2, with up to six decimal places. Missing ratios use 1.'
+            )
+          : t(
+              'Configure authorization here. Consumption ratios are managed in realtime model pricing.'
+            )}
       </p>
       <div className='max-w-md space-y-2'>
         <Label htmlFor='config-model-search'>{t('Search models')}</Label>
@@ -188,6 +194,8 @@ export function ResellerConfigEditor({
           },
           {
             id: 'ratio',
+            className: consumptionEditable ? undefined : 'hidden',
+            cellClassName: consumptionEditable ? undefined : 'hidden',
             header: t('Personal ratio'),
             cell: (row) => (
               <Input
@@ -199,6 +207,7 @@ export function ResellerConfigEditor({
                 inputMode='decimal'
                 value={row.ratio}
                 disabled={
+                  !consumptionEditable ||
                   mutation.isPending ||
                   (!admin && !available.has(`${row.model}:${row.channel_id}`))
                 }

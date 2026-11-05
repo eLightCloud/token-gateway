@@ -513,7 +513,7 @@ func openTaskDialectDatabase(t *testing.T, models ...any) (*gorm.DB, common.Data
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	require.NoError(t, db.AutoMigrate(append([]any{&model.ResellerConfigHead{}, &model.ResellerModelConfig{}}, models...)...))
+	require.NoError(t, db.AutoMigrate(append([]any{&model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}}, models...)...))
 	t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(models...)) })
 	var version string
 	if dialect == common.DatabaseTypeSQLite {
@@ -531,7 +531,7 @@ func TestImmediateTaskSettlementDatabase(t *testing.T) {
 		dialect = common.DatabaseTypeSQLite
 	}
 	db, _ := newAuditTestDatabase(t, string(dialect), os.Getenv("TEST_"+strings.ToUpper(string(dialect))+"_DSN"))
-	require.NoError(t, db.AutoMigrate(&model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}, &model.TaskSettlementJournal{}, &model.SystemTask{}, &model.SystemTaskLock{}))
+	require.NoError(t, db.AutoMigrate(&model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}, &model.TaskSettlementJournal{}, &model.SystemTask{}, &model.SystemTaskLock{}))
 	oldDB, oldLogDB := model.DB, model.LOG_DB
 	oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
 	oldRedis, oldMemory, oldBatch, oldConsume, oldExport := common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled, common.DataExportEnabled

@@ -45,7 +45,7 @@ func settlePersonalTask(ctx context.Context, task *model.Task, base int, refund 
 	if refund {
 		operation = "task-refund:" + fact.OperationID
 	}
-	customer, customerClamp, err := model.PersonalQuota(base, fact.CustomerRatio)
+	customer, customerClamp, err := model.RealtimeCustomerQuota(base, fact.CustomerRatio, fact.PricingVersion)
 	if err != nil {
 		return false
 	}
@@ -121,6 +121,7 @@ func settlePersonalTask(ctx context.Context, task *model.Task, base int, refund 
 		logger.LogWarn(ctx, fmt.Sprintf("personal task quota saturation task_id=%s request_id=%s", task.TaskID, fact.RequestID))
 	}
 	params.Other.SetPublic("personal_ratio", float64(fact.CustomerRatio)/float64(model.ResellerRatioScale))
+	attachRealtimePricingLog(params.Other, &fact)
 	journal := &model.TaskSettlementJournal{PersonalFact: string(encoded), RequestId: operation, Operation: model.TaskSettlementOperationRecalculate, EntityType: entity, EntityId: task.ID, EntityExpectedQuota: task.Quota, EntityFinalQuota: customer, ExpectedQuota: int(paid.CustomerTarget), FinalQuota: customer, UserId: task.UserId, ChannelId: task.ChannelId, TokenId: funding.TokenID, BillingSource: funding.BillingSource, SubscriptionId: funding.SubscriptionID, Delta: delta, UsageDelta: max(delta, 0), ApplyUsage: delta > 0, ApplyToken: funding.ApplyToken}
 	if refund {
 		journal.Operation = model.TaskSettlementOperationRefund

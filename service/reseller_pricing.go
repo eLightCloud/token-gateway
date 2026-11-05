@@ -56,6 +56,11 @@ func PreparePersonalRequestPricing(c *gin.Context, info *relaycommon.RelayInfo) 
 	}
 	info.PersonalPricing = snapshot
 	PinPersonalPricingChannel(c, info)
+	if snapshot != nil && snapshot.Realtime != nil {
+		info.PriceData.DiscountSnapshot = snapshot.Realtime.LegacyDiscount
+		info.PriceData.DiscountSnapshotLoaded = true
+		ApplyOrganizationDiscountForChannel(info, info.ChannelId)
+	}
 	return nil
 }
 
@@ -108,7 +113,7 @@ func personalBillingFact(info *relaycommon.RelayInfo, base int, kind, operation 
 		price = types.PersonalChannelPrice{CustomerRatio: model.ResellerRatioScale, AgentRatio: model.ResellerRatioScale}
 	}
 	saturated := false
-	customer, clamp, err := model.PersonalQuota(base, price.CustomerRatio)
+	customer, clamp, err := model.RealtimeCustomerQuota(base, price.CustomerRatio, personalPricingVersion(snapshot))
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +142,7 @@ func personalBillingFact(info *relaycommon.RelayInfo, base int, kind, operation 
 	if info.RequestId == "" {
 		info.RequestId = common.NewRequestId()
 	}
-	return &types.PersonalBillingFact{Saturated: saturated, RequestID: info.RequestId, OperationID: model.PersonalOperationID(info.RequestId, operation), Kind: kind, UserID: info.UserId, AgentUserID: snapshot.AgentUserID, Model: snapshot.Model, ChannelID: info.ChannelId, Revision: snapshot.Revision, AgentRevision: snapshot.AgentRevision, CustomerRatio: price.CustomerRatio, AgentRatio: price.AgentRatio, BaseQuota: int64(base), CustomerTarget: int64(customer), AgentTarget: int64(agent)}, nil
+	return &types.PersonalBillingFact{Saturated: saturated, RequestID: info.RequestId, OperationID: model.PersonalOperationID(info.RequestId, operation), Kind: kind, UserID: info.UserId, AgentUserID: snapshot.AgentUserID, Model: snapshot.Model, ChannelID: info.ChannelId, Revision: snapshot.Revision, AgentRevision: snapshot.AgentRevision, CustomerRatio: price.CustomerRatio, AgentRatio: price.AgentRatio, BaseQuota: int64(base), CustomerTarget: int64(customer), AgentTarget: int64(agent), PricingVersion: personalPricingVersion(snapshot), PricingSource: personalPricingSource(price, snapshot), PricingRevision: price.Revision, OrganizationID: personalPricingOrganization(snapshot)}, nil
 }
 
 func (s *BillingSession) reservePersonal(base int) error {
@@ -216,6 +221,7 @@ func attachPersonalJournal(ctx context.Context, info *relaycommon.RelayInfo, jou
 		journal.UsageDelta = journal.FinalQuota
 		if logParams != nil {
 			logParams.Quota = journal.FinalQuota
+			attachRealtimePricingLog(logParams.Other, fact)
 			logParams.Other.SetPublic("personal_ratio", float64(fact.CustomerRatio)/float64(model.ResellerRatioScale))
 			logParams.Other.SetPublic("base_quota", base)
 		}
@@ -290,12 +296,6 @@ func (s *BillingSession) personalReservationFact(quota int) (*types.PersonalBill
 }
 
 func validateWalletQuota(info *relaycommon.RelayInfo, preConsumedQuota int, userQuota int64) *relaytypes.NewAPIError {
-	if userQuota <= 0 && !(userQuota == 0 && preConsumedQuota == 0 && info.PersonalPricing != nil) {
-		return relaytypes.NewErrorWithStatusCode(
-			fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
-			relaytypes.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
-			relaytypes.ErrOptionWithSkipRetry(), relaytypes.ErrOptionWithNoRecordErrorLog())
-	}
 	requiredQuota := preConsumedQuota
 	if info.PersonalPricing != nil {
 		fact, err := personalBillingFact(info, preConsumedQuota, "reserve", "preconsume")
@@ -304,9 +304,15 @@ func validateWalletQuota(info *relaycommon.RelayInfo, preConsumedQuota int, user
 		}
 		requiredQuota = int(fact.CustomerTarget)
 	}
+	if userQuota <= 0 && !(userQuota == 0 && requiredQuota == 0 && info.PersonalPricing != nil) {
+		return relaytypes.NewErrorWithStatusCode(
+			fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
+			relaytypes.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+			relaytypes.ErrOptionWithSkipRetry(), relaytypes.ErrOptionWithNoRecordErrorLog())
+	}
 	if userQuota-int64(requiredQuota) < 0 {
 		return relaytypes.NewErrorWithStatusCode(
-			fmt.Errorf("预扣费额度失败, 用户剩余额度: %s, 需要预扣费额度: %s", logger.FormatQuota(userQuota), logger.FormatQuota(preConsumedQuota)),
+			fmt.Errorf("预扣费额度失败, 用户剩余额度: %s, 需要预扣费额度: %s", logger.FormatQuota(userQuota), logger.FormatQuota(requiredQuota)),
 			relaytypes.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
 			relaytypes.ErrOptionWithSkipRetry(), relaytypes.ErrOptionWithNoRecordErrorLog())
 	}
