@@ -897,7 +897,7 @@ try {
   );
   for (const kind of ["agent", "customer"])
     await step(
-      `new ${kind} activates by email, chooses password and completes mandatory authenticator enrollment`,
+      `new ${kind} chooses a password by email and completes mandatory authenticator enrollment`,
       async () => {
         const name = "new-" + kind,
           owner = kind === "agent" ? "root" : "agent",
@@ -906,10 +906,15 @@ try {
           username: "e2e-" + name,
           display_name: "E2E new " + kind,
           email: name + "@e2e.invalid",
+          ...(kind === "agent" && { phone: "+8613800138000" }),
         });
         assert.equal(created.status, 200, created.text);
         assert.equal(created.data.data.activation_mail_sent, true, created.text);
         uid[name] = created.data.data.user_id;
+        if (kind === "agent") {
+          const enabled = await api(owner, `${path}/${uid[name]}/enabled`, "PUT", { enabled: true });
+          assert.equal(enabled.status, 200, enabled.text);
+        }
         const link = mailLink(name + "@e2e.invalid", "account_activation");
         const context = await browser.newContext({ locale: "en-US" });
         await context.addInitScript(() => {
@@ -925,7 +930,7 @@ try {
         const activationPromise = page.waitForResponse(
           (r) => r.url().endsWith("/api/security/activation") && r.request().method() === "POST",
         );
-        await page.getByRole("button", { name: "Activate account", exact: true }).click();
+        await page.getByRole("button", { name: "Set Password", exact: true }).click();
         const activated = await (await activationPromise).json();
         assert.equal(activated.success, true, JSON.stringify(activated));
         assert.ok(!activated.data.access_token);

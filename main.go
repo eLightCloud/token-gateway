@@ -157,6 +157,7 @@ func main() {
 	// switch are enforced inside the runner and each handler's Enabled().
 	controller.RegisterScheduledSystemTasks()
 	service.StartSystemTaskRunner()
+	service.StartOperationsNotifications()
 
 	// Read-only structure check of the log indexes the organization invoice
 	// relies on: reports reversed-column drift instead of silently running on
@@ -205,6 +206,7 @@ func main() {
 	server.Use(middleware.Version())
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)
+	server.Use(middleware.OperationsObserver())
 	InjectUmamiAnalytics()
 	InjectGoogleAnalytics()
 

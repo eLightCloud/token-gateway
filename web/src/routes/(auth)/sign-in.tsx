@@ -26,12 +26,17 @@ import { useAuthStore } from '@/stores/auth-store'
 
 const searchSchema = z.object({
   redirect: z.string().optional(),
+  passwordSetupComplete: z.boolean().optional(),
 })
 
 export const Route = createFileRoute('/(auth)/sign-in')({
   component: SignIn,
   validateSearch: searchSchema,
   beforeLoad: async ({ search }) => {
+    // An activation link can be opened in a browser signed in as another user.
+    // Show the sign-in form without changing that session.
+    if (search.passwordSetupComplete) return
+
     // 根 guard 可能因为没有会话提示而跳过了 refresh。此处必须回源确认，
     // 否则持有有效 Refresh Cookie 的用户会被要求重新输入密码。
     await resolveAuthentication()

@@ -37,6 +37,8 @@ export type ResellerUser = {
   username: string
   display_name: string
   email: string
+  phone?: string
+  remark?: string
   activation: string
   agent_disabled: boolean
   platform_disabled: boolean
@@ -50,6 +52,25 @@ export type ConfigItem = {
   ratio: string
 }
 export type Config = { revision: number; items: ConfigItem[] }
+export type ResellerOwnAccount = {
+  user: ResellerUser
+  discounts: ConfigItem[]
+}
+export type ConfigSetting = Pick<ConfigItem, 'authorized' | 'ratio'>
+export type ConfigChangePage = {
+  items: {
+    revision: number
+    operator_id: number
+    created_at: number
+    changes: {
+      model: string
+      channel_id: number
+      before: ConfigSetting | null
+      after: ConfigSetting | null
+    }[]
+  }[]
+  next_cursor: number
+}
 export type Workspace = {
   pricing_phase?: string
   user: ResellerUser
@@ -103,6 +124,7 @@ export type RatioRange = { model: string; min: string; max: string }
 
 export const resellerPath = (admin: boolean) =>
   admin ? '/api/reseller/admin/agents' : '/api/reseller/self/customers'
+export const resellerOwnAccountPath = '/api/reseller/self/account'
 export const resellerKey = (userID: number | undefined, ...parts: unknown[]) =>
   ['reseller', userID, ...parts] as const
 

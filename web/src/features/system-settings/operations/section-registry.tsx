@@ -73,7 +73,7 @@ const OPERATIONS_SECTIONS = [
   },
   {
     id: 'email',
-    titleKey: 'SMTP Email',
+    titleKey: 'Email',
     build: () => <EmailSettingsSection />,
   },
   {

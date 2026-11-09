@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { AxiosError, type AxiosAdapter } from 'axios'
+import i18n from 'i18next'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { api, getNotice } from '../api'
@@ -26,6 +27,33 @@ const originalAdapter = api.defaults.adapter
 afterEach(() => {
   api.defaults.adapter = originalAdapter
   vi.restoreAllMocks()
+})
+
+it('sends the current interface language with security email requests after switching languages', async () => {
+  const adapter = vi.fn<AxiosAdapter>(async (config) => ({
+    config,
+    data: { success: true },
+    headers: {},
+    status: 200,
+    statusText: 'OK',
+  }))
+  api.defaults.adapter = adapter
+  const previousLanguage = i18n.language
+  i18n.addResourceBundle('zhCN', 'translation', { Password: '密码' })
+  try {
+    for (const language of ['zhCN', 'en']) {
+      await i18n.changeLanguage(language)
+      await api.post('/api/reseller/admin/agents/2/activation', {})
+    }
+    expect(
+      adapter.mock.calls.map(([config]) =>
+        config.headers.get('Accept-Language')
+      )
+    ).toEqual(['zh-CN', 'en'])
+  } finally {
+    i18n.removeResourceBundle('zhCN', 'translation')
+    await i18n.changeLanguage(previousLanguage)
+  }
 })
 
 it('a retry after 404 revalidates HTTP caches instead of accepting a stored error', async () => {

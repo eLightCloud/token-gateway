@@ -111,7 +111,7 @@ beforeEach(async () => {
         code: 'EMAIL_ACCEPTED',
         stages: [
           { name: 'config', status: 'passed' },
-          { name: 'submit', status: 'passed' },
+          { name: 'graph_submit', status: 'passed' },
         ],
       },
     },
@@ -125,6 +125,12 @@ afterEach(() => {
 describe('system email settings', () => {
   it('saves the entire configuration once and keeps blank credentials without exposing stored values', async () => {
     await renderSettings()
+    expect(
+      screen.getByRole('option', {
+        name: 'Microsoft 365 (Microsoft Graph)',
+        selected: true,
+      })
+    ).toBeInTheDocument()
     expect(screen.getByLabelText('Application secret')).toHaveValue('')
     expect(
       screen.queryByLabelText('SMTP password or authorization code')
@@ -132,7 +138,9 @@ describe('system email settings', () => {
     const user = userEvent.setup()
     await user.clear(screen.getByLabelText('Sender mailbox'))
     await user.type(screen.getByLabelText('Sender mailbox'), 'new@example.com')
-    await user.click(screen.getByRole('button', { name: 'Save SMTP settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save email settings' })
+    )
     await screen.findByText(
       'Email settings saved. Sending has not been verified for this version.'
     )
@@ -157,7 +165,9 @@ describe('system email settings', () => {
       screen.getByLabelText('Application ID'),
       '33333333-3333-3333-3333-333333333333'
     )
-    await user.click(screen.getByRole('button', { name: 'Save SMTP settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save email settings' })
+    )
     await screen.findByText(
       'Enter a new secret when changing the Microsoft application'
     )
@@ -166,7 +176,9 @@ describe('system email settings', () => {
       screen.getByLabelText('Application secret'),
       'replacement-secret'
     )
-    await user.click(screen.getByRole('button', { name: 'Save SMTP settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save email settings' })
+    )
     await screen.findByText(
       'Email settings saved. Sending has not been verified for this version.'
     )
@@ -183,7 +195,7 @@ describe('system email settings', () => {
     verify.mockResolvedValue(null)
     await renderSettings()
     await userEvent.click(
-      screen.getByRole('button', { name: 'Save SMTP settings' })
+      screen.getByRole('button', { name: 'Save email settings' })
     )
     await waitFor(() => expect(verify).toHaveBeenCalledTimes(1))
     expect(api.put).not.toHaveBeenCalled()
@@ -205,7 +217,9 @@ describe('system email settings', () => {
       screen.getByLabelText('Application secret'),
       'keep-my-draft'
     )
-    await user.click(screen.getByRole('button', { name: 'Save SMTP settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save email settings' })
+    )
     await screen.findByText(
       'Unable to save email settings. Check the fields; if settings changed elsewhere, reload and compare before saving.'
     )
@@ -235,8 +249,11 @@ describe('system email settings', () => {
     )
     await user.click(screen.getByRole('button', { name: 'Send test email' }))
     await screen.findByText(
-      'SMTP server accepted the email. Check the recipient inbox for delivery.'
+      'The mail provider accepted the email. Check the recipient inbox for delivery.'
     )
+    expect(
+      screen.getByText('Microsoft Graph submission: Passed')
+    ).toBeInTheDocument()
     expect(api.post).toHaveBeenCalledWith(
       '/api/option/email_delivery/test',
       { expected_revision: 4, recipient: 'receiver@example.com' },
@@ -260,7 +277,9 @@ describe('system email settings', () => {
       })
     )
     await user.click(screen.getByRole('button', { name: /^Clear$/ }))
-    await user.click(screen.getByRole('button', { name: 'Save SMTP settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save email settings' })
+    )
     await screen.findByText(
       'Email settings saved. Sending has not been verified for this version.'
     )
@@ -271,17 +290,17 @@ describe('system email settings', () => {
       options: { auth_mode: 'legacy' },
     })
   })
-  it('shows an actionable SMTP AUTH disabled error without claiming delivery', async () => {
+  it('shows Graph permission guidance without claiming delivery', async () => {
     vi.mocked(api.post).mockResolvedValue({
       data: {
         success: true,
         data: {
           revision: 4,
           timestamp: 1793880000,
-          request_id: 'auth-disabled',
+          request_id: 'graph-access-denied',
           code: 'EMAIL_DELIVERY_FAILED',
-          reason: 'SMTP_AUTH_DISABLED',
-          stages: [{ name: 'auth', status: 'failed' }],
+          reason: 'GRAPH_ACCESS_DENIED',
+          stages: [{ name: 'graph_submit', status: 'failed' }],
         },
       },
     })
@@ -293,11 +312,11 @@ describe('system email settings', () => {
     )
     await user.click(screen.getByRole('button', { name: 'Send test email' }))
     await screen.findByText(
-      'Your Microsoft tenant has disabled SMTP AUTH. Ask a tenant administrator to enable it for the sender mailbox.'
+      'Microsoft Graph denied access. Check Mail.Send permission and access to the sender mailbox.'
     )
     expect(
       screen.queryByText(
-        'SMTP server accepted the email. Check the recipient inbox for delivery.'
+        'The mail provider accepted the email. Check the recipient inbox for delivery.'
       )
     ).not.toBeInTheDocument()
   })
@@ -310,12 +329,125 @@ describe('system email settings', () => {
     )
     await user.click(screen.getByRole('button', { name: 'Send test email' }))
     await screen.findByText(
-      'SMTP server accepted the email. Check the recipient inbox for delivery.'
+      'The mail provider accepted the email. Check the recipient inbox for delivery.'
     )
-    await user.click(screen.getByRole('button', { name: 'Save SMTP settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save email settings' })
+    )
     await screen.findByText(
       'This result belongs to an older configuration. Test again after saving.'
     )
+  })
+  it('keeps the visible snapshot and blocks saving or testing after an external refresh until reload', async () => {
+    await renderSettings()
+    const user = userEvent.setup()
+    await user.type(
+      screen.getByLabelText('Test recipient'),
+      'receiver@example.com'
+    )
+    settings = {
+      ...settings,
+      revision: 5,
+      options: {
+        ...settings.options,
+        microsoft: {
+          ...settings.options.microsoft,
+          mailbox: 'updated@example.com',
+        },
+      },
+    }
+    await act(() => {
+      client.setQueryData(['email-delivery-settings'], settings)
+    })
+    await screen.findByText(
+      'Email settings changed elsewhere. Reload saved settings before saving or testing.'
+    )
+    expect(screen.getByLabelText('Sender mailbox')).toHaveValue(
+      'sender@example.com'
+    )
+    expect(
+      screen.getByRole('button', { name: 'Send test email' })
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Save email settings' })
+    ).toBeDisabled()
+    await screen.findByText(
+      'Email settings changed elsewhere. Reload saved settings before saving or testing.'
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Reload saved email settings' })
+    )
+    await waitFor(() =>
+      expect(screen.getByLabelText('Sender mailbox')).toHaveValue(
+        'updated@example.com'
+      )
+    )
+    await user.click(screen.getByRole('button', { name: 'Send test email' }))
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(
+        '/api/option/email_delivery/test',
+        { expected_revision: 5, recipient: 'receiver@example.com' },
+        { headers: { 'X-Security-Proof': 'scoped-proof' } }
+      )
+    )
+  })
+  it('preserves an unsaved secret and mailbox when a newer configuration arrives', async () => {
+    await renderSettings()
+    const user = userEvent.setup()
+    await user.clear(screen.getByLabelText('Sender mailbox'))
+    await user.type(
+      screen.getByLabelText('Sender mailbox'),
+      'draft@example.com'
+    )
+    await user.type(
+      screen.getByLabelText('Application secret'),
+      'unsaved-secret'
+    )
+    settings = { ...settings, revision: 5 }
+    await act(() => {
+      client.setQueryData(['email-delivery-settings'], settings)
+    })
+    await screen.findByText(
+      'Email settings changed elsewhere. Reload saved settings before saving or testing.'
+    )
+    expect(screen.getByLabelText('Sender mailbox')).toHaveValue(
+      'draft@example.com'
+    )
+    expect(screen.getByLabelText('Application secret')).toHaveValue(
+      'unsaved-secret'
+    )
+    expect(
+      screen.getByRole('button', { name: 'Save email settings' })
+    ).toBeDisabled()
+    expect(api.put).not.toHaveBeenCalled()
+  })
+  it('explains how to restore the encryption key when saved credentials cannot be loaded', async () => {
+    vi.mocked(api.get).mockRejectedValue({
+      response: {
+        status: 503,
+        data: { success: false, code: 'EMAIL_ENCRYPTION_UNAVAILABLE' },
+      },
+    })
+    const root = createRootRoute({ component: EmailDeliverySettingsSection })
+    const router = createRouter({
+      routeTree: root,
+      history: createMemoryHistory({ initialEntries: ['/'] }),
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    )
+    await act(() => router.load())
+    await screen.findByText(
+      'Email credentials cannot be decrypted. Restore the original EMAIL_DELIVERY_STORAGE_KEY on every server and retry.'
+    )
+    expect(
+      screen.queryByLabelText('Application secret')
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Send test email' })
+    ).not.toBeInTheDocument()
   })
   it('updates visible labels when switching between English and Simplified Chinese', async () => {
     await renderSettings()

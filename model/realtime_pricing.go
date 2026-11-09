@@ -33,6 +33,7 @@ type RealtimePricingRule struct {
 	Model     string `gorm:"type:text;not null"`
 	Ratio     int64  `gorm:"not null"`
 	Channels  string `gorm:"type:text;not null"`
+	Disabled  bool
 }
 
 type RealtimePricingHistory struct {
@@ -56,6 +57,7 @@ type RealtimePricingItem struct {
 	Model      string `json:"model"`
 	Ratio      string `json:"ratio"`
 	ChannelIDs []int  `json:"channel_ids"`
+	Disabled   bool   `json:"disabled,omitempty"`
 }
 type RealtimePricingConfig struct {
 	Revision int64                 `json:"revision"`
@@ -145,7 +147,7 @@ func ReadRealtimePricing(tx *gorm.DB, subject string, id int, modelNames ...stri
 			}
 			seen[channelID] = true
 		}
-		result.Items = append(result.Items, RealtimePricingItem{Model: row.Model, Ratio: formatPersonalRatio(row.Ratio), ChannelIDs: ids})
+		result.Items = append(result.Items, RealtimePricingItem{Model: row.Model, Ratio: formatPersonalRatio(row.Ratio), ChannelIDs: ids, Disabled: row.Disabled})
 	}
 	return result, nil
 }
@@ -212,7 +214,7 @@ func SaveRealtimePricing(operator int, subject string, id int, input RealtimePri
 		items := make([]RealtimePricingItem, 0, len(input.Items))
 		for _, item := range input.Items {
 			ratio, err := ParseRealtimePricingRatio(item.Ratio)
-			if err != nil || item.Model == "" || len(item.Model) > 512 || len(item.ChannelIDs) == 0 || len(item.ChannelIDs) > 10000 || seen[item.Model] {
+			if err != nil || item.Model == "" || len(item.Model) > 512 || len(item.ChannelIDs) == 0 || len(item.ChannelIDs) > 10000 || seen[item.Model] || (subject != "user" && item.Disabled) {
 				return ErrResellerInvalid
 			}
 			seen[item.Model] = true
@@ -238,8 +240,8 @@ func SaveRealtimePricing(operator int, subject string, id int, input RealtimePri
 			if err != nil {
 				return err
 			}
-			items = append(items, RealtimePricingItem{Model: item.Model, Ratio: formatPersonalRatio(ratio), ChannelIDs: ids})
-			rows = append(rows, RealtimePricingRule{Subject: subject, SubjectID: id, ModelKey: fmt.Sprintf("%x", sha256.Sum256([]byte(item.Model))), Model: item.Model, Ratio: ratio, Channels: string(encoded)})
+			items = append(items, RealtimePricingItem{Model: item.Model, Ratio: formatPersonalRatio(ratio), ChannelIDs: ids, Disabled: item.Disabled})
+			rows = append(rows, RealtimePricingRule{Subject: subject, SubjectID: id, ModelKey: fmt.Sprintf("%x", sha256.Sum256([]byte(item.Model))), Model: item.Model, Ratio: ratio, Channels: string(encoded), Disabled: item.Disabled})
 		}
 		if err := tx.Where("subject = ? AND subject_id = ?", subject, id).Delete(&RealtimePricingRule{}).Error; err != nil {
 			return err

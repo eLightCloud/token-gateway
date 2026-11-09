@@ -35,6 +35,7 @@ export function EmailTestResult(props: {
     connect_tls: t('SMTP connection and TLS'),
     auth: t('SMTP authentication'),
     submit: t('Mail submission'),
+    graph_submit: t('Microsoft Graph submission'),
   }
   const states = {
     passed: t('Passed'),
@@ -47,7 +48,7 @@ export function EmailTestResult(props: {
   )
   if (props.report.code === 'EMAIL_ACCEPTED') {
     message = t(
-      'SMTP server accepted the email. Check the recipient inbox for delivery.'
+      'The mail provider accepted the email. Check the recipient inbox for delivery.'
     )
   }
   if (props.report.code === 'EMAIL_DELIVERY_UNKNOWN') {
@@ -55,9 +56,9 @@ export function EmailTestResult(props: {
       'Submission result is uncertain. Check the inbox before trying again.'
     )
   }
-  if (props.report.reason === 'SMTP_AUTH_DISABLED') {
+  if (props.report.reason === 'GRAPH_ACCESS_DENIED') {
     message = t(
-      'Your Microsoft tenant has disabled SMTP AUTH. Ask a tenant administrator to enable it for the sender mailbox.'
+      'Microsoft Graph denied access. Check Mail.Send permission and access to the sender mailbox.'
     )
   }
   return (

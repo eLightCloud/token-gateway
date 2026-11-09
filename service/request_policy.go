@@ -170,6 +170,7 @@ func RecordRequestPolicyTermination(c *gin.Context, apiErr *types.NewAPIError) {
 	if c == nil || apiErr == nil {
 		return
 	}
+	RecordOperationsRoutingRejection(c, apiErr)
 	state := RequestPolicy(c)
 	if state.FinalLogged {
 		return

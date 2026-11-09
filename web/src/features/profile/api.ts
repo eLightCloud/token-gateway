@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { EncryptedPassword } from '@/features/auth/lib/password-encryption'
 import { api } from '@/lib/api'
 import type { CustomOAuthBinding } from '@/lib/oauth'
 import { authRequestOptions, authResult } from '@/lib/secure-verification'
@@ -141,12 +142,13 @@ export async function sendEmailVerification(
 export function startEmailBinding(
   email: string,
   proofToken: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  password?: EncryptedPassword
 ): Promise<EmailBindingFlow> {
   return authResult(
     api.post(
       '/api/oauth/email/bind/start',
-      { email },
+      { email, ...password },
       {
         ...authRequestOptions,
         headers: { 'X-Security-Proof': proofToken },

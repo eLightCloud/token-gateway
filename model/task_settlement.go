@@ -70,6 +70,9 @@ func EnsureTaskSettlementJournal(journal *TaskSettlementJournal) (*TaskSettlemen
 		stored, err = ensureTaskSettlementJournalTx(tx, journal)
 		return err
 	})
+	if errors.Is(err, ErrTaskSettlementJournalConflict) {
+		common.ReportOperationsFault("billing_conflict")
+	}
 	return stored, err
 }
 

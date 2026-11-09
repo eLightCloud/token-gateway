@@ -53,6 +53,7 @@ export function PricingHistory(props: {
           .filter(
             (c) =>
               c.before?.ratio !== c.after?.ratio ||
+              Boolean(c.before?.disabled) !== Boolean(c.after?.disabled) ||
               c.added.length ||
               c.removed.length
           )
@@ -81,6 +82,15 @@ export function PricingHistory(props: {
                     t('Inherited')
                   )}
                 </p>
+                {change.before &&
+                  change.after &&
+                  Boolean(change.before.disabled) !==
+                    Boolean(change.after.disabled) && (
+                    <p>
+                      {t('Status')}:{' '}
+                      {change.after.disabled ? t('Disabled') : t('Enabled')}
+                    </p>
+                  )}
                 {[
                   { label: t('Channels added'), ids: change.added },
                   { label: t('Channels removed'), ids: change.removed },

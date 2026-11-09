@@ -64,7 +64,7 @@ func CreateResellerAgent(c *gin.Context) {
 		resellerResponse(c, nil, model.ErrResellerInvalid)
 		return
 	}
-	identity, err := service.CreateResellerAccount(c.GetInt("id"), "agent", input)
+	identity, err := service.CreateResellerAccount(c.GetInt("id"), "agent", input, c.Query("send_activation_email") != "false", securityMailLanguage(c))
 	if err == nil {
 		recordManageAuditFor(c, identity.UserID, "reseller.agent.create", map[string]any{"user_id": identity.UserID})
 	}
@@ -77,7 +77,7 @@ func CreateResellerCustomer(c *gin.Context) {
 		resellerResponse(c, nil, model.ErrResellerInvalid)
 		return
 	}
-	identity, err := service.CreateResellerAccount(c.GetInt("id"), "agent_customer", input)
+	identity, err := service.CreateResellerAccount(c.GetInt("id"), "agent_customer", input, c.Query("send_activation_email") != "false", securityMailLanguage(c))
 	if err == nil {
 		recordManageAuditFor(c, identity.UserID, "reseller.customer.create", map[string]any{"user_id": identity.UserID})
 	}

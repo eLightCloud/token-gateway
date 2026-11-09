@@ -34,6 +34,7 @@ import { resellerPath, resellerRequest } from './api'
 
 export function ResellerQuotaDialog({
   userID,
+  username,
   admin,
   quota,
   open,
@@ -41,6 +42,7 @@ export function ResellerQuotaDialog({
   onSuccess,
 }: {
   userID: number
+  username?: string
   admin: boolean
   quota: number
   open: boolean
@@ -77,8 +79,12 @@ export function ResellerQuotaDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
-      title={t('Adjust Quota')}
+      onOpenChange={(open) => {
+        if (!mutation.isPending) onOpenChange(open)
+      }}
+      title={
+        username ? `${t('Adjust Quota')} · ${username}` : t('Adjust Quota')
+      }
       description={
         admin
           ? undefined

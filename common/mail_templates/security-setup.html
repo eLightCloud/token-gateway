@@ -1,0 +1,5 @@
+{{define "security-setup"}}{{template "email-open" .}}
+<h1>{{.Subject}}</h1><p style="font-size:16px;font-weight:600">完成安全设置 · Complete security setup</p><p style="color:#64748b">请通过下方内容确认邮箱并完成安全设置。</p>
+<div style="background:#f8fafc;border:1px solid #cbd5e1;padding:24px;border-radius:8px" class="message-body">{{.Body}}</div>
+<p style="font-size:12px;color:#64748b;margin-top:24px">安全设置链接仅供本人使用。请勿分享本邮件或链接。</p>
+{{template "email-close" .}}{{end}}

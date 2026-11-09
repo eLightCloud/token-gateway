@@ -1,0 +1,5 @@
+{{define "channel-test"}}{{template "email-open" .}}
+<h1>{{.Subject}}</h1><p style="font-size:16px;font-weight:600">渠道检测结果 · Channel test result</p><p style="color:#64748b">本次检测已结束，执行结果如下。</p>
+<div style="background:#f0f9ff;border-radius:8px;padding:20px" class="message-body">{{.Body}}</div>
+<p style="font-size:12px;color:#64748b;margin-top:24px">主动检测结果仅代表检测时刻，请结合真实调用结果判断服务状态。</p>
+{{template "email-close" .}}{{end}}

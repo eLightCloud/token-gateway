@@ -12,6 +12,17 @@ func PreviewResellerConfig(operatorID, userID int, input ResellerConfigInput) (*
 	if err := ResellerManageTarget(DB, operatorID, userID, true); err != nil {
 		return nil, err
 	}
+	if input.ExpectedRevision < 0 || len(input.Items) > 10000 {
+		return nil, ErrResellerInvalid
+	}
+	for _, item := range input.Items {
+		if item.Ratio == "" {
+			continue
+		}
+		if _, err := ParseResellerRatio(item.Ratio); err != nil {
+			return nil, err
+		}
+	}
 	current, err := ReadResellerConfig(DB, userID)
 	if err != nil {
 		return nil, err

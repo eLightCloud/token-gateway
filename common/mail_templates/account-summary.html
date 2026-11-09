@@ -1,0 +1,5 @@
+{{define "account-summary"}}{{template "email-open" .}}
+<h1>{{.Subject}}</h1><p style="font-size:16px;font-weight:600">账户使用概览 · Account overview</p><p style="color:#64748b">余额与使用数据分别标注统计时间，方便您快速了解账户情况。</p>
+<div style="background:#eef2ff;border-radius:8px;padding:20px" class="message-body">{{.Body}}</div>
+<p style="font-size:12px;color:#64748b;margin-top:24px">日常摘要仅供查看；需要排查时再进入应用中的使用日志。</p>
+{{template "email-close" .}}{{end}}

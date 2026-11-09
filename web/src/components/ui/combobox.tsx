@@ -46,6 +46,7 @@ type LegacyComboboxProps = {
   onValueChange?: (value: string | null) => void
   placeholder?: string
   searchPlaceholder?: string
+  matchFrom?: 'start'
   emptyText?: string
   allowCustomValue?: boolean
   showSelectedIcon?: boolean
@@ -125,6 +126,9 @@ function OptionCombobox(props: LegacyComboboxProps) {
       }}
       filter={(option, query) => {
         const term = query.trim().toLowerCase()
+        if (props.matchFrom === 'start') {
+          return option.value.toLowerCase().startsWith(term)
+        }
         return (
           option.label.toLowerCase().includes(term) ||
           option.value.toLowerCase().includes(term)

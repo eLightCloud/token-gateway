@@ -1,0 +1,5 @@
+{{define "verification-code"}}{{template "email-open" .}}
+<h1>{{.Subject}}</h1><p style="font-size:16px;font-weight:600">确认邮箱操作 · Confirm your email</p><p style="color:#64748b">仅在本人发起操作时使用下面的验证码。</p>
+<div style="background:#eef2ff;border:1px solid #c7d2fe;padding:24px;border-radius:8px" class="message-body">{{.Body}}</div>
+<p style="font-size:12px;color:#64748b;margin-top:24px">验证码的有效期以正文为准。请勿转发本邮件或向他人提供验证码。</p>
+{{template "email-close" .}}{{end}}

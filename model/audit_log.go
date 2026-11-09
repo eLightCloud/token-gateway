@@ -132,6 +132,7 @@ func RecordAuditLog(c *gin.Context, entry AuditLog) {
 		}{AuditLog: entry, EncodedOther: string(encoded)}
 	}
 	if err := LOG_DB.Table("audit_logs").Create(row).Error; err != nil {
+		common.ReportOperationsFault("audit_log_write")
 		logger.LogError(ctx, fmt.Sprintf("audit log write failed (request_id=%s): %v", entry.RequestId, err))
 	}
 }

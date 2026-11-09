@@ -19,8 +19,6 @@ type RealtimePricingCandidate struct {
 	Models string `json:"models"`
 }
 
-var ErrRealtimePricingMemberChanged = fmt.Errorf("%w: organization member changed", ErrResellerForbidden)
-
 func RealtimePricingCandidates(tx *gorm.DB, operator int) ([]RealtimePricingCandidate, error) {
 	var actor User
 	if err := tx.First(&actor, operator).Error; err != nil {
@@ -63,7 +61,7 @@ func resolveRealtimeChannel(personal, organization *RealtimePricingConfig, model
 		source string
 	}{{personal, "user"}, {organization, "organization"}} {
 		for _, item := range entry.config.Items {
-			if item.Model == model && slices.Contains(item.ChannelIDs, channel) {
+			if !item.Disabled && item.Model == model && slices.Contains(item.ChannelIDs, channel) {
 				ratio, _ := ParseRealtimePricingRatio(item.Ratio)
 				return types.PersonalChannelPrice{CustomerRatio: ratio, AgentRatio: ResellerRatioScale, Source: entry.source, Revision: entry.config.Revision}
 			}
@@ -87,13 +85,13 @@ type RealtimePricingPreview struct {
 	GeneratedAt          int64                       `json:"generated_at"`
 }
 
-func PreviewRealtimePricing(operator int, subject string, id, userID int, items []RealtimePricingItem) (*RealtimePricingPreview, error) {
+func PreviewRealtimePricing(operator int, subject string, id int, items []RealtimePricingItem) (*RealtimePricingPreview, error) {
 	if len(items) > 10000 {
 		return nil, ErrResellerInvalid
 	}
 	seen := map[string]bool{}
 	for _, item := range items {
-		if _, err := ParseRealtimePricingRatio(item.Ratio); err != nil || item.Model == "" || seen[item.Model] || len(item.ChannelIDs) == 0 {
+		if _, err := ParseRealtimePricingRatio(item.Ratio); err != nil || item.Model == "" || seen[item.Model] || len(item.ChannelIDs) == 0 || (subject != "user" && item.Disabled) {
 			return nil, ErrResellerInvalid
 		}
 		seen[item.Model] = true
@@ -110,6 +108,7 @@ func PreviewRealtimePricing(operator int, subject string, id, userID int, items 
 		personal := &RealtimePricingConfig{Items: []RealtimePricingItem{}}
 		organization := &RealtimePricingConfig{Items: []RealtimePricingItem{}}
 		var err error
+		userID := 0
 		if subject == "user" {
 			userID = id
 		} else {
@@ -127,9 +126,6 @@ func PreviewRealtimePricing(operator int, subject string, id, userID int, items 
 			}
 			if len(members) > 1 {
 				return ErrResellerDataCorrupt
-			}
-			if subject == "organization" && (len(members) != 1 || members[0].OrganizationId != id) {
-				return ErrRealtimePricingMemberChanged
 			}
 			if len(members) == 1 {
 				result.OrganizationID = members[0].OrganizationId
@@ -192,6 +188,9 @@ func PreviewRealtimePricing(operator int, subject string, id, userID int, items 
 					continue
 				}
 				price := resolveRealtimeChannel(personal, organization, name, ch.ID)
+				if subject == "organization" && price.Source != "organization" {
+					continue
+				}
 				result.Rows = append(result.Rows, RealtimePricingPreviewRow{Model: name, ChannelID: ch.ID, Ratio: formatPersonalRatio(price.CustomerRatio), Source: price.Source})
 			}
 		}

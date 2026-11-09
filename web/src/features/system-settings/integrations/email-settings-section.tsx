@@ -16,4 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-export { EmailDeliverySettingsSection as EmailSettingsSection } from '../email-delivery/settings-section'
+import { EmailDeliverySettingsSection } from '../email-delivery/settings-section'
+import { OperationsSettingsSection } from '../operations/settings-section'
+
+export function EmailSettingsSection() {
+  return (
+    <div className='space-y-8'>
+      <EmailDeliverySettingsSection />
+      <OperationsSettingsSection />
+    </div>
+  )
+}

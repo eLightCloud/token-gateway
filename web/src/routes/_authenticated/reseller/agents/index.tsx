@@ -18,12 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
-import { resellerSearchSchema } from '@/features/reseller/search'
+import { resellerAgentSearchSchema } from '@/features/reseller/agent-status'
 import { ResellerUsersPage } from '@/features/reseller/users-page'
 import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/_authenticated/reseller/agents/')({
-  validateSearch: resellerSearchSchema,
+  validateSearch: resellerAgentSearchSchema,
   beforeLoad: async () => {
     if ((useAuthStore.getState().auth.user?.role ?? 0) < 10) {
       throw redirect({ to: '/403' })

@@ -30,6 +30,7 @@ type ResellerIdentity struct {
 	Activation         string `gorm:"size:20;not null" json:"activation"`
 	AgentDisabled      bool   `json:"agent_disabled"`
 	CreatedAt          int64  `json:"created_at"`
+	Phone              string `gorm:"size:16" json:"-"`
 }
 
 type ResellerAccount struct {
@@ -153,20 +154,17 @@ func RequireOrdinaryUser(tx *gorm.DB, userID int) error {
 	return nil
 }
 
-type ResellerCreateInput struct {
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-	Email       string `json:"email"`
-}
-
-// CreateResellerUser creates only new accounts. Credentials and activation are
-// owned by S2; no initial password, invitation reward or signup quota is issued.
+// CreateResellerUser creates only new accounts. Password and MFA setup are
+// separate from the platform’s agent enablement decision.
 func CreateResellerUser(operatorID int, kind string, input ResellerCreateInput) (*ResellerIdentity, error) {
 	input.Username = strings.TrimSpace(input.Username)
 	input.Email = NormalizeEmail(input.Email)
 	address, err := mail.ParseAddress(input.Email)
 	if err != nil || address.Address != input.Email || len(input.Email) > 50 || input.Username == "" || utf8.RuneCountInString(input.Username) > UserNameMaxLength || utf8.RuneCountInString(input.DisplayName) > 20 || (kind != "agent" && kind != "agent_customer") {
 		return nil, ErrResellerInvalid
+	}
+	if err := input.normalizeContact(kind); err != nil {
+		return nil, err
 	}
 	var identity ResellerIdentity
 	err = DB.Transaction(func(tx *gorm.DB) error {
@@ -203,16 +201,16 @@ func CreateResellerUser(operatorID int, kind string, input ResellerCreateInput) 
 			if err := ensureEmailAvailableWithTx(tx, input.Email, 0); err != nil {
 				return err
 			}
-			user := User{ResellerKind: kind, AffCode: common.GetRandomString(24), Username: input.Username, DisplayName: input.DisplayName, Email: input.Email, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1}
+			user := User{ResellerKind: kind, AffCode: common.GetRandomString(24), Username: input.Username, DisplayName: input.DisplayName, Email: input.Email, Remark: input.Remark, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1}
 			if err := tx.Create(&user).Error; err != nil {
 				return err
 			}
-			identity = ResellerIdentity{UserID: user.Id, Kind: kind, AgentUserID: agentID, Activation: "pending", CreatedAt: common.GetTimestamp()}
+			identity = ResellerIdentity{UserID: user.Id, Kind: kind, AgentUserID: agentID, Activation: "pending", CreatedAt: common.GetTimestamp(), Phone: input.Phone}
 			if err := tx.Create(&identity).Error; err != nil {
 				return err
 			}
 			if kind == "agent" {
-				return tx.Create(&ResellerAccount{UserID: user.Id, Enabled: true}).Error
+				return tx.Create(&ResellerAccount{UserID: user.Id}).Error
 			}
 			return nil
 		})

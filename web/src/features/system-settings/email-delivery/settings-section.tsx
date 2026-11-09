@@ -40,6 +40,7 @@ import {
   useSecureVerification,
 } from '@/features/auth/secure-verification'
 import { handleServerError } from '@/lib/handle-server-error'
+import { getServerErrorSources } from '@/lib/server-error-message'
 
 import { FormNavigationGuard } from '../components/form-navigation-guard'
 import { SettingsForm } from '../components/settings-form-layout'
@@ -65,14 +66,25 @@ export function EmailDeliverySettingsSection() {
     queryKey: emailSettingsQueryKey,
     queryFn: getEmailSettings,
     refetchOnWindowFocus: false,
+    meta: { errorToast: false },
   })
   if (query.isPending) {
     return <LoadingState message={t('Loading settings...')} />
   }
-  if (!query.data) {
+  const encryptionUnavailable = getServerErrorSources(query.error).some(
+    (source) => source.code === 'EMAIL_ENCRYPTION_UNAVAILABLE'
+  )
+  if (!query.data || encryptionUnavailable) {
     return (
       <ErrorState
         title={t('Failed to load settings')}
+        description={
+          encryptionUnavailable
+            ? t(
+                'Email credentials cannot be decrypted. Restore the original EMAIL_DELIVERY_STORAGE_KEY on every server and retry.'
+              )
+            : undefined
+        }
         onRetry={() => void query.refetch()}
       />
     )
@@ -85,6 +97,8 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
   const client = useQueryClient()
   const pageOwnsActions = useSuppressSettingsSectionHeader()
   const verification = useSecureVerification()
+  const [baseline, setBaseline] = useState(props.settings)
+  const configurationChanged = props.settings.revision !== baseline.revision
   const [busy, setBusy] = useState(false)
   const operationPending = useRef(false)
   const [message, setMessage] = useState('')
@@ -95,8 +109,8 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
   >(null)
   const errorRef = useRef<HTMLDivElement>(null)
   const form = useForm<EmailUpdate>({
-    resolver: zodResolver(createEmailSchema(t, props.settings)),
-    defaultValues: emailFormDefaults(props.settings),
+    resolver: zodResolver(createEmailSchema(t, baseline)),
+    defaultValues: emailFormDefaults(baseline),
   })
   const microsoft =
     form.watch('intent.options.auth_mode') === 'microsoft_oauth2_app'
@@ -114,7 +128,7 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
   })
   const onSave = form.handleSubmit(
     async (values) => {
-      if (operationPending.current) return
+      if (operationPending.current || configurationChanged) return
       operationPending.current = true
       setBusy(true)
       setMessage('')
@@ -122,6 +136,7 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
         const settings = await save.mutateAsync(structuredClone(values))
         if (settings) {
           client.setQueryData(emailSettingsQueryKey, settings)
+          setBaseline(settings)
           form.reset(emailFormDefaults(settings))
           setMessage(
             t(
@@ -148,7 +163,13 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
     }
   )
   const onTest = async () => {
-    if (operationPending.current || form.formState.isDirty) return
+    if (
+      operationPending.current ||
+      configurationChanged ||
+      form.formState.isDirty
+    ) {
+      return
+    }
     if (!/^[^\s@;,]+@[^\s@;,]+\.[^\s@;,]+$/.test(recipient)) {
       setMessage(t('Enter a valid test recipient email.'))
       return
@@ -157,7 +178,7 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
     setBusy(true)
     setMessage('')
     const intent = {
-      expected_revision: props.settings.revision,
+      expected_revision: baseline.revision,
       recipient: recipient.trim(),
     }
     try {
@@ -179,9 +200,16 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
     }
   }
   return (
-    <SettingsSection title={t('SMTP Email')}>
+    <SettingsSection title={t('Email')}>
       <FormNavigationGuard when={form.formState.isDirty && !busy} />
-      {!props.settings.storage_key_ready && (
+      {configurationChanged && (
+        <p role='status' className='text-sm'>
+          {t(
+            'Email settings changed elsewhere. Reload saved settings before saving or testing.'
+          )}
+        </p>
+      )}
+      {!baseline.storage_key_ready && (
         <p role='status' className='text-sm'>
           {t(
             'Configure EMAIL_DELIVERY_STORAGE_KEY on every server before saving credentials'
@@ -193,7 +221,8 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
           <SettingsPageFormActions
             onSave={() => void onSave()}
             isSaving={busy}
-            saveLabel='Save SMTP settings'
+            isSaveDisabled={configurationChanged}
+            saveLabel='Save email settings'
           />
           <fieldset
             disabled={busy}
@@ -213,7 +242,7 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
                         {t('Existing SMTP')}
                       </NativeSelectOption>
                       <NativeSelectOption value='microsoft_oauth2_app'>
-                        {t('Microsoft 365 application identity')}
+                        {t('Microsoft 365 (Microsoft Graph)')}
                       </NativeSelectOption>
                     </NativeSelect>
                   </FormControl>
@@ -222,7 +251,7 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
             />
             <EmailProviderFields
               form={form}
-              settings={props.settings}
+              settings={baseline}
               microsoft={microsoft}
               onClear={setClear}
             />
@@ -241,8 +270,8 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
           </div>
           <div className='flex flex-wrap gap-2'>
             {!pageOwnsActions && (
-              <Button type='submit' disabled={busy}>
-                {t('Save SMTP settings')}
+              <Button type='submit' disabled={busy || configurationChanged}>
+                {t('Save email settings')}
               </Button>
             )}
             <Button
@@ -256,6 +285,7 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
                     queryFn: getEmailSettings,
                     staleTime: 0,
                   })
+                  setBaseline(settings)
                   form.reset(emailFormDefaults(settings))
                   setMessage('')
                 } catch (error) {
@@ -288,7 +318,9 @@ function EmailDeliveryForm(props: { settings: EmailSettings }) {
         <Button
           type='button'
           variant='outline'
-          disabled={busy || form.formState.isDirty || !recipient}
+          disabled={
+            busy || configurationChanged || form.formState.isDirty || !recipient
+          }
           onClick={() => void onTest()}
         >
           {t('Send test email')}

@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/textproto"
 	"regexp"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
@@ -639,6 +641,143 @@ func TestSecurityAccountEmailConfirmationAndAudit(t *testing.T) {
 			assert.NotContains(t, string(encoded), newCode)
 		})
 	}
+}
+
+func TestResellerOwnAccountRecoveryAndVerifiedEmailChange(t *testing.T) {
+	t.Setenv("SECURITY_COMPLETION_ENFORCED", "false")
+	user, _ := setupSecurityEnrollmentTest(t)
+	db := model.DB
+	require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}))
+	mailbox := newSecurityMailbox(t)
+	const resetPath = "/api/reseller/self/account/password-reset"
+	const startPath = "/api/oauth/email/bind/start"
+	const finishPath = "/api/oauth/email/bind"
+	const oldEmail = "agent-old@example.com"
+	const newEmail = "agent-new@example.com"
+	const totpSecret = "JBSWY3DPEHPK3PXP"
+
+	engine := gin.New()
+	engine.POST(resetPath, middleware.UserAuth(), SendResellerOwnPasswordReset)
+	engine.POST(startPath, middleware.UserAuth(), EmailBindStart)
+	engine.POST(finishPath, middleware.UserAuth(), EmailBind)
+	bundle, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "agent-test")
+	require.NoError(t, err)
+	post := func(path, proof string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		data, err := common.Marshal(body)
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(data)))
+		req.Header.Set("Authorization", "Bearer "+bundle.AccessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Security-Proof", proof)
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, req)
+		return response
+	}
+	assert.Equal(t, http.StatusForbidden, post(resetPath, "", nil).Code)
+	require.NoError(t, db.Model(user).Updates(map[string]any{"reseller_kind": "agent", "email": oldEmail}).Error)
+	require.NoError(t, db.Create(&model.ResellerIdentity{UserID: user.Id, Kind: "agent", Activation: "active"}).Error)
+	require.NoError(t, db.Create(&model.ResellerAccount{UserID: user.Id, Enabled: true}).Error)
+	require.NoError(t, db.Create(&model.UserSecurityState{UserID: user.Id, VerifiedEmail: oldEmail}).Error)
+	require.NoError(t, db.Create(&model.TwoFA{UserId: user.Id, Secret: totpSecret, IsEnabled: true}).Error)
+	require.NoError(t, model.PublishUserAuthCache(user.Id))
+	identity, err := service.ParseAccessToken(bundle.AccessToken)
+	require.NoError(t, err)
+
+	reset := post(resetPath, "", map[string]any{"email": "override@example.com", "user_id": user.Id + 1})
+	require.Equal(t, http.StatusOK, reset.Code, reset.Body.String())
+	mailbox.mutex.Lock()
+	initial := append([]string(nil), mailbox.mail[oldEmail]...)
+	overrideCount := len(mailbox.mail["override@example.com"])
+	mailbox.mutex.Unlock()
+	require.Len(t, initial, 1)
+	assert.Zero(t, overrideCount)
+	resetTokenPattern := regexp.MustCompile(`purpose=security_password_reset&amp;token=([A-Za-z0-9_-]+)`)
+	match := resetTokenPattern.FindStringSubmatch(initial[0])
+	require.Len(t, match, 2, "the recovery email must contain a reset link")
+	assert.NotContains(t, reset.Body.String(), match[1])
+	assert.Equal(t, http.StatusTooManyRequests, post(resetPath, "", nil).Code)
+
+	email := map[string]string{"email": newEmail}
+	assert.Equal(t, http.StatusForbidden, post(startPath, "", email).Code)
+	context, err := common.Marshal(service.AccountBindingContext{Provider: "email", Email: newEmail})
+	require.NoError(t, err)
+	operation := service.VerificationOperation{Scope: service.VerificationScopeAccountBind, Context: context}
+	_, err = service.RequireVerificationMethod(identity, operation.Scope, service.VerificationMethodPassword)
+	assert.ErrorIs(t, err, service.ErrProofMethod)
+	proofWithoutPassword := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodTwoFA)
+	assert.Contains(t, post(startPath, proofWithoutPassword, email).Body.String(), "SECURITY_VERIFICATION_FAILED")
+
+	keyID, publicPEM := common.PasswordEncryptionPublicKey()
+	if keyID == "" {
+		privatePEM, err := common.GeneratePasswordEncryptionPrivateKey()
+		require.NoError(t, err)
+		require.NoError(t, common.LoadPasswordEncryptionPrivateKey(privatePEM))
+		keyID, publicPEM = common.PasswordEncryptionPublicKey()
+	}
+	block, _ := pem.Decode([]byte(publicPEM))
+	require.NotNil(t, block)
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	require.NoError(t, err)
+	publicKey, ok := parsed.(*rsa.PublicKey)
+	require.True(t, ok)
+	ciphertext, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey, []byte("enrollment-password"), nil)
+	require.NoError(t, err)
+	email["password_encrypted"], email["encryption_key_id"] = base64.StdEncoding.EncodeToString(ciphertext), keyID
+	assert.Equal(t, http.StatusForbidden, post(startPath, proofWithoutPassword, email).Code)
+
+	authenticatorCode, err := totp.GenerateCode(totpSecret, time.Now())
+	require.NoError(t, err)
+	proof, err := service.VerifySecurityInput(identity, service.VerificationInput{
+		Scope: operation.Scope, Context: context, Method: service.VerificationMethodTwoFA, Code: authenticatorCode,
+	})
+	require.NoError(t, err)
+
+	start := post(startPath, proof.ProofToken, email)
+	require.Equal(t, http.StatusOK, start.Code, start.Body.String())
+	var result securityEnrollmentResponse
+	require.NoError(t, common.Unmarshal(start.Body.Bytes(), &result))
+	var flow service.EmailBindingData
+	require.NoError(t, common.Unmarshal(result.Data, &flow))
+	require.NotEmpty(t, flow.FlowToken)
+	assert.False(t, flow.OldEmailRequired)
+	assert.Equal(t, http.StatusForbidden, post(startPath, proof.ProofToken, email).Code)
+	verificationCode := mailbox.code(t, newEmail)
+	stored, binding, err := model.GetEmailBinding(identity, flow.FlowToken)
+	require.NoError(t, err)
+	confirmedPayload := stored.Payload
+	binding.PasswordConfirmed = false // A challenge issued before password confirmation was required.
+	legacyPayload, err := common.Marshal(binding)
+	require.NoError(t, err)
+	require.NoError(t, db.Model(stored).Update("payload", string(legacyPayload)).Error)
+	assert.Contains(t, post(finishPath, "", map[string]string{"flow_token": flow.FlowToken, "new_code": verificationCode}).Body.String(), "AUTH_FLOW_INVALID")
+	require.NoError(t, db.Model(stored).Update("payload", confirmedPayload).Error)
+
+	confirm := map[string]string{"flow_token": flow.FlowToken, "new_code": "invalid"}
+	failed := post(finishPath, "", confirm)
+	assert.Contains(t, failed.Body.String(), "EMAIL_BINDING_CODE_INVALID")
+	current, err := model.GetSecurityCompletion(user.Id)
+	require.NoError(t, err)
+	assert.Equal(t, oldEmail, current.Email)
+	assert.True(t, current.Complete)
+
+	confirm["new_code"] = verificationCode
+	completed := post(finishPath, "", confirm)
+	require.Equal(t, http.StatusOK, completed.Code, completed.Body.String())
+	assert.Contains(t, completed.Body.String(), `"sign_in_required":true`)
+	current, err = model.GetSecurityCompletion(user.Id)
+	require.NoError(t, err)
+	assert.Equal(t, newEmail, current.Email)
+	assert.True(t, current.Complete, "the verified new email keeps security enrollment complete")
+	_, _, err = service.RefreshLoginSession(bundle.RefreshToken, identity.SessionID, "127.0.0.1", "agent-test")
+	assert.ErrorIs(t, err, service.ErrLoginSessionRevoked)
+	assert.Equal(t, http.StatusUnauthorized, post(finishPath, "", confirm).Code)
+	assert.ErrorIs(t, model.CompleteSecurityMail(user.Id, model.SecurityPasswordPurpose, match[1], "new-recovery-test-password!42", nil), model.ErrAuthFlowInvalid)
+	mailbox.mutex.Lock()
+	oldMail := strings.Join(mailbox.mail[oldEmail], "\n")
+	mailbox.mutex.Unlock()
+	assert.Contains(t, oldMail, "A change of your email address was requested")
+	assert.Contains(t, oldMail, "Email address changed")
 }
 
 func TestSecurityAccountEmailResendAndAttemptLimit(t *testing.T) {

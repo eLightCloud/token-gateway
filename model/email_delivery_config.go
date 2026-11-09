@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 var ErrEmailDeliveryConflict = errors.New("Email settings changed. Reload and compare your changes before saving.")
 var ErrEmailDeliveryInvalid = errors.New("Invalid email settings or credential action.")
+var ErrEmailDeliveryEncryptionUnavailable = fmt.Errorf("%w Restore the original EMAIL_DELIVERY_STORAGE_KEY on every server.", common.ErrEmailDeliveryUnavailable)
 var emailDeliveryConfigMutex sync.Mutex
 
 type storedEmailDelivery struct {
@@ -29,11 +31,11 @@ type storedEmailDelivery struct {
 func emailDeliveryCipher() (cipher.AEAD, error) {
 	key, err := base64.StdEncoding.DecodeString(os.Getenv("EMAIL_DELIVERY_STORAGE_KEY"))
 	if err != nil || len(key) != 32 {
-		return nil, common.ErrEmailDeliveryUnavailable
+		return nil, ErrEmailDeliveryEncryptionUnavailable
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, common.ErrEmailDeliveryUnavailable
+		return nil, ErrEmailDeliveryEncryptionUnavailable
 	}
 	return cipher.NewGCM(block)
 }
@@ -69,7 +71,7 @@ func revealEmailCredential(value, purpose string) (string, error) {
 	}
 	plain, err := aead.Open(nil, data[:aead.NonceSize()], data[aead.NonceSize():], []byte("new-api:email:"+purpose))
 	if err != nil {
-		return "", common.ErrEmailDeliveryUnavailable
+		return "", ErrEmailDeliveryEncryptionUnavailable
 	}
 	return string(plain), nil
 }
@@ -94,7 +96,15 @@ func loadEmailDeliveryConfig(db *gorm.DB) (common.EmailDeliveryConfig, error) {
 		if value, err := strconv.Atoi(values["SMTPPort"]); err == nil {
 			port = value
 		}
-		return common.EmailDeliveryConfig{Options: common.EmailDeliveryOptions{AuthMode: common.EmailAuthLegacy, Legacy: common.LegacyEmailSettings{Host: values["SMTPServer"], Port: port, Account: values["SMTPAccount"], From: values["SMTPFrom"], Password: values["SMTPToken"], SSL: values["SMTPSSLEnabled"] == "true", StartTLS: values["SMTPStartTLSEnabled"] == "true", InsecureSkipVerify: values["SMTPInsecureSkipVerify"] == "true", ForceLogin: values["SMTPForceAuthLogin"] == "true"}}}, nil
+		startTLS := common.GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLE", common.GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLED", false))
+		if value, exists := values["SMTPStartTLSEnabled"]; exists {
+			startTLS = value == "true"
+		}
+		insecureSkipVerify := common.GetEnvOrDefaultBool("SMTP_INSECURE_SKIP_VERIFY", common.GetEnvOrDefaultBool("SMTP_TLS_INSECURE_SKIP_VERIFY", false))
+		if value, exists := values["SMTPInsecureSkipVerify"]; exists {
+			insecureSkipVerify = value == "true"
+		}
+		return common.EmailDeliveryConfig{Options: common.EmailDeliveryOptions{AuthMode: common.EmailAuthLegacy, Legacy: common.LegacyEmailSettings{Host: values["SMTPServer"], Port: port, Account: values["SMTPAccount"], From: values["SMTPFrom"], Password: values["SMTPToken"], SSL: values["SMTPSSLEnabled"] == "true", StartTLS: startTLS, InsecureSkipVerify: insecureSkipVerify, ForceLogin: values["SMTPForceAuthLogin"] == "true"}}}, nil
 	}
 	if err != nil {
 		return common.EmailDeliveryConfig{}, err

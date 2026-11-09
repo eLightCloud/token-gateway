@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
@@ -25,6 +27,7 @@ import { toast } from 'sonner'
 import { z } from 'zod'
 
 import { Dialog } from '@/components/dialog'
+import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -35,6 +38,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { encryptPassword } from '@/features/auth/lib/password-encryption'
 import { SecureVerificationDialog } from '@/features/auth/secure-verification'
 import {
   startEmailBinding,
@@ -43,6 +47,7 @@ import {
 } from '@/features/profile/api'
 import type { EmailBindingFlow } from '@/features/profile/types'
 import { useCountdown } from '@/hooks/use-countdown'
+import { clearAuthenticatedClientState } from '@/lib/api'
 
 import { useAccountSecurity } from '../../hooks/use-account-security'
 
@@ -53,23 +58,28 @@ const emailBindingSchema = z.object({
     .max(50, 'Please enter a valid email address'),
   newCode: z.string(),
   oldCode: z.string(),
+  currentPassword: z.string(),
 })
 type EmailBindingValues = z.infer<typeof emailBindingSchema>
 const emptyEmailForm: EmailBindingValues = {
   email: '',
   newCode: '',
   oldCode: '',
+  currentPassword: '',
 }
 
 interface EmailBindDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   currentEmail?: string
+  requirePassword?: boolean
   onSuccess: () => void
 }
 
 export function EmailBindDialog(props: EmailBindDialogProps) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const security = useAccountSecurity()
   const [flow, setFlow] = useState<EmailBindingFlow | null>(null)
   const form = useForm<EmailBindingValues>({
@@ -127,6 +137,14 @@ export function EmailBindDialog(props: EmailBindDialogProps) {
   const submit = async (values: EmailBindingValues) => {
     if (!flow) {
       const email = values.email.trim().toLowerCase()
+      if (props.requirePassword && !values.currentPassword) {
+        form.setError(
+          'currentPassword',
+          { message: 'Please enter your current password' },
+          { shouldFocus: true }
+        )
+        return
+      }
       const result = await security.run(async (signal) => {
         const proof = await security.verify(
           {
@@ -135,8 +153,13 @@ export function EmailBindDialog(props: EmailBindDialogProps) {
           },
           signal
         )
-        return startEmailBinding(email, proof, signal)
+        const password = props.requirePassword
+          ? await encryptPassword(values.currentPassword)
+          : undefined
+        signal.throwIfAborted()
+        return startEmailBinding(email, proof, signal, password)
       })
+      form.resetField('currentPassword')
       if (result) applyFlow(result)
       return
     }
@@ -163,8 +186,14 @@ export function EmailBindDialog(props: EmailBindDialogProps) {
       bindEmail(flow.flow_token, newCode, oldCode, signal)
     )
     if (!result) return
-    toast.success(t('Email bound successfully!'))
     handleOpenChange(false)
+    if (result.sign_in_required) {
+      toast.success(t('Email changed. Please sign in again.'))
+      clearAuthenticatedClientState(queryClient)
+      void navigate({ to: '/sign-in', replace: true })
+      return
+    }
+    toast.success(t('Email bound successfully!'))
     props.onSuccess()
   }
   const resendCodes = async () => {
@@ -192,7 +221,7 @@ export function EmailBindDialog(props: EmailBindDialogProps) {
       <Dialog
         open={props.open && !security.showVerification}
         onOpenChange={handleOpenChange}
-        title={t('Bind Email')}
+        title={props.currentEmail ? t('Change Email') : t('Bind Email')}
         description={
           props.currentEmail
             ? t('Current email: {{email}}. Enter a new email to change.', {
@@ -254,6 +283,25 @@ export function EmailBindDialog(props: EmailBindDialogProps) {
                 </FormItem>
               )}
             />
+            {props.requirePassword && !flow && (
+              <FormField
+                control={form.control}
+                name='currentPassword'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Current Password')}</FormLabel>
+                    <FormControl>
+                      <PasswordInput
+                        {...field}
+                        autoComplete='current-password'
+                        disabled={security.pending}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
             {flow && (
               <>
                 <p className='text-muted-foreground text-sm'>

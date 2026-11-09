@@ -18,6 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router'
+import {
   act,
   cleanup,
   render,
@@ -31,6 +38,7 @@ import i18next from 'i18next'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { LanguageSwitcher } from '@/components/language-switcher'
+import * as passwordEncryption from '@/features/auth/lib/password-encryption'
 import { toIntlLocale } from '@/i18n/languages'
 import { api } from '@/lib/api'
 import { formatQuotaWithCurrency } from '@/lib/currency'
@@ -41,6 +49,8 @@ import {
   useSystemConfigStore,
 } from '@/stores/system-config-store'
 
+import { ResellerOwnAccountPage } from '../agent-account-page'
+import { resellerAgentSearchSchema } from '../agent-status'
 import { ResellerConfigEditor } from '../config-editor'
 import { guardResellerRoute } from '../navigation'
 import {
@@ -51,6 +61,7 @@ import {
 import { ResellerQuotaDialog } from '../quota-dialog'
 import { ProcurementSummary } from '../shared'
 import { ResellerUsageFacts } from '../usage-facts'
+import { ResellerUsersPage } from '../users-page'
 import { ResellerAdjustments, ResellerWorkspacePage } from '../workspace-page'
 
 const initialSystemConfig = useSystemConfigStore.getState().config
@@ -87,6 +98,251 @@ function provider() {
   )
 }
 
+it('closes the reseller dialog before mail delivery and lets the administrator retry from the row', async () => {
+  let failMail: () => void = () => {}
+  const mail = new Promise<Awaited<ReturnType<typeof api.post>>>((resolve) => {
+    failMail = () =>
+      resolve({
+        data: { success: false, code: 'EMAIL_BINDING_DELIVERY_FAILED' },
+      } as Awaited<ReturnType<typeof api.post>>)
+  })
+  const post = vi
+    .spyOn(api, 'post')
+    .mockResolvedValueOnce({ data: { success: true, data: { user_id: 2 } } })
+    .mockReturnValueOnce(mail)
+    .mockResolvedValueOnce({ data: { success: true, data: null } })
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        items: [
+          {
+            user_id: 2,
+            username: 'new-agent',
+            email: 'agent@example.invalid',
+            phone: '+8613800138000',
+            activation: 'pending',
+            quota: 0,
+          },
+          {
+            user_id: 3,
+            username: 'enrolling-agent',
+            email: 'enrolling@example.invalid',
+            activation: 'security_pending',
+            quota: 0,
+          },
+        ],
+      },
+    },
+  })
+  const router = createRouter({
+    routeTree: createRootRoute({
+      component: () => <ResellerUsersPage admin />,
+    }),
+    history: createMemoryHistory(),
+  })
+  render(<RouterProvider router={router} />, { wrapper: provider() })
+
+  const user = userEvent.setup()
+  await user.click(
+    await screen.findByRole('button', { name: 'Create reseller' })
+  )
+  const dialog = within(await screen.findByRole('dialog'))
+  const email = dialog.getByRole('textbox', { name: 'Email' })
+  const phone = dialog.getByRole('textbox', { name: 'Mobile number' })
+  await user.type(
+    dialog.getByRole('textbox', { name: 'Username' }),
+    'new-agent'
+  )
+  await user.click(dialog.getByRole('button', { name: 'Create' }))
+  expect(email).toHaveAttribute('aria-invalid', 'true')
+  expect(phone).toHaveAttribute('aria-invalid', 'true')
+  expect(post).not.toHaveBeenCalled()
+
+  await user.type(email, 'agent@example.invalid')
+  await user.type(phone, '+8613800138000')
+  await user.type(dialog.getByLabelText('Remark'), '华东代理')
+  await user.click(dialog.getByRole('button', { name: 'Create' }))
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  )
+  expect(post).toHaveBeenNthCalledWith(
+    1,
+    '/api/reseller/admin/agents?send_activation_email=false',
+    {
+      username: 'new-agent',
+      display_name: '',
+      email: 'agent@example.invalid',
+      phone: '+8613800138000',
+      remark: '华东代理',
+    }
+  )
+  expect(await screen.findByText('+8613800138000')).toBeInTheDocument()
+  expect(post).toHaveBeenNthCalledWith(
+    2,
+    '/api/reseller/admin/agents/2/activation',
+    {}
+  )
+  const pendingRow = within(screen.getByRole('row', { name: /new-agent/ }))
+  expect(
+    await pendingRow.findByRole('button', { name: 'Sending...' })
+  ).toBeDisabled()
+  expect(
+    pendingRow.queryByRole('button', { name: 'Reset Password' })
+  ).toBeNull()
+
+  await act(failMail)
+  await user.click(
+    await pendingRow.findByRole('button', { name: 'Reset Password' })
+  )
+  expect(post).toHaveBeenNthCalledWith(
+    3,
+    '/api/reseller/admin/agents/2/activation',
+    {}
+  )
+})
+
+it('shows only password setup and two activation states on the reseller list', async () => {
+  const user = userEvent.setup()
+  const agents = [
+    {
+      user_id: 2,
+      username: 'enrolling-agent',
+      activation: 'security_pending',
+      account: { enabled: true, balance: 0, reserved: 0 },
+    },
+    {
+      user_id: 3,
+      username: 'suspended-agent',
+      activation: 'active',
+      platform_disabled: true,
+      account: { enabled: true, balance: 0, reserved: 0 },
+    },
+  ]
+  const get = vi.spyOn(api, 'get').mockResolvedValue({
+    data: { success: true, data: { items: agents } },
+  })
+  const router = createRouter({
+    routeTree: createRootRoute({
+      validateSearch: resellerAgentSearchSchema,
+      component: () => <ResellerUsersPage admin />,
+    }),
+    history: createMemoryHistory({
+      initialEntries: [
+        '/?activation=security_pending&service_status=platform_disabled&after=42',
+      ],
+    }),
+  })
+  render(<RouterProvider router={router} />, { wrapper: provider() })
+
+  const activation = await screen.findByRole('combobox', { name: 'Activation' })
+  expect(
+    within(activation)
+      .getAllByRole('option')
+      .map((option) => option.textContent)
+  ).toEqual(['All', 'Activated', 'Disabled'])
+  const password = screen.getByRole('combobox', { name: 'Password' })
+  expect(
+    within(password)
+      .getAllByRole('option')
+      .map((option) => option.textContent)
+  ).toEqual(['All', 'Password not set', 'Configured'])
+  const enrolling = within(
+    await screen.findByRole('row', { name: /enrolling-agent/ })
+  )
+  expect(enrolling.getByRole('cell', { name: 'Configured' })).toBeVisible()
+  expect(enrolling.getByRole('cell', { name: 'Activated' })).toBeVisible()
+  const suspended = within(screen.getByRole('row', { name: /suspended-agent/ }))
+  expect(suspended.getByRole('cell', { name: 'Disabled' })).toBeVisible()
+  expect(suspended.queryByText('Platform disabled')).not.toBeInTheDocument()
+
+  expect(activation).toHaveValue('disabled')
+  expect(password).toHaveValue('password_set')
+  expect(get).toHaveBeenLastCalledWith(
+    expect.stringMatching(
+      /after=0&activation=password_set&service_status=disabled$/
+    )
+  )
+  await user.selectOptions(activation, 'enabled')
+  await user.selectOptions(password, 'pending')
+  await waitFor(() =>
+    expect(get).toHaveBeenLastCalledWith(
+      expect.stringMatching(/activation=pending&service_status=enabled$/)
+    )
+  )
+})
+
+it('lets an authorized administrator add available quota from the reseller row', async () => {
+  const admin = { id: 1, username: 'admin', role: 10 }
+  useAuthStore.getState().auth.setUser(admin)
+  const agent = {
+    user_id: 2,
+    username: 'quota-agent',
+    email: 'agent@example.invalid',
+    activation: 'active',
+    account: { enabled: true, balance: 1_500_000, reserved: 500_000 },
+  }
+  const get = vi
+    .spyOn(api, 'get')
+    .mockResolvedValueOnce({
+      data: { success: true, data: { items: [agent] } },
+    })
+    .mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          items: [
+            { ...agent, account: { ...agent.account, balance: 2_000_000 } },
+          ],
+        },
+      },
+    })
+  const post = vi.spyOn(api, 'post').mockResolvedValue({
+    data: { success: true, data: {} },
+  })
+  const router = createRouter({
+    routeTree: createRootRoute({
+      component: () => <ResellerUsersPage admin />,
+    }),
+    history: createMemoryHistory(),
+  })
+  render(<RouterProvider router={router} />, { wrapper: provider() })
+
+  const row = within(await screen.findByRole('row', { name: /quota-agent/ }))
+  expect(row.queryByRole('button', { name: 'Adjust Quota' })).toBeNull()
+  act(() => {
+    useAuthStore.getState().auth.setUser({
+      ...admin,
+      permissions: { admin_permissions: { reseller: { quota: true } } },
+    })
+  })
+  const user = userEvent.setup()
+  await user.click(await row.findByRole('button', { name: 'Adjust Quota' }))
+  const dialog = within(
+    await screen.findByRole('dialog', { name: 'Adjust Quota · quota-agent' })
+  )
+  await user.type(dialog.getByLabelText('Amount'), '1')
+  await user.type(dialog.getByLabelText('Reason'), 'Allocate procurement quota')
+  const locale = toIntlLocale('en')
+  const expectedQuota = formatQuotaWithCurrency(1_500_000, { locale })
+  expect(
+    dialog.getByText(
+      `${formatQuotaWithCurrency(1_000_000, { locale })} → ${expectedQuota}`
+    )
+  ).toBeInTheDocument()
+  await user.click(dialog.getByRole('button', { name: 'Confirm' }))
+  expect(post).toHaveBeenCalledWith(
+    '/api/reseller/admin/agents/2/quota-adjustments',
+    expect.objectContaining({
+      mode: 'add',
+      quota: 500_000,
+      reason: 'Allocate procurement quota',
+    })
+  )
+  expect(await row.findByText(expectedQuota)).toBeInTheDocument()
+  expect(get).toHaveBeenCalledTimes(2)
+})
+
 it('changes an agent interface language without calling the forbidden profile endpoint', async () => {
   useAuthStore.getState().auth.setUser({
     id: 2,
@@ -105,7 +361,13 @@ it('changes an agent interface language without calling the forbidden profile en
   expect(put).not.toHaveBeenCalled()
 })
 
-it('describes restoring a reseller without implying customer restrictions are removed', async () => {
+it('activates the reseller separately from sending a password reset email', async () => {
+  const put = vi
+    .spyOn(api, 'put')
+    .mockResolvedValue({ data: { success: true } })
+  const post = vi
+    .spyOn(api, 'post')
+    .mockResolvedValue({ data: { success: true } })
   useAuthStore.getState().auth.setUser({ id: 1, username: 'admin', role: 100 })
   vi.spyOn(api, 'get').mockResolvedValue({
     data: {
@@ -132,13 +394,421 @@ it('describes restoring a reseller without implying customer restrictions are re
     },
   })
   render(<ResellerWorkspacePage userID={2} admin />, { wrapper: provider() })
-  await userEvent.click(await screen.findByRole('button', { name: 'Enable' }))
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Activate account' })
+  )
   expect(await screen.findByRole('alertdialog')).toHaveTextContent(
     'Restoring this reseller keeps each customer’s independent restrictions in effect.'
   )
   expect(screen.getByRole('alertdialog')).not.toHaveTextContent(
     'Disabling this reseller'
   )
+  await userEvent.click(
+    within(screen.getByRole('alertdialog')).getByRole('button', {
+      name: 'Continue',
+    })
+  )
+  expect(put).toHaveBeenCalledWith('/api/reseller/admin/agents/2/enabled', {
+    enabled: true,
+  })
+  expect(post).not.toHaveBeenCalled()
+  await waitFor(() =>
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Reset Password' }))
+  await userEvent.click(
+    within(
+      screen.getByRole('alertdialog', { name: 'Reset Password' })
+    ).getByRole('button', { name: 'Send' })
+  )
+  expect(post).toHaveBeenCalledWith(
+    '/api/reseller/admin/agents/2/password-reset',
+    {}
+  )
+})
+
+it('keeps pending-email correction in the administrator activation action', async () => {
+  const user = userEvent.setup()
+  const post = vi
+    .spyOn(api, 'post')
+    .mockResolvedValue({ data: { success: true } })
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        user: {
+          user_id: 2,
+          username: 'agent',
+          email: 'old@example.invalid',
+          activation: 'pending',
+          quota: 0,
+        },
+        config: { revision: 0, items: [] },
+        candidates: [],
+        history: [],
+      },
+    },
+  })
+  render(<ResellerWorkspacePage userID={2} admin />, { wrapper: provider() })
+  const send = await screen.findByRole('button', {
+    name: 'Reset Password',
+  })
+  const information = within(
+    screen.getByRole('tabpanel', { name: 'Basic information' })
+  )
+  expect(information.getByText('old@example.invalid')).toBeVisible()
+  expect(information.queryByRole('textbox')).not.toBeInTheDocument()
+  await user.click(send)
+  const dialog = within(screen.getByRole('dialog', { name: 'Set Password' }))
+  const email = dialog.getByLabelText('Correct pending email')
+  const submit = dialog.getByRole('button', {
+    name: 'Send activation email',
+  })
+  await user.type(email, 'bad')
+  await user.click(submit)
+  expect(await dialog.findByText('Enter a valid email address')).toBeVisible()
+  expect(post).not.toHaveBeenCalled()
+  await user.clear(email)
+  await user.type(email, 'new@example.invalid')
+  await user.click(submit)
+  expect(post).toHaveBeenCalledWith('/api/reseller/admin/agents/2/activation', {
+    email: 'new@example.invalid',
+  })
+})
+
+it('shows only saved active agent discounts until the administrator opens the editor', async () => {
+  const user = userEvent.setup()
+  const discount = {
+    model: 'discounted-model',
+    channel_id: 11,
+    authorized: true,
+    ratio: '0.3',
+  }
+  const revoked = {
+    ...discount,
+    channel_id: 12,
+    authorized: false,
+  }
+  const fullPrice = { ...discount, model: 'full-price-model', ratio: '1' }
+  const markup = { ...discount, model: 'markup-model', ratio: '1.2' }
+  const removed = { ...discount, model: 'removed-model' }
+  const candidate = { ...revoked, model: 'candidate-model', ratio: '1' }
+  const workspace = {
+    data: {
+      success: true,
+      data: {
+        user: { user_id: 2, username: 'agent', activation: 'active', quota: 0 },
+        config: {
+          revision: 7,
+          items: [discount, revoked, fullPrice, markup, removed],
+        },
+        candidates: [discount, revoked, fullPrice, markup, candidate],
+        history: [],
+      },
+    },
+  }
+  vi.spyOn(api, 'get').mockImplementation(async (path) => {
+    if (path.includes('/config/history')) {
+      return {
+        data: {
+          success: true,
+          data: {
+            items: [
+              {
+                revision: 7,
+                operator_id: 1,
+                created_at: 100,
+                changes: [
+                  {
+                    model: discount.model,
+                    channel_id: discount.channel_id,
+                    before: { authorized: true, ratio: '0.4' },
+                    after: { authorized: true, ratio: '0.3' },
+                  },
+                ],
+              },
+            ],
+            next_cursor: 0,
+          },
+        },
+      }
+    }
+    return workspace
+  })
+  render(<ResellerWorkspacePage userID={2} admin />, { wrapper: provider() })
+  const tab = await screen.findByRole('tab', {
+    name: 'Model authorization and ratios',
+  })
+  await user.click(tab)
+  const panel = within(
+    screen.getByRole('tabpanel', { name: 'Model authorization and ratios' })
+  )
+  expect(panel.getAllByRole('row')).toHaveLength(2)
+  expect(
+    panel.getByRole('row', { name: /discounted-model.*11.*0\.3/ })
+  ).toBeVisible()
+  expect(panel.queryByText('candidate-model')).not.toBeInTheDocument()
+  await user.click(
+    await panel.findByRole('button', { name: 'View changes for Revision 7' })
+  )
+  const history = within(
+    panel.getByRole('region', { name: 'Configuration history' })
+  )
+  expect(
+    history.getByRole('row', { name: /discounted-model.*11.*0\.4.*0\.3/ })
+  ).toBeVisible()
+  await user.click(
+    panel.getByRole('button', { name: 'View changes for Revision 7' })
+  )
+
+  const edit = panel.getByRole('button', { name: 'Edit' })
+  expect(edit).toHaveAttribute('aria-expanded', 'false')
+  edit.focus()
+  await user.keyboard('{Enter}')
+  const grant = panel.getByRole('checkbox', {
+    name: 'Authorize candidate-model channel 12',
+  })
+  await user.click(grant)
+  expect(grant).toBeChecked()
+  const ratio = panel.getByLabelText('Ratio for candidate-model channel 12')
+  await user.clear(ratio)
+  await user.type(ratio, '-0.1')
+  expect(ratio).toHaveAttribute('aria-invalid', 'true')
+  expect(ratio).toHaveAccessibleDescription(
+    'Enter a ratio greater than 0 and at most 2, with up to six decimal places.'
+  )
+  expect(
+    within(panel.getByRole('row', { name: /candidate-model/ })).queryByText(
+      'Effective'
+    )
+  ).not.toBeInTheDocument()
+  expect(panel.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+  await user.clear(ratio)
+  await user.type(ratio, '0.7')
+  expect(ratio).toHaveAttribute('aria-invalid', 'false')
+  expect(panel.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+  await user.click(panel.getByRole('button', { name: 'Collapse' }))
+  expect(panel.queryByRole('checkbox')).not.toBeInTheDocument()
+  expect(panel.getAllByRole('row')).toHaveLength(2)
+  await user.click(panel.getByRole('button', { name: 'Edit' }))
+  expect(grant).toBeChecked()
+})
+
+it('shows an empty discount list when the agent has only unconfigured candidates', async () => {
+  const workspace = {
+    data: {
+      success: true,
+      data: {
+        user: { user_id: 2, username: 'agent', activation: 'active', quota: 0 },
+        config: { revision: 0, items: [] },
+        candidates: [
+          { model: 'candidate', channel_id: 11, authorized: false, ratio: '1' },
+        ],
+        history: [],
+      },
+    },
+  }
+  vi.spyOn(api, 'get').mockImplementation(async (path) =>
+    path.includes('/config/history')
+      ? { data: { success: true, data: { items: [], next_cursor: 0 } } }
+      : workspace
+  )
+  render(<ResellerWorkspacePage userID={2} admin />, { wrapper: provider() })
+  await userEvent.click(
+    await screen.findByRole('tab', { name: 'Model authorization and ratios' })
+  )
+  expect(screen.getByText('No active model discounts')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled()
+})
+
+it('lets an agent update their own contact details and view discounts read-only', async () => {
+  useAuthStore.getState().auth.setUser({
+    id: 2,
+    username: 'agent',
+    role: 1,
+    reseller_kind: 'agent',
+  })
+  const user = userEvent.setup()
+  const profile = {
+    user_id: 2,
+    username: 'agent',
+    display_name: 'Agent name',
+    phone: '13800138000',
+    email: 'agent@example.invalid',
+    activation: 'active',
+    quota: 0,
+  }
+  vi.spyOn(api, 'get').mockImplementation(async () => ({
+    data: {
+      success: true,
+      data: {
+        user: { ...profile },
+        discounts: [
+          {
+            model: 'configured-model',
+            channel_id: 11,
+            authorized: true,
+            ratio: '0.8',
+          },
+        ],
+      },
+    },
+  }))
+  const put = vi.spyOn(api, 'put').mockImplementation(async () => {
+    profile.display_name = 'Updated agent'
+    return { data: { success: true } }
+  })
+  const post = vi
+    .spyOn(api, 'post')
+    .mockResolvedValue({ data: { success: true, data: null } })
+  render(<ResellerOwnAccountPage />, { wrapper: provider() })
+  expect(await screen.findByText('agent@example.invalid')).toBeVisible()
+  expect(screen.queryByText('Remark')).not.toBeInTheDocument()
+  await user.click(screen.getByRole('button', { name: 'Edit profile' }))
+  const dialog = within(screen.getByRole('dialog'))
+  expect(dialog.queryByLabelText('Email')).not.toBeInTheDocument()
+  const name = dialog.getByLabelText('Display name')
+  await user.clear(name)
+  await user.type(name, 'Updated agent')
+  await user.click(dialog.getByRole('button', { name: 'Save changes' }))
+  expect(await screen.findByText('Updated agent')).toBeVisible()
+  expect(put).toHaveBeenCalledWith('/api/reseller/self/account', {
+    display_name: 'Updated agent',
+  })
+  await user.click(screen.getByRole('button', { name: 'Reset Password' }))
+  await user.click(
+    within(
+      screen.getByRole('alertdialog', { name: 'Reset Password' })
+    ).getByRole('button', { name: 'Send' })
+  )
+  expect(post).toHaveBeenCalledWith(
+    '/api/reseller/self/account/password-reset',
+    {}
+  )
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+  await user.click(screen.getByRole('tab', { name: 'Model discounts' }))
+  const discounts = within(
+    screen.getByRole('tabpanel', { name: 'Model discounts' })
+  )
+  expect(
+    discounts.getByRole('row', { name: /configured-model.*11.*0\.8/ })
+  ).toBeVisible()
+  expect(
+    discounts.queryByRole('button', { name: 'Edit' })
+  ).not.toBeInTheDocument()
+})
+
+it('lets an agent verify their identity and new email from their own account', async () => {
+  useAuthStore.getState().auth.setUser({
+    id: 2,
+    username: 'agent',
+    role: 1,
+    reseller_kind: 'agent',
+  })
+  const user = userEvent.setup()
+  vi.spyOn(passwordEncryption, 'encryptPassword').mockResolvedValue({
+    password_encrypted: 'encrypted-password',
+    encryption_key_id: 'test-key',
+  })
+  vi.spyOn(api, 'get').mockImplementation(async (path) => ({
+    data: {
+      success: true,
+      data:
+        path === '/api/reseller/self/account'
+          ? {
+              user: {
+                user_id: 2,
+                username: 'agent',
+                email: 'old@example.com',
+                activation: 'active',
+                quota: 0,
+              },
+              discounts: [],
+            }
+          : {
+              scope: 'account.binding.bind',
+              methods: [{ method: '2fa', available: true }],
+              oauth_providers: [],
+              password_encryption_enabled: false,
+            },
+    },
+  }))
+  const post = vi.spyOn(api, 'post').mockImplementation(async (path) => {
+    const now = Math.floor(Date.now() / 1000)
+    if (path === '/api/verify') {
+      return {
+        data: {
+          success: true,
+          data: {
+            scope: 'account.binding.bind',
+            method: '2fa',
+            proof_token: 'agent-email-proof',
+            expires_at: now + 60,
+          },
+        },
+      }
+    }
+    if (path === '/api/oauth/email/bind/start') {
+      return {
+        data: {
+          success: true,
+          data: {
+            flow_token: 'agent-email-flow',
+            email: 'new@example.com',
+            old_email_required: false,
+            expires_at: now + 600,
+            resend_at: now + 60,
+          },
+        },
+      }
+    }
+    return { data: { success: true, data: { sign_in_required: true } } }
+  })
+  const root = createRootRoute()
+  const router = createRouter({
+    routeTree: root.addChildren([
+      createRoute({
+        getParentRoute: () => root,
+        path: '/',
+        component: ResellerOwnAccountPage,
+      }),
+      createRoute({ getParentRoute: () => root, path: '/sign-in' }),
+    ]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  render(<RouterProvider router={router} />, { wrapper: provider() })
+  await user.click(await screen.findByRole('button', { name: 'Change Email' }))
+  await user.type(screen.getByLabelText('Email Address'), 'new@example.com')
+  await user.type(screen.getByLabelText('Current Password'), 'current-password')
+  await user.click(screen.getByRole('button', { name: 'Continue' }))
+  await user.type(
+    await screen.findByLabelText('Authenticator code or backup code'),
+    '123456'
+  )
+  await user.click(screen.getByRole('button', { name: 'Verify' }))
+  await user.type(
+    await screen.findByLabelText('New email verification code'),
+    '654321'
+  )
+  await user.click(screen.getByRole('button', { name: 'Confirm email' }))
+  expect(post).toHaveBeenCalledWith(
+    '/api/oauth/email/bind/start',
+    {
+      email: 'new@example.com',
+      password_encrypted: 'encrypted-password',
+      encryption_key_id: 'test-key',
+    },
+    expect.objectContaining({
+      headers: { 'X-Security-Proof': 'agent-email-proof' },
+    })
+  )
+  expect(post).toHaveBeenCalledWith(
+    '/api/oauth/email/bind',
+    { flow_token: 'agent-email-flow', new_code: '654321', old_code: '' },
+    expect.objectContaining({ singleUseAuthorization: true })
+  )
+  await waitFor(() => expect(router.state.location.pathname).toBe('/sign-in'))
+  expect(useAuthStore.getState().auth.user).toBeNull()
 })
 
 it('keeps personal model ranges private across anonymous and switched accounts', async () => {
@@ -742,14 +1412,12 @@ it('uses the server cursor to page quota adjustments even when a page is short',
 })
 
 it('loads the next personal history page with the cross-version cursor', async () => {
-  useAuthStore
-    .getState()
-    .auth.setUser({
-      id: 3,
-      username: 'customer',
-      role: 1,
-      reseller_kind: 'agent_customer',
-    })
+  useAuthStore.getState().auth.setUser({
+    id: 3,
+    username: 'customer',
+    role: 1,
+    reseller_kind: 'agent_customer',
+  })
   const entries = Array.from({ length: 50 }, (_, index) => ({
     pricing_version: 2,
     revision: 60 - index,

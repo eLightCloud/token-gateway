@@ -54,8 +54,7 @@ func TestRealtimePricing(t *testing.T) {
 	require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
 	t.Logf("realtime database=%s version=%s", db.Dialector.Name(), version)
 	if os.Getenv("RT_TEST_UPGRADE_RELEASE") == "1" {
-		// This opt-in database is created by v1.0.0-rc.40's actual migrateDB,
-		// not reconstructed from current models. Run the full startup twice.
+		// The fixture uses the baseline binary's schema. Run startup twice.
 		for range 2 {
 			require.NoError(t, migrateDB())
 		}
@@ -70,6 +69,21 @@ func TestRealtimePricing(t *testing.T) {
 		assert.Equal(t, "release-model", channel.Models)
 		require.True(t, db.Migrator().HasIndex(&User{}, "idx_users_username"))
 		require.True(t, db.Migrator().HasIndex(&Token{}, "idx_tokens_key"))
+		if os.Getenv("RT_TEST_UPGRADE_PRIOR") == "1" {
+			config, err := ReadRealtimePricing(db, "user", user.Id)
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, config.Revision)
+			assert.Equal(t, []RealtimePricingItem{
+				{Model: "release-model", Ratio: "0.42", ChannelIDs: []int{channel.Id}},
+			}, config.Items, "old rules are still enabled after adding the column")
+			require.True(t, db.Migrator().HasIndex(&RealtimePricingRule{}, "realtime_rule_key"))
+			snapshot, err := LoadPersonalPricing(user.Id, channel.Models)
+			require.NoError(t, err)
+			require.NotNil(t, snapshot)
+			assert.EqualValues(t, 420000, snapshot.Channels[channel.Id].CustomerRatio)
+			assert.Equal(t, "user", snapshot.Channels[channel.Id].Source)
+			return
+		}
 	}
 	// Representative pre-feature schema/data, followed by additive migration twice.
 	require.NoError(t, db.AutoMigrate(&User{}, &Organization{}, &OrganizationMember{}, &OrganizationDiscountSnapshot{}, &Channel{}, &ResellerConfigHead{}, &ResellerModelConfig{}, &ResellerConfigRevision{}, &ResellerIdentity{}, &ResellerAccount{}))
@@ -185,13 +199,52 @@ func TestRealtimePricing(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 5000000, snapshot.Channels[channels[0].Id].CustomerRatio)
 	assert.EqualValues(t, 800000, before.Channels[channels[0].Id].CustomerRatio, "existing request keeps frozen facts")
-	preview, err := PreviewRealtimePricing(root.Id, "organization", org.Id, user.Id, []RealtimePricingItem{{Model: "A", Ratio: "0.7", ChannelIDs: []int{channels[0].Id, channels[1].Id}}})
+	preview, err := PreviewRealtimePricing(root.Id, "organization", org.Id, []RealtimePricingItem{{Model: "A", Ratio: "0.7", ChannelIDs: []int{channels[0].Id, channels[1].Id}}})
 	require.NoError(t, err)
-	assert.Contains(t, preview.Rows, RealtimePricingPreviewRow{Model: "A", ChannelID: channels[0].Id, Ratio: "5", Source: "user"})
-	assert.Contains(t, preview.Rows, RealtimePricingPreviewRow{Model: "A", ChannelID: channels[1].Id, Ratio: "0.7", Source: "organization"})
-	assert.Contains(t, preview.Rows, RealtimePricingPreviewRow{Model: "A", ChannelID: channels[2].Id, Ratio: "1", Source: "system"})
-	_, err = PreviewRealtimePricing(root.Id, "organization", org.Id, admin.Id, nil)
-	require.ErrorIs(t, err, ErrResellerForbidden)
+	assert.ElementsMatch(t, []RealtimePricingPreviewRow{
+		{Model: "A", ChannelID: channels[0].Id, Ratio: "0.7", Source: "organization"},
+		{Model: "A", ChannelID: channels[1].Id, Ratio: "0.7", Source: "organization"},
+	}, preview.Rows)
+
+	disabled := config.Items[0]
+	disabled.Disabled = true
+	_, err = SaveRealtimePricing(root.Id, "organization", org.Id, RealtimePricingInput{
+		ExpectedRevision: 1,
+		Items:            []RealtimePricingItem{disabled},
+	})
+	require.ErrorIs(t, err, ErrResellerInvalid)
+	preview, err = PreviewRealtimePricing(root.Id, "user", user.Id, []RealtimePricingItem{disabled})
+	require.NoError(t, err)
+	assert.Contains(t, preview.Rows, RealtimePricingPreviewRow{Model: "A", ChannelID: channels[0].Id, Ratio: "0.8", Source: "organization"})
+	current, err := LoadPersonalPricing(user.Id, "A")
+	require.NoError(t, err)
+	assert.EqualValues(t, 5000000, current.Channels[channels[0].Id].CustomerRatio, "draft does not affect actual billing")
+
+	config, err = SaveRealtimePricing(root.Id, "user", user.Id, RealtimePricingInput{
+		ExpectedRevision: config.Revision,
+		Items:            []RealtimePricingItem{disabled},
+	})
+	require.NoError(t, err)
+	stored, err := ReadRealtimePricing(db, "user", user.Id)
+	require.NoError(t, err)
+	assert.Equal(t, []RealtimePricingItem{disabled}, stored.Items)
+	current, err = LoadPersonalPricing(user.Id, "A")
+	require.NoError(t, err)
+	assert.EqualValues(t, 800000, current.Channels[channels[0].Id].CustomerRatio)
+	assert.Equal(t, "organization", current.Channels[channels[0].Id].Source)
+	assert.EqualValues(t, 5000000, snapshot.Channels[channels[0].Id].CustomerRatio, "in-flight requests keep the enabled ratio")
+
+	reenabled := stored.Items[0]
+	reenabled.Disabled = false
+	config, err = SaveRealtimePricing(root.Id, "user", user.Id, RealtimePricingInput{
+		ExpectedRevision: config.Revision,
+		Items:            []RealtimePricingItem{reenabled},
+	})
+	require.NoError(t, err)
+	current, err = LoadPersonalPricing(user.Id, "A")
+	require.NoError(t, err)
+	assert.EqualValues(t, 5000000, current.Channels[channels[0].Id].CustomerRatio)
+	assert.Equal(t, "user", current.Channels[channels[0].Id].Source)
 	for _, value := range []string{"0", "-1", "5.01", "0.001", "NaN", "1e0", " 1"} {
 		t.Run("invalid "+value, func(t *testing.T) {
 			_, err := ParseRealtimePricingRatio(value)

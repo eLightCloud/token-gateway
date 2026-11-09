@@ -13,6 +13,7 @@ import (
 const SecurityActivationPurpose = "account_activation"
 const SecurityEmailPurpose = "security_email"
 const SecurityPasswordPurpose = "security_password_reset"
+const SecurityMailTTL = 10 * time.Minute
 
 // VerifiedEmail is a verified address, never inferred from a profile field or
 // an upstream identity assertion. Comparing it to User.Email invalidates stale proof.
@@ -165,7 +166,7 @@ func NewSecurityMailFlow(userID int, purpose, email string, identity *AuthSessio
 		if err != nil {
 			return err
 		}
-		token, _, err = createAuthFlowWithTx(tx, AuthFlowCreate{Purpose: purpose, UserId: userID, SessionId: sid, Payload: string(payload), ExpiresAt: time.Now().Add(10 * time.Minute)})
+		token, _, err = createAuthFlowWithTx(tx, AuthFlowCreate{Purpose: purpose, UserId: userID, SessionId: sid, Payload: string(payload), ExpiresAt: time.Now().Add(SecurityMailTTL)})
 		return err
 	})
 	return token, err

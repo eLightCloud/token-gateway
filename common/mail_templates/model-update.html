@@ -1,0 +1,5 @@
+{{define "model-update"}}{{template "email-open" .}}
+<h1>{{.Subject}}</h1><p style="font-size:16px;font-weight:600">上游模型变化 · Upstream model changes</p><p style="color:#64748b">以下为模型检测结果，请查看新增、移除或检测失败的项目。</p>
+<div style="border:1px solid #ddd6fe;border-radius:8px;padding:20px" class="message-body">{{.Body}}</div>
+<p style="font-size:12px;color:#64748b;margin-top:24px">请在渠道管理中核对实际可用模型，避免影响现有客户端。</p>
+{{template "email-close" .}}{{end}}

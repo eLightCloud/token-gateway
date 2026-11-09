@@ -76,12 +76,12 @@ func newSMTPClient(addr string) (*smtp.Client, error) {
 	return client, nil
 }
 
-func SendEmail(subject string, receiver string, content string) error {
+func sendEmail(subject string, receiver string, content string) error {
 	if snapshot := DefaultEmailDelivery.state.Load(); snapshot != nil {
 		if snapshot.err != nil {
 			return ErrEmailDeliveryUnavailable
 		}
-		_, err := DeliverConfiguredEmail(context.Background(), snapshot.config, subject, receiver, content)
+		_, err := deliverConfiguredEmail(context.Background(), snapshot.config, subject, receiver, content)
 		return err
 	}
 	if SMTPFrom == "" { // for compatibility

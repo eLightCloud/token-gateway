@@ -24,13 +24,15 @@ var (
 // salted code hashes and an already-consumed authorization, never usable codes
 // or proof tokens. Resending must retain the deadline and failure counter.
 type EmailBindingState struct {
-	Authorization  *AuthFlowAuthorization `json:"authorization"`
-	CurrentEmail   string                 `json:"current_email"`
-	Email          string                 `json:"email"`
-	NewCodeHash    string                 `json:"new_code_hash"`
-	OldCodeHash    string                 `json:"old_code_hash,omitempty"`
-	FailedAttempts int                    `json:"failed_attempts"`
-	ResendAt       int64                  `json:"resend_at"`
+	Authorization     *AuthFlowAuthorization `json:"authorization"`
+	CurrentEmail      string                 `json:"current_email"`
+	Email             string                 `json:"email"`
+	NewCodeHash       string                 `json:"new_code_hash"`
+	OldCodeHash       string                 `json:"old_code_hash,omitempty"`
+	PasswordConfirmed bool                   `json:"password_confirmed,omitempty"`
+	FailedAttempts    int                    `json:"failed_attempts"`
+	ResendAt          int64                  `json:"resend_at"`
+	SignInRequired    bool                   `json:"-"`
 }
 
 func CreateEmailBinding(identity AuthSessionIdentity, state EmailBindingState) (string, *AuthFlow, error) {
@@ -144,7 +146,15 @@ func CompleteEmailBinding(identity AuthSessionIdentity, token, email, newCode, o
 		if err := setVerifiedEmailWithTx(tx, identity.UserID, state.Email); err != nil {
 			return err
 		}
-		return tx.Model(flow).Update("consumed_at", time.Now()).Error
+		if err := tx.Model(flow).Update("consumed_at", time.Now()).Error; err != nil {
+			return err
+		}
+		if state.SignInRequired {
+			// Invalidate sessions and reset links issued before this change.
+			_, err := IncrementUserAuthVersionWithTx(tx, identity.UserID)
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -198,11 +208,21 @@ func validateEmailBindingAccountWithTx(tx *gorm.DB, identity AuthSessionIdentity
 		return err
 	}
 	var user User
-	if err := tx.Select("email").First(&user, identity.UserID).Error; err != nil {
+	if err := tx.Select("email", "reseller_kind").First(&user, identity.UserID).Error; err != nil {
 		return err
 	}
 	if NormalizeEmail(user.Email) != state.CurrentEmail || state.CurrentEmail == state.Email {
 		return ErrAccountBindingChanged
+	}
+	state.SignInRequired = user.ResellerKind == "agent" && state.CurrentEmail != ""
+	if state.SignInRequired && !state.PasswordConfirmed {
+		agent, err := GetResellerIdentity(tx, identity.UserID)
+		if err != nil {
+			return err
+		}
+		if agent == nil || agent.Activation == "active" {
+			return ErrAuthFlowInvalid
+		}
 	}
 	return nil
 }

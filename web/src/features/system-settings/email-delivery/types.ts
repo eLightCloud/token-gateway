@@ -54,10 +54,16 @@ export type EmailReport = {
   revision: number
   timestamp: number
   request_id: string
-  reason?: 'SMTP_AUTH_DISABLED'
+  reason?: 'GRAPH_ACCESS_DENIED'
   code: 'EMAIL_ACCEPTED' | 'EMAIL_DELIVERY_FAILED' | 'EMAIL_DELIVERY_UNKNOWN'
   stages: {
-    name: 'config' | 'token' | 'connect_tls' | 'auth' | 'submit'
+    name:
+      | 'config'
+      | 'token'
+      | 'connect_tls'
+      | 'auth'
+      | 'submit'
+      | 'graph_submit'
     status: 'passed' | 'failed' | 'skipped' | 'unknown'
   }[]
 }

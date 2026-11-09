@@ -37,5 +37,5 @@ func NotifyAccountSecurityChange(email, event string) error {
 	}
 	subject := common.SystemName + " — Account security notification"
 	content := fmt.Sprintf("<p>Your account security settings have changed: %s.</p><p>If you did not make this change, open your account security settings, revoke other login sessions, and contact your administrator.</p>", html.EscapeString(event))
-	return common.SendEmail(subject, email, content)
+	return common.SendNotificationEmail(common.EmailSecurityChange, subject, email, content)
 }

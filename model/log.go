@@ -105,7 +105,11 @@ func ensureLogRequestId(log *Log) {
 
 func createLog(log *Log) error {
 	ensureLogRequestId(log)
-	return createLogWithInvoiceAcknowledgement(log)
+	err := createLogWithInvoiceAcknowledgement(log)
+	if err != nil {
+		common.ReportOperationsFault("usage_log_write")
+	}
+	return err
 }
 
 func clickHouseLogOrder(prefix string) string {

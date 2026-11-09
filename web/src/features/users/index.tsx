@@ -16,9 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { UserPersonalPricingPage } from '@/features/reseller/user-pricing-page'
 
 import { UsersDeleteDialog } from './components/users-delete-dialog'
 import { UsersMutateDrawer } from './components/users-mutate-drawer'
@@ -53,6 +55,14 @@ function UsersContent() {
 }
 
 export function Users() {
+  const pricingUserId = getRouteApi('/_authenticated/users/').useSearch({
+    select: (search) => search.pricingUserId,
+  })
+  if (pricingUserId !== undefined) {
+    return (
+      <UserPersonalPricingPage key={pricingUserId} userID={pricingUserId} />
+    )
+  }
   return (
     <UsersProvider>
       <UsersContent />

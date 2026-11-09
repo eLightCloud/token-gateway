@@ -30,6 +30,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { resellerKey, resellerRequest, type RatioRange } from './api'
 import { formatPersonalRatio } from './format'
+import { personalRatioQuery } from './personal-ratio-query'
 import { ResellerQueryStatus, ResellerTimestamp } from './shared'
 
 export function PersonalRatioBadge({ model }: { model: string }) {
@@ -45,12 +46,7 @@ function AuthenticatedPersonalRatioBadge({
   model: string
   userID: number
 }) {
-  const query = useQuery({
-    queryKey: resellerKey(userID, 'ratios'),
-    queryFn: () =>
-      resellerRequest<RatioRange[]>('/api/reseller/personal/ratios'),
-    staleTime: 30_000,
-  })
+  const query = useQuery(personalRatioQuery(userID))
   const range = query.data?.find((item) => item.model === model)
   if (!range || (range.min === '1' && range.max === '1')) return null
   return (

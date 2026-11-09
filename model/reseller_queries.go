@@ -16,6 +16,8 @@ type ResellerUserView struct {
 	Username         string           `json:"username"`
 	DisplayName      string           `json:"display_name"`
 	Email            string           `json:"email"`
+	Phone            string           `json:"phone,omitempty"`
+	Remark           string           `json:"remark,omitempty"`
 	Activation       string           `json:"activation"`
 	AgentDisabled    bool             `json:"agent_disabled"`
 	PlatformDisabled bool             `json:"platform_disabled"`
@@ -57,14 +59,27 @@ func ListResellerUsers(operatorID int, admin bool, after int, search string, act
 		result.Account = &account
 		query = query.Where("kind = ? AND agent_user_id = ?", "agent_customer", operatorID)
 	}
-	if activation != "" {
-		if activation != "pending" && activation != "security_pending" && activation != "active" {
+	switch activation {
+	case "":
+	case "pending", "security_pending", "active":
+		query = query.Where("activation = ?", activation)
+	case "password_set":
+		if !admin {
 			return nil, ErrResellerInvalid
 		}
-		query = query.Where("activation = ?", activation)
+		query = query.Where("activation IN ?", []string{"security_pending", "active"})
+	default:
+		return nil, ErrResellerInvalid
 	}
 	switch serviceStatus {
 	case "":
+	case "disabled":
+		if !admin {
+			return nil, ErrResellerInvalid
+		}
+		platformDisabled := DB.Model(&User{}).Select("id").Where("status <> ?", common.UserStatusEnabled)
+		accountDisabled := DB.Model(&ResellerAccount{}).Select("user_id").Where("enabled = ?", false)
+		query = query.Where(DB.Where("user_id IN (?)", platformDisabled).Or("user_id IN (?)", accountDisabled))
 	case "platform_disabled":
 		query = query.Where("user_id IN (?)", DB.Model(&User{}).Select("id").Where("status <> ?", common.UserStatusEnabled))
 	case "agent_disabled":
@@ -101,6 +116,7 @@ func ListResellerUsers(operatorID int, admin bool, after int, search string, act
 		}
 		view := ResellerUserView{UserID: user.Id, Username: user.Username, DisplayName: user.DisplayName, Email: user.Email, Quota: user.Quota, Activation: identity.Activation, AgentDisabled: identity.AgentDisabled, PlatformDisabled: user.Status != common.UserStatusEnabled}
 		if admin {
+			view.Phone = identity.Phone
 			var account ResellerAccount
 			if err := DB.First(&account, "user_id = ?", user.Id).Error; err != nil {
 				return nil, err

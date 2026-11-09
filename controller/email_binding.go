@@ -11,7 +11,6 @@ import (
 )
 
 type emailBindRequest struct {
-	Email     string `json:"email"`
 	FlowToken string `json:"flow_token"`
 	NewCode   string `json:"new_code"`
 	OldCode   string `json:"old_code"`
@@ -27,7 +26,11 @@ func EmailBindStart(c *gin.Context) {
 	defer func() {
 		recordUserSecurityAudit(c, identity.UserID, "user.binding_start", map[string]any{"provider": "email", "success": succeeded, "notification_failed": notificationFailed})
 	}()
-	var request emailBindRequest
+	var request struct {
+		Email             string `json:"email"`
+		PasswordEncrypted string `json:"password_encrypted"`
+		EncryptionKeyID   string `json:"encryption_key_id"`
+	}
 	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
 		writeSecurityOperationError(c, service.ErrVerificationContextInvalid)
 		return
@@ -46,7 +49,7 @@ func EmailBindStart(c *gin.Context) {
 	if authorization == nil {
 		return
 	}
-	data, err := service.StartEmailBinding(identity, authorization, email)
+	data, err := service.StartEmailBinding(identity, authorization, email, request.PasswordEncrypted, request.EncryptionKeyID)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -108,5 +111,11 @@ func EmailBind(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"notification_warning": notificationFailed}})
+	if state.SignInRequired {
+		service.ClearRefreshCookie(c)
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{
+		"notification_warning": notificationFailed,
+		"sign_in_required":     state.SignInRequired,
+	}})
 }

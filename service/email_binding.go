@@ -53,7 +53,7 @@ func ValidateAccountEmail(email string) (string, error) {
 	return email, nil
 }
 
-func StartEmailBinding(identity AuthIdentity, authorization *model.AuthFlowAuthorization, email string) (*EmailBindingData, error) {
+func StartEmailBinding(identity AuthIdentity, authorization *model.AuthFlowAuthorization, email, passwordEncrypted, encryptionKeyID string) (*EmailBindingData, error) {
 	email, err := ValidateAccountEmail(email)
 	if err != nil {
 		return nil, err
@@ -70,6 +70,12 @@ func StartEmailBinding(identity AuthIdentity, authorization *model.AuthFlowAutho
 		return nil, err
 	}
 	state := model.EmailBindingState{Authorization: authorization, CurrentEmail: model.NormalizeEmail(user.Email), Email: email, ResendAt: time.Now().Add(model.EmailBindingResendDelay).Unix()}
+	if user.ResellerKind == "agent" && state.CurrentEmail != "" {
+		state.PasswordConfirmed, err = confirmResellerEmailChangePassword(identity.UserID, authorization.Method, passwordEncrypted, encryptionKeyID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	requireOld := state.CurrentEmail != "" && authorization.Method != VerificationMethodTwoFA && authorization.Method != VerificationMethodPasskey
 	codes, err := generateEmailBindingCodes(requireOld)
 	if err != nil {
@@ -180,12 +186,12 @@ func generateEmailBindingCodes(requireOld bool) (emailBindingCodes, error) {
 func sendEmailBindingCodes(state model.EmailBindingState, codes emailBindingCodes) error {
 	subject := common.SystemName + " — Confirm your email address"
 	content := fmt.Sprintf("<p>Confirm linking this email address to your account.</p><p>Verification code: <strong>%s</strong></p><p>This code expires in 10 minutes. If you did not request this change, do not share this code.</p>", html.EscapeString(codes.New))
-	if err := common.SendEmail(subject, state.Email, content); err != nil {
+	if err := common.SendNotificationEmail(common.EmailVerification, subject, state.Email, content); err != nil {
 		return err
 	}
 	if codes.Old != "" {
 		content = fmt.Sprintf("<p>A change to your account email address was requested. Confirm replacing your current address.</p><p>Verification code: <strong>%s</strong></p><p>This code expires in 10 minutes. If you did not request this change, do not share this code and contact your administrator.</p>", html.EscapeString(codes.Old))
-		return common.SendEmail(subject, state.CurrentEmail, content)
+		return common.SendNotificationEmail(common.EmailVerification, subject, state.CurrentEmail, content)
 	}
 	return nil
 }

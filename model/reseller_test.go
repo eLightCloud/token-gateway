@@ -124,26 +124,37 @@ func TestResellerS1(t *testing.T) {
 	require.NoError(t, db.Create(&ordinary).Error)
 	require.NoError(t, RequireOrdinaryUser(db, ordinary.Id))
 	t.Run("ordinary pending quota survives cache schema group refresh", testUserCacheSchemaGroupRefreshPreservesPendingQuota)
-	a, err := CreateResellerUser(root.Id, "agent", ResellerCreateInput{Username: "s1-agent", Email: "agent@example.invalid"})
+	a, err := CreateResellerUser(root.Id, "agent", ResellerCreateInput{Username: "s1-agent", Email: "agent@example.invalid", Phone: "+8613800138000", Remark: "华东代理"})
 	require.NoError(t, err)
 	assert.Equal(t, "pending", a.Activation)
-	_, err = CreateResellerUser(root.Id, "agent", ResellerCreateInput{Username: "s1-agent", Email: "duplicate@example.invalid"})
+	identity, err := GetResellerIdentity(db, a.UserID)
+	require.NoError(t, err)
+	require.NotNil(t, identity)
+	assert.Equal(t, "+8613800138000", identity.Phone)
+	var agent User
+	require.NoError(t, db.First(&agent, a.UserID).Error)
+	assert.Equal(t, "华东代理", agent.Remark)
+	_, err = CreateResellerUser(root.Id, "agent", ResellerCreateInput{Username: "s1-agent", Email: "duplicate@example.invalid", Phone: "13800138000"})
 	require.ErrorIs(t, err, ErrResellerConflict)
 	require.ErrorIs(t, ResellerDashboardAllowed(a.UserID, "/api/reseller/self/customers"), ErrResellerForbidden)
-	_, err = CreateResellerUser(a.UserID, "agent", ResellerCreateInput{Username: "s1-nested", Email: "nested@example.invalid"})
+	_, err = CreateResellerUser(a.UserID, "agent", ResellerCreateInput{Username: "s1-nested", Email: "nested@example.invalid", Phone: "13800138000"})
 	require.ErrorIs(t, err, ErrResellerForbidden)
 	_, err = CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s1-pending-child", Email: "pending@example.invalid"})
 	require.ErrorIs(t, err, ErrResellerForbidden)
 	// Activation is a fixture only: S1 exposes no activation or conversion API.
 	require.NoError(t, db.Model(&ResellerIdentity{}).Where("user_id = ?", a.UserID).Update("activation", "active").Error)
+	require.ErrorIs(t, ResellerLoginAllowed(a.UserID), ErrResellerForbidden)
+	require.NoError(t, SetResellerEnabled(root.Id, a.UserID, true, true))
 	require.NoError(t, ResellerDashboardAllowed(a.UserID, "/api/reseller/self/customers"))
 	require.ErrorIs(t, ResellerDashboardAllowed(a.UserID, "/api/user/self"), ErrResellerForbidden)
-	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s1-customer", Email: "customer@example.invalid"})
+	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s1-customer", Email: "customer@example.invalid", Phone: "+8613800138000", Remark: "ignored"})
 	require.NoError(t, err)
 	var customer User
 	require.NoError(t, db.First(&customer, b.UserID).Error)
 	assert.Zero(t, customer.Quota)
 	assert.Empty(t, customer.Password)
+	assert.Empty(t, customer.Remark)
+	assert.Empty(t, b.Phone)
 	assert.Equal(t, "agent_customer", customer.ResellerKind)
 	t.Run("dispatch barrier replay", func(t *testing.T) {
 		request := ResellerRequest{ID: "dispatch-replay", CustomerUserID: b.UserID, AgentUserID: a.UserID, State: "reserved"}
@@ -171,9 +182,41 @@ func TestResellerS1(t *testing.T) {
 		assert.NotContains(t, logs[0].Other, "private")
 		assert.NotContains(t, visible, "admin_info")
 	})
-	a2, err := CreateResellerUser(root.Id, "agent", ResellerCreateInput{Username: "s1-agent2", Email: "agent2@example.invalid"})
+	a2, err := CreateResellerUser(root.Id, "agent", ResellerCreateInput{Username: "s1-agent2", Email: "agent2@example.invalid", Phone: "13800138000"})
 	require.NoError(t, err)
+	t.Run("admin agent filters group password setup and both forms of suspension", func(t *testing.T) {
+		page, err := ListResellerUsers(root.Id, true, 0, "", "password_set", "", 50)
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1)
+		assert.Equal(t, a.UserID, page.Items[0].UserID)
+
+		page, err = ListResellerUsers(root.Id, true, 0, "", "", "disabled", 50)
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1)
+		assert.Equal(t, a2.UserID, page.Items[0].UserID)
+
+		require.NoError(t, db.Model(&ResellerIdentity{}).Where("user_id = ?", a2.UserID).Update("activation", "security_pending").Error)
+		require.NoError(t, SetResellerEnabled(root.Id, a2.UserID, true, true))
+		require.NoError(t, db.Model(&User{}).Where("id = ?", a2.UserID).Update("status", common.UserStatusDisabled).Error)
+		t.Cleanup(func() {
+			require.NoError(t, db.Model(&User{}).Where("id = ?", a2.UserID).Update("status", common.UserStatusEnabled).Error)
+		})
+
+		page, err = ListResellerUsers(root.Id, true, 0, "", "password_set", "disabled", 50)
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1)
+		assert.Equal(t, a2.UserID, page.Items[0].UserID)
+		assert.True(t, page.Items[0].PlatformDisabled)
+		require.NotNil(t, page.Items[0].Account)
+		assert.True(t, page.Items[0].Account.Enabled)
+
+		page, err = ListResellerUsers(root.Id, true, 0, "", "password_set", "enabled", 50)
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1)
+		assert.Equal(t, a.UserID, page.Items[0].UserID)
+	})
 	require.NoError(t, db.Model(&ResellerIdentity{}).Where("user_id = ?", a2.UserID).Update("activation", "active").Error)
+	require.NoError(t, SetResellerEnabled(root.Id, a2.UserID, true, true))
 	for _, subject := range []struct{ operator, target int }{{root.Id, a.UserID}, {a.UserID, b.UserID}} {
 		add := ResellerQuotaInput{OperationID: "s1-add-" + strings.ReplaceAll(db.Dialector.Name(), " ", "") + map[bool]string{true: "a", false: "b"}[subject.target == a.UserID], Mode: "add", Quota: 100, Reason: "allocation"}
 		first, err := AdjustResellerQuota(subject.operator, subject.target, add)
@@ -465,6 +508,80 @@ func TestResellerS1(t *testing.T) {
 	t.Run("S2_security", func(t *testing.T) { testResellerSecurityCompletion(t, root.Id) })
 	t.Run("S3_S5_billing", func(t *testing.T) { testResellerBillingLifecycle(t, root.Id) })
 	t.Run("display_pricing_batch", func(t *testing.T) { testResellerDisplayBatch(t, root.Id) })
+	t.Run("agent_account", func(t *testing.T) {
+		profile, err := ReadResellerOwnAccount(a.UserID)
+		require.NoError(t, err)
+		assert.Equal(t, "+8613800138000", profile.User.Phone)
+		assert.Empty(t, profile.User.Remark)
+		_, err = ReadResellerOwnAccount(b.UserID)
+		require.ErrorIs(t, err, ErrResellerForbidden)
+		name, badPhone := " 新代理 ", "invalid"
+		require.ErrorIs(t, UpdateResellerOwnProfile(a.UserID, ResellerOwnProfileInput{DisplayName: &name, Phone: &badPhone}), ErrResellerInvalid)
+		profile, err = ReadResellerOwnAccount(a.UserID)
+		require.NoError(t, err)
+		assert.NotEqual(t, "新代理", profile.User.DisplayName)
+		phone := " 13900139000 "
+		require.ErrorIs(t, UpdateResellerOwnProfile(ordinary.Id, ResellerOwnProfileInput{Phone: &phone}), ErrResellerForbidden)
+		require.NoError(t, UpdateResellerOwnProfile(a.UserID, ResellerOwnProfileInput{DisplayName: &name, Phone: &phone}))
+
+		channel := Channel{Name: "detail-channel", Models: "discount,revoked,markup", Status: common.ChannelStatusEnabled, Type: 1, Key: "synthetic"}
+		require.NoError(t, db.Create(&channel).Error)
+		discount := ResellerConfigItem{Model: "discount", ChannelID: channel.Id, Authorized: true, Ratio: "0.8"}
+		revoked := ResellerConfigItem{Model: "revoked", ChannelID: channel.Id, Ratio: "0.5"}
+		markup := ResellerConfigItem{Model: "markup", ChannelID: channel.Id, Authorized: true, Ratio: "1.2"}
+		input := ResellerConfigInput{Items: []ResellerConfigItem{discount, revoked, markup}}
+		_, err = SaveResellerConfig(root.Id, a.UserID, true, input)
+		require.NoError(t, err)
+
+		input.ExpectedRevision = 1
+		input.Items[0].Ratio = "-0.1"
+		_, err = PreviewResellerConfig(root.Id, a.UserID, input)
+		require.ErrorIs(t, err, ErrResellerInvalid)
+		_, err = SaveResellerConfig(root.Id, a.UserID, true, input)
+		require.ErrorIs(t, err, ErrResellerInvalid)
+		profile, err = ReadResellerOwnAccount(a.UserID)
+		require.NoError(t, err)
+		assert.Equal(t, "新代理", profile.User.DisplayName)
+		assert.Equal(t, "13900139000", profile.User.Phone)
+		assert.Equal(t, "agent@example.invalid", profile.User.Email)
+		assert.Equal(t, []ResellerConfigItem{discount}, profile.Discounts)
+
+		input.Items = []ResellerConfigItem{{Model: "discount", ChannelID: channel.Id, Ratio: "0.7"}, markup}
+		_, err = SaveResellerConfig(root.Id, a.UserID, true, input)
+		require.NoError(t, err)
+		// Fill the first page so revision 2 is compared to revision 1 across the cursor.
+		for revision := int64(2); revision < 11; revision++ {
+			input.ExpectedRevision = revision
+			_, err = SaveResellerConfig(root.Id, a.UserID, true, input)
+			require.NoError(t, err)
+		}
+		_, err = ReadResellerConfigChanges(a.UserID, a.UserID, 0)
+		require.ErrorIs(t, err, ErrResellerForbidden)
+		_, err = ReadResellerConfigChanges(root.Id, ordinary.Id, 0)
+		require.ErrorIs(t, err, ErrResellerForbidden)
+		history, err := ReadResellerConfigChanges(root.Id, a.UserID, 0)
+		require.NoError(t, err)
+		require.Len(t, history.Items, 10)
+		assert.Empty(t, history.Items[0].Changes)
+		assert.EqualValues(t, 2, history.NextCursor)
+		changes := history.Items[9].Changes
+		require.Len(t, changes, 2)
+		assert.Equal(t, ResellerConfigChange{
+			Model: "discount", ChannelID: channel.Id,
+			Before: &ResellerConfigSetting{Authorized: true, Ratio: "0.8"},
+			After:  &ResellerConfigSetting{Ratio: "0.7"},
+		}, changes[0])
+		assert.Equal(t, "revoked", changes[1].Model)
+		assert.Nil(t, changes[1].After)
+		oldest, err := ReadResellerConfigChanges(root.Id, a.UserID, history.NextCursor)
+		require.NoError(t, err)
+		require.Len(t, oldest.Items, 1)
+		assert.EqualValues(t, 1, oldest.Items[0].Revision)
+		assert.EqualValues(t, root.Id, oldest.Items[0].OperatorID)
+		require.Len(t, oldest.Items[0].Changes, 3)
+		assert.Nil(t, oldest.Items[0].Changes[0].Before)
+		assert.Zero(t, oldest.NextCursor)
+	})
 }
 
 // Redis hook controls the real cache/database interleaving without sleeps.
@@ -512,7 +629,7 @@ func TestResellerSubscriptionNilTransactionReturnsError(t *testing.T) {
 func testResellerSecurityCompletion(t *testing.T, rootID int) {
 	t.Helper()
 	t.Setenv("SECURITY_COMPLETION_ENFORCED", "true")
-	a, err := CreateResellerUser(rootID, "agent", ResellerCreateInput{Username: "s2-agent", Email: "s2-agent@example.com"})
+	a, err := CreateResellerUser(rootID, "agent", ResellerCreateInput{Username: "s2-agent", Email: "s2-agent@example.com", Phone: "13800138000"})
 	require.NoError(t, err)
 	token, err := NewSecurityMailFlow(a.UserID, SecurityActivationPurpose, "s2-agent@example.com", nil)
 	require.NoError(t, err)
@@ -569,6 +686,9 @@ func testResellerSecurityCompletion(t *testing.T, rootID int) {
 	require.NoError(t, err)
 	assert.True(t, state.Complete)
 	assert.Equal(t, "active", state.Activation)
+	require.ErrorIs(t, ResellerLoginAllowed(a.UserID), ErrResellerForbidden)
+	require.NoError(t, SetResellerEnabled(rootID, a.UserID, true, true))
+	require.NoError(t, ResellerLoginAllowed(a.UserID))
 	profile, err := GetSelfUserById(a.UserID)
 	require.NoError(t, err)
 	assert.Equal(t, "agent", profile.ResellerKind)
@@ -643,7 +763,7 @@ func testResellerSecurityCompletion(t *testing.T, rootID int) {
 	_, err = ValidateUserToken(keyToken.Key)
 	require.Error(t, err)
 	// An old activation link cannot survive correcting a pending address.
-	pending, err := CreateResellerUser(rootID, "agent", ResellerCreateInput{Username: "s2-pending", Email: "s2-old@example.com"})
+	pending, err := CreateResellerUser(rootID, "agent", ResellerCreateInput{Username: "s2-pending", Email: "s2-old@example.com", Phone: "13800138000"})
 	require.NoError(t, err)
 	old, err := NewSecurityMailFlow(pending.UserID, SecurityActivationPurpose, "s2-old@example.com", nil)
 	require.NoError(t, err)
@@ -669,9 +789,10 @@ func testResellerBillingLifecycle(t *testing.T, rootID int) {
 		_, err := ParseResellerRatio(value)
 		require.ErrorIs(t, err, ErrResellerInvalid)
 	}
-	a, err := CreateResellerUser(rootID, "agent", ResellerCreateInput{Username: "s3-agent", Email: "s3-agent@example.invalid"})
+	a, err := CreateResellerUser(rootID, "agent", ResellerCreateInput{Username: "s3-agent", Email: "s3-agent@example.invalid", Phone: "13800138000"})
 	require.NoError(t, err)
 	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", a.UserID).Update("activation", "active").Error)
+	require.NoError(t, SetResellerEnabled(rootID, a.UserID, true, true))
 	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s3-customer", Email: "s3-customer@example.invalid"})
 	require.NoError(t, err)
 	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", b.UserID).Update("activation", "active").Error)
@@ -897,9 +1018,10 @@ func testResellerBillingLifecycle(t *testing.T, rootID int) {
 }
 
 func testResellerDisplayBatch(t *testing.T, rootID int) {
-	a, err := CreateResellerUser(rootID, "agent", ResellerCreateInput{Username: "display-agent", Email: "display-agent@example.invalid"})
+	a, err := CreateResellerUser(rootID, "agent", ResellerCreateInput{Username: "display-agent", Email: "display-agent@example.invalid", Phone: "13800138000"})
 	require.NoError(t, err)
 	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", a.UserID).Update("activation", "active").Error)
+	require.NoError(t, SetResellerEnabled(rootID, a.UserID, true, true))
 	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "display-customer", Email: "display-customer@example.invalid"})
 	require.NoError(t, err)
 	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", b.UserID).Update("activation", "active").Error)

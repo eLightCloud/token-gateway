@@ -29,11 +29,17 @@ import userEvent from '@testing-library/user-event'
 import type { InternalAxiosRequestConfig } from 'axios'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as passwordEncryption from '@/features/auth/lib/password-encryption'
 import { api } from '@/lib/api'
+import { Route as SignInRoute } from '@/routes/(auth)/sign-in'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { AccountActivation } from '../activation'
 import { SecurityCompletionPage } from '../index'
+
+vi.mock('@/features/auth/sign-in', () => ({
+  SignIn: () => <h1>Sign in</h1>,
+}))
 
 const state = {
   required: true,
@@ -67,8 +73,17 @@ async function renderPage(activation = false) {
     path: activation ? '/account-activation' : '/security-setup',
     component: activation ? AccountActivation : SecurityCompletionPage,
   })
+  const signIn = createRoute({
+    getParentRoute: () => root,
+    path: '/sign-in',
+    validateSearch: SignInRoute.options.validateSearch,
+    beforeLoad: SignInRoute.options.beforeLoad as (context: {
+      search: { redirect?: string; passwordSetupComplete?: boolean }
+    }) => Promise<void>,
+    component: SignInRoute.options.component,
+  })
   const router = createRouter({
-    routeTree: root.addChildren([route]),
+    routeTree: root.addChildren([route, signIn]),
     history: createMemoryHistory({
       initialEntries: [activation ? '/account-activation' : '/security-setup'],
     }),
@@ -80,6 +95,135 @@ async function renderPage(activation = false) {
     </QueryClientProvider>
   )
 }
+
+function openPasswordLink(purpose = 'account_activation') {
+  window.history.replaceState(
+    null,
+    '',
+    `/account-activation#token=opaque-mail-token&user_id=42&purpose=${purpose}`
+  )
+}
+
+describe('Email password setup', () => {
+  it.each([
+    ['', 'Please confirm your password'],
+    ['different password', 'Passwords do not match'],
+  ])(
+    'blocks confirmation for an invalid repeated password (%s)',
+    async (repeat, message) => {
+      openPasswordLink()
+      const post = vi.spyOn(api, 'post')
+      const user = userEvent.setup()
+      await renderPage(true)
+      const password = await screen.findByLabelText('Password', { exact: true })
+      const confirmation = screen.getByLabelText('Confirm password')
+      expect(password).toHaveAttribute('autocomplete', 'new-password')
+      expect(confirmation).toHaveAttribute('autocomplete', 'new-password')
+      await user.type(password, 'a valid test password')
+      if (repeat) await user.type(confirmation, repeat)
+      await user.click(screen.getByRole('button', { name: 'Confirm' }))
+      expect(await screen.findByText(message)).toBeVisible()
+      expect(confirmation).toHaveAttribute('aria-invalid', 'true')
+      expect(confirmation).toHaveFocus()
+      expect(post).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([
+    ['account_activation', '/api/security/activation', true],
+    ['security_password_reset', '/api/security/password/reset', false],
+  ])(
+    'opens sign-in after successfully completing %s',
+    async (purpose, endpoint, alreadySignedIn) => {
+      const auth = useAuthStore.getState().auth
+      if (alreadySignedIn) {
+        auth.setUser({ id: 7, username: 'operator', role: 10 })
+      } else {
+        auth.reset()
+      }
+      auth.setBootstrapState('complete')
+      const existingUser = useAuthStore.getState().auth.user
+      openPasswordLink(purpose)
+      vi.spyOn(passwordEncryption, 'encryptPassword').mockResolvedValue({
+        password_encrypted: 'encrypted-password',
+        encryption_key_id: 'test-key',
+      })
+      const response = {
+        data: { success: true, data: { notification_warning: true } },
+      }
+      let finishRequest!: (value: typeof response) => void
+      const pendingResponse = new Promise<typeof response>((resolve) => {
+        finishRequest = resolve
+      })
+      const post = vi.spyOn(api, 'post').mockReturnValue(pendingResponse)
+      const user = userEvent.setup()
+      await renderPage(true)
+      const password = await screen.findByLabelText('Password', { exact: true })
+      expect(
+        screen.queryByRole('link', { name: 'Sign In' })
+      ).not.toBeInTheDocument()
+      expect(window.location.hash).toBe('')
+      expect(post).not.toHaveBeenCalled()
+      await user.type(password, 'a valid test password')
+      const confirmation = screen.getByLabelText('Confirm password')
+      const confirm = screen.getByRole('button', { name: 'Confirm' })
+      await user.type(confirmation, 'a valid test password{Enter}')
+      await waitFor(() => expect(confirm).toBeDisabled())
+      expect(password).toBeDisabled()
+      expect(confirmation).toBeDisabled()
+      expect(
+        screen.queryByRole('heading', { name: 'Sign in' })
+      ).not.toBeInTheDocument()
+      finishRequest(response)
+      expect(
+        await screen.findByRole('heading', { name: 'Sign in' })
+      ).toBeVisible()
+      expect(post.mock.calls).toEqual([
+        [
+          endpoint,
+          {
+            token: 'opaque-mail-token',
+            user_id: 42,
+            purpose,
+            password_encrypted: 'encrypted-password',
+            encryption_key_id: 'test-key',
+          },
+          expect.objectContaining({ skipAuthRefresh: true }),
+        ],
+      ])
+      expect(useAuthStore.getState().auth.user).toBe(existingUser)
+      expect(useAuthStore.getState().auth.accessToken).toBeNull()
+    }
+  )
+
+  it('stays on the form if the server rejects an expired or already used link', async () => {
+    openPasswordLink()
+    vi.spyOn(passwordEncryption, 'encryptPassword').mockResolvedValue({
+      password_encrypted: 'encrypted-password',
+      encryption_key_id: 'test-key',
+    })
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: { success: false, code: 'AUTH_FLOW_INVALID' },
+    })
+    const user = userEvent.setup()
+    await renderPage(true)
+    await user.type(
+      await screen.findByLabelText('Password', { exact: true }),
+      'a valid test password'
+    )
+    await user.type(
+      screen.getByLabelText('Confirm password'),
+      'a valid test password'
+    )
+    await user.click(screen.getByRole('button', { name: 'Confirm' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This link is invalid or has expired. Request a new link.'
+    )
+    expect(
+      screen.queryByRole('heading', { name: 'Sign in' })
+    ).not.toBeInTheDocument()
+  })
+})
 
 it('allows anonymous email-change confirmation without requiring or refreshing a dashboard session', async () => {
   useAuthStore.getState().auth.reset()

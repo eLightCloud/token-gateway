@@ -231,3 +231,80 @@ func TestEmailDeliveryScopedSettingsAPI(t *testing.T) {
 	_, err = service.BindVerificationOperation(service.VerificationOperation{Scope: operation.Scope, Context: []byte(unsafe)})
 	assert.Error(t, err)
 }
+
+func TestEmailDeliveryLegacyEnvironmentDefaults(t *testing.T) {
+	for _, names := range [][2]string{{"SMTP_STARTTLS_ENABLE", "SMTP_INSECURE_SKIP_VERIFY"}, {"SMTP_STARTTLS_ENABLED", "SMTP_TLS_INSECURE_SKIP_VERIFY"}} {
+		t.Run(names[0], func(t *testing.T) {
+			_, _ = setupSecurityEnrollmentTest(t)
+			previous := common.DefaultEmailDelivery
+			common.DefaultEmailDelivery = &common.EmailDeliveryRuntime{}
+			t.Cleanup(func() { common.DefaultEmailDelivery = previous })
+			for _, name := range []string{"SMTP_STARTTLS_ENABLE", "SMTP_STARTTLS_ENABLED", "SMTP_INSECURE_SKIP_VERIFY", "SMTP_TLS_INSECURE_SKIP_VERIFY"} {
+				t.Setenv(name, "")
+			}
+			for _, name := range names {
+				t.Setenv(name, "true")
+			}
+			t.Setenv("EMAIL_DELIVERY_STORAGE_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+			require.NoError(t, model.DB.Create(&model.Option{Key: "SMTPServer", Value: "smtp.example.com"}).Error)
+			require.NoError(t, model.DB.Create(&model.Option{Key: "SMTPFrom", Value: "sender@example.com"}).Error)
+			require.NoError(t, model.DB.Create(&model.Option{Key: "SMTPToken", Value: "legacy-secret"}).Error)
+			initial, err := model.LoadEmailDeliveryConfig()
+			require.NoError(t, err)
+			assert.True(t, initial.Options.Legacy.StartTLS, "missing option must preserve the environment default")
+			assert.True(t, initial.Options.Legacy.InsecureSkipVerify)
+			for _, key := range []string{"SMTPStartTLSEnabled", "SMTPInsecureSkipVerify"} {
+				require.NoError(t, model.DB.Create(&model.Option{Key: key, Value: "false"}).Error)
+			}
+			explicit, err := model.LoadEmailDeliveryConfig()
+			require.NoError(t, err)
+			assert.False(t, explicit.Options.Legacy.StartTLS, "explicit false must override environment true")
+			assert.False(t, explicit.Options.Legacy.InsecureSkipVerify)
+			for _, key := range []string{"SMTPStartTLSEnabled", "SMTPInsecureSkipVerify"} {
+				require.NoError(t, model.DB.Where(&model.Option{Key: key}).Delete(&model.Option{}).Error)
+			}
+			saved, err := model.SaveEmailDeliveryConfig(common.EmailDeliveryUpdate{Intent: common.EmailDeliveryIntent{Options: initial.Options, LegacyPasswordAction: "keep", ClientSecretAction: "keep"}})
+			require.NoError(t, err)
+			assert.True(t, saved.Options.Legacy.StartTLS)
+			for _, name := range names {
+				t.Setenv(name, "false")
+			}
+			reloaded, err := model.LoadEmailDeliveryConfig()
+			require.NoError(t, err)
+			assert.True(t, reloaded.Options.Legacy.StartTLS, "saved snapshot must not change with environment defaults")
+			assert.Equal(t, "legacy-secret", reloaded.Options.Legacy.Password)
+		})
+	}
+}
+
+func TestEmailDeliveryEncryptionFailureHasSafeRecoveryCode(t *testing.T) {
+	for _, scenario := range []string{"missing key", "wrong key", "invalid stored configuration"} {
+		t.Run(scenario, func(t *testing.T) {
+			_, identity := setupSecurityEnrollmentTest(t)
+			previous := common.DefaultEmailDelivery
+			common.DefaultEmailDelivery = &common.EmailDeliveryRuntime{}
+			t.Cleanup(func() { common.DefaultEmailDelivery = previous })
+			t.Setenv("EMAIL_DELIVERY_STORAGE_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+			_, err := model.SaveEmailDeliveryConfig(emailDeliveryTestUpdate())
+			require.NoError(t, err)
+			code := "EMAIL_ENCRYPTION_UNAVAILABLE"
+			switch scenario {
+			case "missing key":
+				t.Setenv("EMAIL_DELIVERY_STORAGE_KEY", "")
+			case "wrong key":
+				t.Setenv("EMAIL_DELIVERY_STORAGE_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32))))
+			default:
+				code = "EMAIL_CONFIG_UNAVAILABLE"
+				require.NoError(t, model.DB.Model(&model.Option{}).Where(&model.Option{Key: common.EmailDeliveryOptionKey}).Update("value", `{"revision":1}`).Error)
+			}
+			response := securityEnrollmentRequest("GET", "/api/option/email_delivery", "", "", identity, GetEmailDeliverySettings)
+			assert.Equal(t, http.StatusServiceUnavailable, response.Code)
+			assert.Contains(t, response.Body.String(), code)
+			assert.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+			assert.NotContains(t, response.Body.String(), "private-client-secret")
+			assert.NotContains(t, response.Body.String(), "ciphertext")
+			model.RefreshEmailDeliveryConfig()
+			assert.ErrorIs(t, common.SendEmail("Test", "receiver@example.com", "body"), common.ErrEmailDeliveryUnavailable)
+		})
+	}
+}

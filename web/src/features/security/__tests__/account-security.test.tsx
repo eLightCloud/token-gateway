@@ -719,12 +719,14 @@ it('confirms both email addresses after identity verification and freezes the su
   const onSuccess = vi.fn()
   const user = userEvent.setup()
   render(
-    <EmailBindDialog
-      open
-      currentEmail='old@example.com'
-      onOpenChange={vi.fn()}
-      onSuccess={onSuccess}
-    />
+    <QueryClientProvider client={client}>
+      <EmailBindDialog
+        open
+        currentEmail='old@example.com'
+        onOpenChange={vi.fn()}
+        onSuccess={onSuccess}
+      />
+    </QueryClientProvider>
   )
   await user.type(screen.getByLabelText('Email Address'), 'new@example.com')
   await user.click(screen.getByRole('button', { name: 'Continue' }))

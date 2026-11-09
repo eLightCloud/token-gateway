@@ -28,11 +28,16 @@ type EmailDeliveryReport struct {
 	Reason    string               `json:"reason,omitempty"`
 }
 
-// DeliverConfiguredEmail is shared by production and the saved-configuration test API.
-// No SMTP error text escapes this boundary: AUTH/DATA replies may contain secrets.
-func DeliverConfiguredEmail(ctx context.Context, config EmailDeliveryConfig, subject, receiver, content string) (report EmailDeliveryReport, resultErr error) {
+// Production and the saved-configuration test share this path. Provider replies
+// may contain secrets, so only the stage and structured diagnostics escape it.
+func deliverConfiguredEmail(ctx context.Context, config EmailDeliveryConfig, subject, receiver, content string) (report EmailDeliveryReport, resultErr error) {
 	report = EmailDeliveryReport{Revision: config.Revision, Timestamp: time.Now().Unix(), RequestID: GetRandomString(20), Code: "EMAIL_DELIVERY_FAILED"}
-	for _, name := range []string{"config", "token", "connect_tls", "auth", "submit"} {
+	microsoft := config.Options.AuthMode == EmailAuthMicrosoft
+	stages := []string{"config", "token", "connect_tls", "auth", "submit"}
+	if microsoft {
+		stages = []string{"config", "token", "graph_submit"}
+	}
+	for _, name := range stages {
 		report.Stages = append(report.Stages, EmailDeliveryStage{Name: name, Status: "skipped"})
 	}
 	stage := 0
@@ -57,71 +62,50 @@ func DeliverConfiguredEmail(ctx context.Context, config EmailDeliveryConfig, sub
 		}
 	}
 	report.Stages[0].Status = "passed"
-	settings := config.Options.Legacy
-	microsoft := config.Options.AuthMode == EmailAuthMicrosoft
-	var token string
 	if microsoft {
 		stage = 1
 		if config.Options.Microsoft.ClientSecret == "" {
 			return report, errors.New("missing Microsoft credentials")
 		}
-		var err error
-		token, err = microsoftEmailToken(config, false)
+		token, err := microsoftEmailToken(ctx, config, false)
 		if err != nil {
 			return report, err
 		}
 		report.Stages[1].Status = "passed"
-		settings = LegacyEmailSettings{Host: "smtp.office365.com", Port: 587, Account: config.Options.Microsoft.Mailbox, From: config.Options.Microsoft.Mailbox, StartTLS: true}
-	}
-	if settings.From == "" {
-		settings.From = settings.Account
-	}
-	for attempt := range 2 {
 		stage = 2
-		client, err := dialConfiguredSMTP(ctx, settings)
-		if err != nil {
+		if err := submitMicrosoftGraphEmail(ctx, config, token, subject, recipients, content, &report); err != nil {
 			return report, err
 		}
-		report.Stages[2].Status = "passed"
-		stage = 3
-		if microsoft || (settings.Account != "" && settings.Password != "") {
-			var auth smtp.Auth
-			if microsoft {
-				auth = &microsoftEmailAuth{mailbox: settings.Account, token: token}
-			} else {
-				auth = &smtpAutoAuth{username: settings.Account, password: settings.Password, configured: true, server: settings.Host, forceLogin: settings.ForceLogin, preferLogin: isOutlookServer(settings.Account) || slices.Contains(EmailLoginAuthServerList, settings.Host)}
-			}
-			err = client.Auth(auth)
-			if err != nil {
-				_ = client.Close()
-				var smtpError *textproto.Error
-				if microsoft && errors.As(err, &smtpError) && strings.Contains(strings.ToLower(smtpError.Msg), "smtpclientauthentication is disabled") {
-					report.Reason = "SMTP_AUTH_DISABLED"
-					return report, err
-				}
-				if microsoft && attempt == 0 && errors.As(err, &smtpError) && smtpError.Code == 535 {
-					token, err = microsoftEmailToken(config, true)
-					if err != nil {
-						stage = 1
-						return report, err
-					}
-					continue
-				}
-				return report, err
-			}
-			report.Stages[3].Status = "passed"
-		}
-		stage = 4
-		err = submitConfiguredEmail(client, settings.From, subject, recipients, content, &report)
-		_ = client.Close()
-		if err != nil {
-			return report, err
-		}
-		report.Stages[4].Status = "passed"
+		report.Stages[stage].Status = "passed"
 		report.Code = "EMAIL_ACCEPTED"
 		return report, nil
 	}
-	return report, errors.New("SMTP authentication failed")
+	settings := config.Options.Legacy
+	if settings.From == "" {
+		settings.From = settings.Account
+	}
+	stage = 2
+	client, err := dialConfiguredSMTP(ctx, settings)
+	if err != nil {
+		return report, err
+	}
+	defer client.Close()
+	report.Stages[2].Status = "passed"
+	stage = 3
+	if settings.Account != "" && settings.Password != "" {
+		auth := &smtpAutoAuth{username: settings.Account, password: settings.Password, configured: true, server: settings.Host, forceLogin: settings.ForceLogin, preferLogin: isOutlookServer(settings.Account) || slices.Contains(EmailLoginAuthServerList, settings.Host)}
+		if err := client.Auth(auth); err != nil {
+			return report, err
+		}
+		report.Stages[3].Status = "passed"
+	}
+	stage = 4
+	if err := submitConfiguredEmail(client, settings.From, subject, recipients, content, &report); err != nil {
+		return report, err
+	}
+	report.Stages[4].Status = "passed"
+	report.Code = "EMAIL_ACCEPTED"
+	return report, nil
 }
 
 func dialConfiguredSMTP(ctx context.Context, s LegacyEmailSettings) (*smtp.Client, error) {
@@ -137,7 +121,7 @@ func dialConfiguredSMTP(ctx context.Context, s LegacyEmailSettings) (*smtp.Clien
 		_ = conn.Close()
 		return nil, err
 	}
-	tlsConfig := &tls.Config{ServerName: s.Host, MinVersion: tls.VersionTLS12, InsecureSkipVerify: s.InsecureSkipVerify} // #nosec G402 -- legacy admin compatibility; Microsoft settings always verify.
+	tlsConfig := &tls.Config{ServerName: s.Host, MinVersion: tls.VersionTLS12, InsecureSkipVerify: s.InsecureSkipVerify} // #nosec G402 -- legacy admin compatibility.
 	if s.SSL || (s.Port == 465 && !s.StartTLS) {
 		secure := tls.Client(conn, tlsConfig)
 		if err = secure.HandshakeContext(ctx); err != nil {

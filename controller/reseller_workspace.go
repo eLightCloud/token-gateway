@@ -39,7 +39,11 @@ func GetResellerWorkspace(c *gin.Context) {
 		return
 	}
 	var user model.User
-	if err := model.DB.Select("id", "username", "email", "display_name", "quota", "status").First(&user, userID).Error; err != nil {
+	fields := []string{"id", "username", "email", "display_name", "quota", "status"}
+	if admin {
+		fields = append(fields, "remark")
+	}
+	if err := model.DB.Select(fields).First(&user, userID).Error; err != nil {
 		resellerResponse(c, nil, err)
 		return
 	}
@@ -54,6 +58,8 @@ func GetResellerWorkspace(c *gin.Context) {
 		view.AgentDisabled = identity.AgentDisabled
 	}
 	if admin && identity != nil && identity.Kind == "agent" {
+		view.Phone = identity.Phone
+		view.Remark = user.Remark
 		var account model.ResellerAccount
 		if err := model.DB.First(&account, "user_id = ?", userID).Error; err != nil {
 			resellerResponse(c, nil, err)

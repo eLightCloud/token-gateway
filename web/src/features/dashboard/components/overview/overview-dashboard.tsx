@@ -66,6 +66,7 @@ import {
 import { AnnouncementsPanel } from './announcements-panel'
 import { ApiInfoPanel } from './api-info-panel'
 import { FAQPanel } from './faq-panel'
+import { ModelDiscountsPanel } from './model-discounts-panel'
 import { PerformanceHealthPanel } from './performance-health-panel'
 import { SummaryCards } from './summary-cards'
 import { UptimePanel } from './uptime-panel'
@@ -616,7 +617,6 @@ export function OverviewDashboard() {
     manualSetupGuideExpanded ?? (setupStatusReady && !setupComplete)
   const showLeftContentPanels =
     isAdmin || showApiInfoPanel || showAnnouncementsPanel || showFAQPanel
-  const showContentPanels = showLeftContentPanels || showUptimePanel
 
   const handleSetupGuideToggle = () => {
     const nextExpanded = !setupGuideExpanded
@@ -789,54 +789,56 @@ export function OverviewDashboard() {
 
           <SummaryCards />
 
-          {showContentPanels && (
-            <CardStaggerContainer
-              className={cn(
-                'grid grid-cols-1 gap-4',
-                showLeftContentPanels &&
-                  showUptimePanel &&
-                  'xl:grid-cols-[minmax(0,1fr)_22rem]'
-              )}
-            >
-              {showLeftContentPanels && (
-                <div
-                  className={cn(
-                    'grid min-w-0 grid-cols-1 gap-4',
-                    (showApiInfoPanel ||
-                      showAnnouncementsPanel ||
-                      showFAQPanel) &&
-                      'lg:grid-cols-2'
-                  )}
-                >
-                  {isAdmin && (
-                    <CardStaggerItem className='lg:col-span-2'>
-                      <PerformanceHealthPanel />
-                    </CardStaggerItem>
-                  )}
-                  {showApiInfoPanel && (
-                    <CardStaggerItem>
-                      <ApiInfoPanel />
-                    </CardStaggerItem>
-                  )}
-                  {showAnnouncementsPanel && (
-                    <CardStaggerItem>
-                      <AnnouncementsPanel />
-                    </CardStaggerItem>
-                  )}
-                  {showFAQPanel && (
-                    <CardStaggerItem>
-                      <FAQPanel />
-                    </CardStaggerItem>
-                  )}
-                </div>
-              )}
-              {showUptimePanel && (
-                <CardStaggerItem>
-                  <UptimePanel />
-                </CardStaggerItem>
-              )}
-            </CardStaggerContainer>
-          )}
+          <CardStaggerContainer
+            className={cn(
+              'grid grid-cols-1 items-start gap-4',
+              showLeftContentPanels && 'xl:grid-cols-[minmax(0,1fr)_22rem]'
+            )}
+          >
+            {showLeftContentPanels && (
+              <div
+                className={cn(
+                  'grid min-w-0 grid-cols-1 gap-4',
+                  (showApiInfoPanel ||
+                    showAnnouncementsPanel ||
+                    showFAQPanel) &&
+                    'lg:grid-cols-2'
+                )}
+              >
+                {isAdmin && (
+                  <CardStaggerItem className='lg:col-span-2'>
+                    <PerformanceHealthPanel />
+                  </CardStaggerItem>
+                )}
+                {showApiInfoPanel && (
+                  <CardStaggerItem>
+                    <ApiInfoPanel />
+                  </CardStaggerItem>
+                )}
+                {showAnnouncementsPanel && (
+                  <CardStaggerItem>
+                    <AnnouncementsPanel />
+                  </CardStaggerItem>
+                )}
+                {showFAQPanel && (
+                  <CardStaggerItem>
+                    <FAQPanel />
+                  </CardStaggerItem>
+                )}
+              </div>
+            )}
+            <CardStaggerItem className='min-w-0'>
+              <ModelDiscountsPanel
+                key={user?.id}
+                userID={user?.reseller_kind === 'agent' ? undefined : user?.id}
+              />
+            </CardStaggerItem>
+            {showUptimePanel && (
+              <CardStaggerItem className='xl:col-span-full'>
+                <UptimePanel />
+              </CardStaggerItem>
+            )}
+          </CardStaggerContainer>
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>

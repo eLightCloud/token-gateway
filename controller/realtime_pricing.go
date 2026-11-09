@@ -2,7 +2,6 @@ package controller
 
 import (
 	"database/sql"
-	"errors"
 	"net/http"
 	"strconv"
 
@@ -85,16 +84,7 @@ func GetRealtimePricing(c *gin.Context) {
 				}
 			}
 		}
-		var members []struct {
-			ID   int    `json:"id"`
-			Name string `json:"name"`
-		}
-		if subject == "organization" {
-			if err := tx.Table("organization_members").Select("users.id, users.username AS name").Joins("JOIN users ON users.id = organization_members.user_id").Where("organization_members.organization_id = ? AND organization_members.left_at = 0", id).Order("users.id").Find(&members).Error; err != nil {
-				return err
-			}
-		}
-		result = gin.H{"config": config, "phase": phase, "candidates": candidates, "history": entries, "members": members}
+		result = gin.H{"config": config, "phase": phase, "candidates": candidates, "history": entries}
 		return nil
 	}, options)
 	resellerResponse(c, result, err)
@@ -137,17 +127,12 @@ func ChangeRealtimePricingMigration(c *gin.Context) {
 func PreviewRealtimePricing(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	var input struct {
-		Items  []model.RealtimePricingItem `json:"items"`
-		UserID int                         `json:"user_id"`
+		Items []model.RealtimePricingItem `json:"items"`
 	}
 	if err != nil || id <= 0 || common.DecodeJson(http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20), &input) != nil {
 		resellerResponse(c, nil, model.ErrResellerInvalid)
 		return
 	}
-	result, err := model.PreviewRealtimePricing(c.GetInt("id"), c.Param("subject"), id, input.UserID, input.Items)
-	if errors.Is(err, model.ErrRealtimePricingMemberChanged) {
-		c.JSON(http.StatusConflict, gin.H{"success": false, "code": "REALTIME_PRICING_MEMBER_CHANGED", "message": ""})
-		return
-	}
+	result, err := model.PreviewRealtimePricing(c.GetInt("id"), c.Param("subject"), id, input.Items)
 	resellerResponse(c, result, err)
 }

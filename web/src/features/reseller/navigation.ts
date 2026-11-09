@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { redirect } from '@tanstack/react-router'
 import type { TFunction } from 'i18next'
-import { ReceiptText, ShieldCheck, Users } from 'lucide-react'
+import { ReceiptText, ShieldCheck, UserRound, Users } from 'lucide-react'
 
 import type { NavGroup } from '@/components/layout/types'
 
@@ -27,6 +27,7 @@ export function guardResellerRoute(kind: string, pathname: string) {
   if (
     kind === 'agent' &&
     !pathname.startsWith('/reseller/customers') &&
+    pathname !== '/reseller/account' &&
     pathname !== '/reseller/billing' &&
     pathname !== '/reseller/procurement' &&
     pathname !== '/security'
@@ -80,6 +81,11 @@ export function resellerSidebar(
             title: t('Procurement ledger'),
             url: '/reseller/procurement',
             icon: ReceiptText,
+          },
+          {
+            title: t('Account details'),
+            url: '/reseller/account',
+            icon: UserRound,
           },
           { title: t('Account Security'), url: '/security', icon: ShieldCheck },
         ],

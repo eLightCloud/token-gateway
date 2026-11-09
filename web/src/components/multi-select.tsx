@@ -58,6 +58,8 @@ interface MultiSelectProps {
   options: Option[]
   /** Labels/hints for selected values outside a filtered candidate list. */
   displayOptions?: Option[]
+  /** Match search text against the visible option label. */
+  searchByLabel?: boolean
   selected: string[]
   onChange: (values: string[]) => void
   placeholder?: string
@@ -73,6 +75,8 @@ interface MultiSelectProps {
   emptyText?: string
   /** Optional `id` to wire labels/aria-describedby to the input. */
   id?: string
+  'aria-describedby'?: string
+  'aria-invalid'?: React.AriaAttributes['aria-invalid']
   /** Disable the entire control. */
   disabled?: boolean
   /**
@@ -297,6 +301,11 @@ export function MultiSelect(props: MultiSelectProps) {
     <Combobox
       multiple
       items={items}
+      itemToStringLabel={
+        props.searchByLabel
+          ? (item: string) => labelMap.get(item) ?? item
+          : undefined
+      }
       value={props.selected}
       onValueChange={handleValueChange}
       inputValue={inputValue}
@@ -407,6 +416,8 @@ export function MultiSelect(props: MultiSelectProps) {
         </ComboboxValue>
         <ComboboxChipsInput
           id={props.id}
+          aria-describedby={props['aria-describedby']}
+          aria-invalid={props['aria-invalid']}
           placeholder={
             props.selected.length === 0 && !props.renderSelectedSummary
               ? placeholder

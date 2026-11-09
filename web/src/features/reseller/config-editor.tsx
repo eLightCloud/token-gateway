@@ -37,6 +37,18 @@ import {
   type ConfigItem,
 } from './api'
 import { ResellerConfigError } from './config-error'
+import { ResellerRatioField } from './config-ratio-field'
+
+const configItemKey = (item: ConfigItem) => `${item.model}:${item.channel_id}`
+
+function isValidResellerRatio(value: string): boolean {
+  return (
+    value === '' ||
+    (/^(0|1|2)(\.[0-9]{1,6})?$/.test(value) &&
+      Number(value) > 0 &&
+      Number(value) <= 2)
+  )
+}
 
 export function ResellerConfigEditor({
   userID,
@@ -72,12 +84,7 @@ export function ResellerConfigEditor({
     ...item,
     ratio: item.ratio || '1',
   }))
-  const valid = normalizedItems.every(
-    (item) =>
-      /^(0|1|2)(\.[0-9]{1,6})?$/.test(item.ratio) &&
-      Number(item.ratio) > 0 &&
-      Number(item.ratio) <= 2
-  )
+  const invalidItems = items.filter((item) => !isValidResellerRatio(item.ratio))
   const preview = useMutation({
     meta: { errorToast: false },
     mutationFn: () =>
@@ -113,28 +120,28 @@ export function ResellerConfigEditor({
   const grantsChanged =
     originalGrants.size !== currentGrants.size ||
     [...originalGrants].some((key) => !currentGrants.has(key))
-  const available = new Set(
-    candidates.map((item) => `${item.model}:${item.channel_id}`)
-  )
+  const available = new Set(candidates.map(configItemKey))
+  const configured = new Set(config.items.map(configItemKey))
+  const drafts = new Map(items.map((item) => [configItemKey(item), item]))
+  const busy = mutation.isPending || preview.isPending || preview.isSuccess
   const rows = [
-    ...items,
+    ...config.items.map((item) => drafts.get(configItemKey(item)) ?? item),
     ...candidates
-      .filter(
+      .filter((candidate) => !configured.has(configItemKey(candidate)))
+      .map(
         (candidate) =>
-          !items.some(
-            (item) =>
-              item.model === candidate.model &&
-              item.channel_id === candidate.channel_id
-          )
-      )
-      .map((item) => ({ ...item, authorized: false, ratio: '1' })),
+          drafts.get(configItemKey(candidate)) ?? {
+            ...candidate,
+            authorized: false,
+            ratio: '1',
+          }
+      ),
   ]
   function update(row: ConfigItem, changed: Partial<ConfigItem>) {
     setSaved(false)
+    const key = configItemKey(row)
     setItems((previous) => [
-      ...previous.filter(
-        (item) => item.model !== row.model || item.channel_id !== row.channel_id
-      ),
+      ...previous.filter((item) => configItemKey(item) !== key),
       { ...row, ...changed },
     ])
   }
@@ -160,7 +167,7 @@ export function ResellerConfigEditor({
       </div>
       <StaticDataTable
         data={rows.filter((row) => row.model.includes(filter))}
-        getRowKey={(row) => `${row.model}:${row.channel_id}`}
+        getRowKey={configItemKey}
         emptyContent={t('No models available')}
         columns={[
           { id: 'model', header: t('Model'), cell: (row) => row.model },
@@ -181,8 +188,7 @@ export function ResellerConfigEditor({
                   })}
                   checked={row.authorized}
                   disabled={
-                    mutation.isPending ||
-                    (!admin && !available.has(`${row.model}:${row.channel_id}`))
+                    busy || (!admin && !available.has(configItemKey(row)))
                   }
                   onCheckedChange={(checked) =>
                     update(row, { authorized: checked })
@@ -198,20 +204,15 @@ export function ResellerConfigEditor({
             cellClassName: consumptionEditable ? undefined : 'hidden',
             header: t('Personal ratio'),
             cell: (row) => (
-              <Input
-                aria-label={t('Ratio for {{model}} channel {{channel}}', {
-                  model: row.model,
-                  channel: row.channel_id,
-                })}
-                className='w-28'
-                inputMode='decimal'
-                value={row.ratio}
+              <ResellerRatioField
+                item={row}
+                invalid={!isValidResellerRatio(row.ratio)}
                 disabled={
                   !consumptionEditable ||
-                  mutation.isPending ||
-                  (!admin && !available.has(`${row.model}:${row.channel_id}`))
+                  busy ||
+                  (!admin && !available.has(configItemKey(row)))
                 }
-                onChange={(event) => update(row, { ratio: event.target.value })}
+                onChange={(ratio) => update(row, { ratio })}
               />
             ),
           },
@@ -220,18 +221,19 @@ export function ResellerConfigEditor({
             header: t('Effective status'),
             cell: (row) => {
               if (!authorization) return '—'
-              if (!admin && !available.has(`${row.model}:${row.channel_id}`)) {
+              if (!admin && !available.has(configItemKey(row))) {
                 return t('Parent authorization revoked; configuration retained')
+              }
+              if (consumptionEditable && !isValidResellerRatio(row.ratio)) {
+                return '—'
               }
               return row.authorized ? t('Effective') : t('Not authorized')
             },
           },
         ]}
       />
-      {!valid && (
-        <p role='alert'>
-          {t('Enter a valid ratio with up to six decimal places.')}
-        </p>
+      {invalidItems.some((item) => !item.model.includes(filter)) && (
+        <p role='alert'>{t('Clear the search to see invalid ratios.')}</p>
       )}
       <ResellerConfigError
         error={mutation.error ?? preview.error}
@@ -257,7 +259,7 @@ export function ResellerConfigEditor({
         }}
       />
       <Button
-        disabled={!dirty || !valid || mutation.isPending || preview.isPending}
+        disabled={!dirty || invalidItems.length > 0 || busy}
         onClick={() =>
           admin && authorization && grantsChanged
             ? preview.mutate()

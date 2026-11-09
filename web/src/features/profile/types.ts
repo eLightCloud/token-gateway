@@ -137,6 +137,7 @@ export interface UpdateUserRequest {
 
 export interface AccountSecurityResult {
   notification_warning?: boolean
+  sign_in_required?: boolean
 }
 
 export interface EmailBindingFlow extends AccountSecurityResult {

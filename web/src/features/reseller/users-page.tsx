@@ -16,13 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { StaticDataTable } from '@/components/data-table'
-import { Dialog } from '@/components/dialog'
 import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -30,15 +30,24 @@ import { Label } from '@/components/ui/label'
 import { NativeSelect } from '@/components/ui/native-select'
 import { useDebounce } from '@/hooks/use-debounce'
 import { toIntlLocale } from '@/i18n/languages'
+import { hasPermission } from '@/lib/admin-permissions'
 import { formatQuotaWithCurrency } from '@/lib/currency'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { useResellerActivationMail } from './activation-mail'
+import { ResellerAgentControls } from './agent-controls'
+import {
+  hasResellerAgentPassword,
+  isResellerAgentActivated,
+} from './agent-status'
 import {
   resellerKey,
   resellerPath,
   resellerRequest,
   type UserPage,
 } from './api'
+import { ResellerCreateDialog } from './create-account-dialog'
+import { ResellerQuotaDialog } from './quota-dialog'
 import { useResellerFilter } from './search'
 import { ProcurementSummary, ResellerQueryStatus } from './shared'
 
@@ -46,6 +55,9 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const userID = useAuthStore((s) => s.auth.user?.id)
+  const canAdjustQuota = useAuthStore(
+    (s) => admin && hasPermission(s.auth.user, 'reseller', 'quota')
+  )
   const [search, setSearch] = useResellerFilter<string>('search', '')
   const debouncedSearch = useDebounce(search, 300)
   const [activationFilter, setActivationFilter] = useResellerFilter<string>(
@@ -58,10 +70,14 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
   )
   const [after, setAfter] = useResellerFilter<number>('after', 0)
   const [create, setCreate] = useState(false)
-  const [mailFailed, setMailFailed] = useState(false)
-  const [username, setUsername] = useState('')
-  const [email, setEmail] = useState('')
-  const [displayName, setDisplayName] = useState('')
+  const [quotaTargetID, setQuotaTargetID] = useState<number>()
+  const { sendActivationMail, sending } = useResellerActivationMail(
+    admin,
+    userID
+  )
+  const sendAccountEmailLabel = admin
+    ? t('Reset Password')
+    : t('Send activation email')
   const query = useQuery({
     meta: { errorToast: false },
     refetchInterval: 5000,
@@ -80,27 +96,10 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
         `${resellerPath(admin)}?${new URLSearchParams({ search: debouncedSearch, after: String(after), activation: activationFilter, service_status: serviceFilter })}`
       ),
   })
-  const mutation = useMutation({
-    meta: { errorToast: false },
-    mutationFn: () =>
-      resellerRequest<{ activation_mail_sent: boolean }>(
-        resellerPath(admin),
-        'post',
-        {
-          username,
-          email,
-          display_name: displayName,
-        }
-      ),
-    onSuccess: (result) => {
-      setMailFailed(!result.activation_mail_sent)
-      setCreate(false)
-      setUsername('')
-      setEmail('')
-      setDisplayName('')
-      void query.refetch()
-    },
-  })
+  const quotaTarget = canAdjustQuota
+    ? query.data?.items.find((row) => row.user_id === quotaTargetID)
+    : undefined
+
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>
@@ -113,32 +112,27 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
         <div className='space-y-4'>
-          {mailFailed && (
-            <p role='alert'>
-              {t(
-                'Account created, but activation email could not be sent. Open the account to resend it.'
-              )}
-            </p>
-          )}
           {query.data?.account && (
             <ProcurementSummary account={query.data.account} />
           )}
-          <div className='max-w-md space-y-2'>
-            <Label htmlFor='customer-search'>
-              {t('Search account or email')}
-            </Label>
-            <Input
-              id='customer-search'
-              value={search}
-              onChange={(event) => {
-                setSearch(event.target.value)
-                setAfter(0)
-              }}
-            />
-          </div>
-          <div className='flex flex-wrap gap-3'>
-            <div className='space-y-2'>
-              <Label htmlFor='customer-activation'>{t('Activation')}</Label>
+          <div className='flex flex-wrap items-end gap-x-3 gap-y-2'>
+            <div className='max-w-xs min-w-48 flex-1 space-y-1'>
+              <Label htmlFor='customer-search'>
+                {t('Search account or email')}
+              </Label>
+              <Input
+                id='customer-search'
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value)
+                  setAfter(0)
+                }}
+              />
+            </div>
+            <div className='space-y-1'>
+              <Label htmlFor='customer-activation'>
+                {admin ? t('Password') : t('Activation')}
+              </Label>
               <NativeSelect
                 id='customer-activation'
                 value={activationFilter}
@@ -148,15 +142,25 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
                 }}
               >
                 <option value=''>{t('All')}</option>
-                <option value='pending'>{t('Pending activation')}</option>
-                <option value='security_pending'>
-                  {t('Pending MFA setup')}
+                <option value='pending'>
+                  {admin ? t('Password not set') : t('Pending activation')}
                 </option>
-                <option value='active'>{t('Active')}</option>
+                {!admin && (
+                  <option value='security_pending'>
+                    {t('Pending MFA setup')}
+                  </option>
+                )}
+                {admin ? (
+                  <option value='password_set'>{t('Configured')}</option>
+                ) : (
+                  <option value='active'>{t('Active')}</option>
+                )}
               </NativeSelect>
             </div>
-            <div className='space-y-2'>
-              <Label htmlFor='customer-service'>{t('Service status')}</Label>
+            <div className='space-y-1'>
+              <Label htmlFor='customer-service'>
+                {admin ? t('Activation') : t('Service status')}
+              </Label>
               <NativeSelect
                 id='customer-service'
                 value={serviceFilter}
@@ -166,11 +170,21 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
                 }}
               >
                 <option value=''>{t('All')}</option>
-                <option value='enabled'>{t('Enabled')}</option>
-                <option value='platform_disabled'>
-                  {t('Platform disabled')}
+                <option value='enabled'>
+                  {admin ? t('Activated') : t('Enabled')}
                 </option>
-                <option value='agent_disabled'>{t('Agent disabled')}</option>
+                {admin ? (
+                  <option value='disabled'>{t('Disabled')}</option>
+                ) : (
+                  <>
+                    <option value='platform_disabled'>
+                      {t('Platform disabled')}
+                    </option>
+                    <option value='agent_disabled'>
+                      {t('Agent disabled')}
+                    </option>
+                  </>
+                )}
               </NativeSelect>
             </div>
           </div>
@@ -203,21 +217,44 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
                   ),
                 },
                 { id: 'email', header: t('Email'), cell: (row) => row.email },
+                ...(admin
+                  ? [
+                      {
+                        id: 'phone',
+                        header: t('Mobile number'),
+                        cell: (row: UserPage['items'][number]) =>
+                          row.phone || '—',
+                      },
+                    ]
+                  : []),
                 {
                   id: 'activation',
-                  header: t('Activation'),
-                  cell: (row) =>
-                    (
-                      ({
-                        active: t('Active'),
-                        security_pending: t('Pending MFA setup'),
-                      }) as Record<string, string>
-                    )[row.activation] ?? t('Pending activation'),
+                  header: admin ? t('Password') : t('Activation'),
+                  cell: (row) => {
+                    if (admin) {
+                      return hasResellerAgentPassword(row.activation)
+                        ? t('Configured')
+                        : t('Password not set')
+                    }
+                    return (
+                      (
+                        {
+                          active: t('Active'),
+                          security_pending: t('Pending MFA setup'),
+                        } as Record<string, string>
+                      )[row.activation] ?? t('Pending activation')
+                    )
+                  },
                 },
                 {
                   id: 'service',
-                  header: t('Service status'),
+                  header: admin ? t('Activation') : t('Service status'),
                   cell: (row) => {
+                    if (admin) {
+                      return isResellerAgentActivated(row)
+                        ? t('Activated')
+                        : t('Disabled')
+                    }
                     const agentDisabled = row.account
                       ? !row.account.enabled
                       : row.agent_disabled
@@ -245,6 +282,45 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
                       { locale }
                     ),
                 },
+                {
+                  id: 'actions',
+                  header: t('Actions'),
+                  className: 'w-px text-end whitespace-nowrap',
+                  cell: (row) => (
+                    <div className='flex justify-end gap-2'>
+                      {canAdjustQuota && row.account && (
+                        <Button
+                          variant='outline'
+                          size='sm'
+                          onClick={() => setQuotaTargetID(row.user_id)}
+                        >
+                          {t('Adjust Quota')}
+                        </Button>
+                      )}
+                      {admin && (
+                        <ResellerAgentControls
+                          user={row}
+                          onChanged={() => void query.refetch()}
+                        />
+                      )}
+                      {row.activation === 'pending' && (
+                        <Button
+                          variant='outline'
+                          size='sm'
+                          disabled={
+                            row.platform_disabled ||
+                            sending.includes(row.user_id)
+                          }
+                          onClick={() => sendActivationMail(row.user_id)}
+                        >
+                          {sending.includes(row.user_id)
+                            ? t('Sending...')
+                            : sendAccountEmailLabel}
+                        </Button>
+                      )}
+                    </div>
+                  ),
+                },
               ]}
             />
           )}
@@ -265,59 +341,30 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
             </Button>
           </div>
         </div>
-        <Dialog
+        {quotaTarget?.account && (
+          <ResellerQuotaDialog
+            key={quotaTarget.user_id}
+            userID={quotaTarget.user_id}
+            username={quotaTarget.username}
+            admin
+            quota={quotaTarget.account.balance - quotaTarget.account.reserved}
+            open
+            onOpenChange={(open) => {
+              if (!open) setQuotaTargetID(undefined)
+            }}
+            onSuccess={() => void query.refetch()}
+          />
+        )}
+        <ResellerCreateDialog
+          admin={admin}
           open={create}
           onOpenChange={setCreate}
-          title={admin ? t('Create reseller') : t('Create customer')}
-          description={t(
-            'An activation email lets the account holder set a password and configure MFA.'
-          )}
-        >
-          <form
-            className='space-y-4'
-            onSubmit={(event) => {
-              event.preventDefault()
-              mutation.mutate()
-            }}
-          >
-            <div className='space-y-2'>
-              <Label htmlFor='create-username'>{t('Username')}</Label>
-              <Input
-                id='create-username'
-                required
-                maxLength={20}
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='create-name'>{t('Display Name')}</Label>
-              <Input
-                id='create-name'
-                maxLength={20}
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-              />
-            </div>
-            <div className='space-y-2'>
-              <Label htmlFor='create-email'>{t('Email')}</Label>
-              <Input
-                id='create-email'
-                required
-                type='email'
-                maxLength={50}
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </div>
-            {mutation.isError && (
-              <p role='alert'>{t('Failed to create account')}</p>
-            )}
-            <Button type='submit' disabled={mutation.isPending}>
-              {t('Create')}
-            </Button>
-          </form>
-        </Dialog>
+          onCreated={(createdUserID) => {
+            toast.success(t('User created successfully'))
+            sendActivationMail(createdUserID)
+            void query.refetch()
+          }}
+        />
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )

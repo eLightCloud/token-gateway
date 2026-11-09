@@ -210,6 +210,10 @@ func loadOptionsFromDatabase() {
 	options, _ := AllOption()
 	passkeyOptions := make(map[string]string)
 	for _, option := range options {
+		// Vantage reads its protected record directly, outside the general option cache.
+		if strings.EqualFold(strings.TrimSpace(option.Key), VantageIntegrationOptionKey) {
+			continue
+		}
 		if option.Key == common.EmailDeliveryOptionKey {
 			continue
 		}

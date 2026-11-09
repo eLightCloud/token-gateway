@@ -26,19 +26,20 @@ import {
   Outlet,
   Link,
 } from '@tanstack/react-router'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import i18next from 'i18next'
-import { useState } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 
-import { DataTableRowActionMenu } from '@/components/data-table'
-import {
-  UserPersonalPricingAction,
-  UserPersonalPricingDialog,
-} from '@/features/reseller/user-pricing-action'
 import zhLocale from '@/i18n/locales/zh.json'
 import { api } from '@/lib/api'
+import { Route as UsersRoute } from '@/routes/_authenticated/users/index'
 import { useAuthStore } from '@/stores/auth-store'
 
 import type { PricingWorkspace } from '../api'
@@ -58,22 +59,6 @@ const candidates = [
   { id: 3, name: 'D', status: 1, models: 'other' },
 ]
 
-function PersonalPricingActionFixture() {
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <DataTableRowActionMenu ariaLabel='Actions'>
-        <UserPersonalPricingAction onOpen={() => setOpen(true)} />
-      </DataTableRowActionMenu>
-      <UserPersonalPricingDialog
-        userID={2}
-        open={open}
-        onOpenChange={setOpen}
-      />
-    </>
-  )
-}
-
 function mountWorkspace(
   subject: 'user' | 'organization' = 'user',
   override: Partial<PricingWorkspace> = {},
@@ -88,7 +73,6 @@ function mountWorkspace(
       items: [{ model: 'A', ratio: '1', channel_ids: [1] }],
     },
     candidates,
-    members: [{ id: 4, name: 'member' }],
     history: [],
     ...override,
   }
@@ -96,38 +80,61 @@ function mountWorkspace(
     data: { success: true, data: workspace },
   })
   if (action) {
-    get.mockImplementation(async (path) => ({
-      data: {
-        success: true,
-        data: path.startsWith('/api/realtime-pricing/')
-          ? workspace
-          : {
-              ...workspace,
-              pricing_phase: workspace.phase,
-              config: {
-                revision: workspace.config.revision,
-                items: workspace.config.items.flatMap((rule) =>
-                  rule.channel_ids.map((channel_id) => ({
-                    model: rule.model,
-                    ratio: rule.ratio,
-                    channel_id,
-                    authorized: true,
-                  }))
-                ),
-              },
-              candidates: candidates.flatMap((channel) =>
-                channel.models
-                  .split(',')
-                  .map((model) => ({
+    get.mockImplementation(async (path) => {
+      if (path === '/api/user/') {
+        return {
+          data: {
+            success: true,
+            data: {
+              total: 1,
+              items: [
+                {
+                  id: 2,
+                  username: 'alice',
+                  display_name: 'Alice',
+                  status: 1,
+                  role: 1,
+                  quota: 0,
+                  used_quota: 0,
+                  request_count: 0,
+                  group: 'default',
+                },
+              ],
+            },
+          },
+        }
+      }
+      return {
+        data: {
+          success: true,
+          data: path.startsWith('/api/realtime-pricing/')
+            ? workspace
+            : {
+                ...workspace,
+                pricing_phase: workspace.phase,
+                config: {
+                  revision: workspace.config.revision,
+                  items: workspace.config.items.flatMap((rule) =>
+                    rule.channel_ids.map((channel_id) => ({
+                      model: rule.model,
+                      ratio: rule.ratio,
+                      channel_id,
+                      authorized: true,
+                    }))
+                  ),
+                },
+                candidates: candidates.flatMap((channel) =>
+                  channel.models.split(',').map((model) => ({
                     model,
                     channel_id: channel.id,
                     authorized: true,
                     ratio: '1',
                   }))
-              ),
-            },
-      },
-    }))
+                ),
+              },
+        },
+      }
+    })
   }
   if (initialError) get.mockRejectedValue(initialError)
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
@@ -153,11 +160,7 @@ function mountWorkspace(
     path: '/',
     component: () => (
       <>
-        {action ? (
-          <PersonalPricingActionFixture />
-        ) : (
-          <RealtimePricingEditor subject={subject} subjectID={2} />
-        )}
+        <RealtimePricingEditor subject={subject} subjectID={2} />
         <Link to='/dashboard'>Leave page</Link>
         <Link to='/about'>Switch subject</Link>
       </>
@@ -173,9 +176,25 @@ function mountWorkspace(
     path: '/about',
     component: () => <RealtimePricingEditor subject='user' subjectID={3} />,
   })
+  const authenticated = createRoute({
+    getParentRoute: () => root,
+    id: '/_authenticated',
+    component: Outlet,
+  })
+  const users = createRoute({
+    path: '/users/',
+    getParentRoute: () => authenticated,
+    validateSearch: UsersRoute.options.validateSearch,
+    component: UsersRoute.options.component,
+  })
   const router = createRouter({
-    routeTree: root.addChildren([index, destination, other]),
-    history: createMemoryHistory({ initialEntries: ['/'] }),
+    routeTree: root.addChildren([
+      index,
+      destination,
+      other,
+      authenticated.addChildren([users]),
+    ]),
+    history: createMemoryHistory({ initialEntries: [action ? '/users' : '/'] }),
   })
   render(
     <QueryClientProvider client={client}>
@@ -184,6 +203,122 @@ function mountWorkspace(
   )
   return { post, client, get, workspace }
 }
+
+it('opens pricing from the Users list, matches model prefixes and keeps saved rules after returning', async () => {
+  const { client, get, post, workspace } = mountWorkspace(
+    'user',
+    {
+      candidates: [
+        ...candidates,
+        {
+          id: 4,
+          name: 'Production',
+          status: 1,
+          models: 'gpt-5,gpt-5-mini,proxy-gpt',
+        },
+        { id: 5, name: 'Backup', status: 1, models: 'gpt-5' },
+      ],
+    },
+    undefined,
+    true
+  )
+  let releaseRefresh!: () => void
+  const refresh = new Promise<void>((resolve) => {
+    releaseRefresh = resolve
+  })
+  const readWorkspace = get.getMockImplementation()
+  const put = vi.spyOn(api, 'put').mockImplementation(async (path, body) => {
+    const config = {
+      revision: 8,
+      items: (body as { items: PricingWorkspace['config']['items'] }).items,
+    }
+    get.mockImplementation(async (url) => {
+      if (url !== path && readWorkspace) return readWorkspace(url)
+      await refresh
+      return {
+        data: {
+          success: true,
+          data: { ...workspace, config },
+        },
+      }
+    })
+    return { data: { success: true, data: config } }
+  })
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Open menu' })
+  )
+  await userEvent.click(
+    await screen.findByRole('menuitem', { name: 'Personal ratio' })
+  )
+  const page = await screen.findByRole('heading', { name: 'Personal ratio' })
+  expect(page).toBeVisible()
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  const model = await screen.findByRole('combobox', {
+    name: 'Add model',
+  })
+  await userEvent.type(model, 'GPT')
+  expect(
+    await screen.findByRole('option', { name: 'gpt-5-mini' })
+  ).toBeVisible()
+  expect(
+    screen.queryByRole('option', { name: 'proxy-gpt' })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('option', { name: /Configured/ })
+  ).not.toBeInTheDocument()
+  expect(screen.getByText('A')).toBeVisible()
+  await userEvent.click(await screen.findByRole('option', { name: 'gpt-5' }))
+  const row = screen.getByRole('row', { name: /^gpt-5 / })
+  const channels = within(row).getByRole('combobox', {
+    name: 'Applicable channels',
+  })
+  await userEvent.click(channels)
+  expect(
+    await screen.findByRole('option', { name: 'Production #4' })
+  ).toBeVisible()
+  expect(screen.queryByRole('option', { name: 'B #1' })).not.toBeInTheDocument()
+  await userEvent.type(channels, 'Prod')
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'Production #4' })
+  )
+  await userEvent.type(channels, 'Backup')
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'Backup #5' })
+  )
+  await userEvent.tab()
+  const ratio = within(row).getByRole('textbox', { name: 'Ratio' })
+  await userEvent.clear(ratio)
+  await userEvent.type(ratio, '0.3')
+  expect(within(row).getByText('0.3× · 70% discount')).toBeVisible()
+  expect(
+    screen.queryByText('Effective pricing preview')
+  ).not.toBeInTheDocument()
+  expect(post).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  expect(await within(row).findByRole('button', { name: 'Edit' })).toBeVisible()
+  expect(within(row).getByText('0.3× · 70% discount')).toBeVisible()
+  expect(screen.getByText('Saved successfully')).toBeVisible()
+  expect(put).toHaveBeenCalledWith(
+    '/api/realtime-pricing/user/2',
+    expect.objectContaining({
+      expected_revision: 7,
+      items: expect.arrayContaining([
+        { model: 'gpt-5', ratio: '0.3', channel_ids: [4, 5] },
+      ]),
+    })
+  )
+
+  await userEvent.click(screen.getByRole('link', { name: 'Back to list' }))
+  await screen.findByRole('heading', { name: 'Users' })
+  client.removeQueries({ queryKey: ['realtime-pricing'] })
+  releaseRefresh()
+  await userEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+  await userEvent.click(
+    await screen.findByRole('menuitem', { name: 'Personal ratio' })
+  )
+  expect(await screen.findByText('0.3× · 70% discount')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+})
 
 it('edits one model with multiple matching channels and one ratio without adding unrelated channels', async () => {
   const apply = vi.fn()
@@ -210,28 +345,31 @@ it('edits one model with multiple matching channels and one ratio without adding
   )
 })
 
-it('rejects excess precision and an empty channel range instead of silently rounding or inheriting', async () => {
-  const apply = vi.fn()
-  render(
-    <PricingRuleDialog
-      rule={{ model: 'A', ratio: '0.8', channel_ids: [1] }}
-      creating={false}
-      models={['A']}
-      candidates={candidates}
-      onApply={apply}
-      onClose={vi.fn()}
-      onDirtyChange={vi.fn()}
-    />
+it('blocks saving an inline rule with excess precision or no channels', async () => {
+  mountWorkspace()
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+  const ratio = screen.getByRole('textbox', { name: 'Ratio' })
+  expect(ratio).toHaveFocus()
+  await userEvent.clear(ratio)
+  await userEvent.type(ratio, '0.001')
+  expect(ratio).toHaveAttribute('aria-invalid', 'true')
+  const save = screen.getByRole('button', { name: 'Save changes' })
+  expect(save).toBeDisabled()
+  await userEvent.clear(ratio)
+  await userEvent.type(ratio, '0.01')
+  expect(save).toBeEnabled()
+  await userEvent.click(
+    screen.getByRole('combobox', { name: 'Applicable channels' })
   )
-  await userEvent.clear(screen.getByLabelText('Ratio'))
-  await userEvent.type(screen.getByLabelText('Ratio'), '0.001')
-  expect(screen.getByRole('button', { name: 'Apply to draft' })).toBeDisabled()
-  expect(screen.getByLabelText('Ratio')).toHaveAttribute('aria-invalid', 'true')
-  await userEvent.clear(screen.getByLabelText('Ratio'))
-  await userEvent.type(screen.getByLabelText('Ratio'), '0.01')
-  await userEvent.click(screen.getByRole('button', { name: 'Clear' }))
-  expect(screen.getByRole('button', { name: 'Apply to draft' })).toBeDisabled()
-  expect(apply).not.toHaveBeenCalled()
+  await userEvent.click(
+    await screen.findByRole('option', { name: 'B #1', selected: true })
+  )
+  await userEvent.tab()
+  expect(screen.getByText('Please select at least one channel')).toBeVisible()
+  expect(save).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.getByText('B #1')).toBeVisible()
+  expect(save).toBeDisabled()
 })
 
 it('deletes an explicit base-price rule only after confirmation and submits the subject revision', async () => {
@@ -256,7 +394,7 @@ it('deletes an explicit base-price rule only after confirmation and submits the 
   )
 })
 
-it('keeps the draft when a concurrent save returns a revision conflict', async () => {
+it('keeps the inline edit when a concurrent save returns a revision conflict', async () => {
   mountWorkspace()
   vi.spyOn(api, 'put').mockResolvedValue({
     data: {
@@ -265,55 +403,38 @@ it('keeps the draft when a concurrent save returns a revision conflict', async (
       data: { revision: 8 },
     },
   })
-  await userEvent.click(await screen.findByRole('button', { name: 'Delete' }))
-  await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+  await userEvent.clear(screen.getByRole('textbox', { name: 'Ratio' }))
+  await userEvent.type(screen.getByRole('textbox', { name: 'Ratio' }), '0.7')
   await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
   expect(
     await screen.findByText(
       'Configuration changed on the server (revision 8). Your draft is preserved.'
     )
   ).toBeVisible()
-  expect(screen.getByText('No models configured')).toBeVisible()
+  expect(screen.getByRole('textbox', { name: 'Ratio' })).toHaveValue('0.7')
+  expect(screen.getByText('B #1')).toBeVisible()
   expect(
     screen.getByRole('button', { name: 'Reload configuration' })
   ).toBeVisible()
 })
 
-it('distinguishes organization-only preview from a selected member preview', async () => {
+it('shows organization defaults without requesting a member', async () => {
   const { post } = mountWorkspace('organization')
   expect(
     await screen.findByRole('heading', {
-      name: 'Organization preview without personal overrides',
+      name: 'Organization default discounts',
     })
   ).toBeVisible()
   await waitFor(() =>
     expect(post).toHaveBeenCalledWith(
       '/api/realtime-pricing/organization/2/preview',
-      expect.objectContaining({ user_id: 0 })
+      { items: [{ model: 'A', ratio: '1', channel_ids: [1] }] }
     )
   )
-  await userEvent.click(
-    screen.getByPlaceholderText('Select member for personal overrides')
-  )
-  await userEvent.click(
-    await screen.findByRole('option', { name: 'member #4' })
-  )
-  await waitFor(() =>
-    expect(post).toHaveBeenCalledWith(
-      '/api/realtime-pricing/organization/2/preview',
-      expect.objectContaining({ user_id: 4 })
-    )
-  )
-  expect(
-    screen.getByRole('heading', { name: 'Effective pricing preview' })
-  ).toBeVisible()
-})
-
-it('renders both frozen preview revisions and organization context', async () => {
-  mountWorkspace()
-  expect(await screen.findByText('User revision 7')).toBeVisible()
-  expect(screen.getByText('Organization revision 1')).toBeVisible()
-  expect(screen.getByText('Organization #2')).toBeVisible()
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+  expect(screen.queryByText(/User revision/)).not.toBeInTheDocument()
 })
 
 it('blocks real navigation with a draft and supports staying then leaving', async () => {
@@ -363,21 +484,22 @@ it('keeps a no-op edit clean even when decimal spelling changes', async () => {
   )
   await userEvent.clear(screen.getByLabelText('Ratio'))
   await userEvent.type(screen.getByLabelText('Ratio'), '0.80')
-  await userEvent.click(screen.getByRole('button', { name: 'Apply to draft' }))
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
 })
 
-it('opens an already configured model from the add selector instead of adding a duplicate', async () => {
+it('opens an already configured model in its existing row via the keyboard', async () => {
   mountWorkspace()
-  await userEvent.click(
-    await screen.findByRole('button', { name: 'Add model' })
-  )
-  await userEvent.click(screen.getByPlaceholderText('Select model'))
-  await userEvent.click(
-    await screen.findByRole('option', { name: 'A · Configured' })
-  )
-  expect(screen.getByLabelText('Ratio')).toHaveValue('1')
-  await userEvent.click(screen.getByRole('button', { name: 'Apply to draft' }))
+  const model = await screen.findByRole('combobox', { name: 'Add model' })
+  const row = screen.getByRole('row', { name: /^A / })
+  await userEvent.type(model, 'A')
+  expect(
+    within(await screen.findByRole('option', { name: /^A/ })).getByText(
+      'Configured'
+    )
+  ).toBeVisible()
+  await userEvent.keyboard('{ArrowDown}{Enter}')
+  expect(within(row).getByRole('textbox', { name: 'Ratio' })).toHaveValue('1')
+  expect(screen.getAllByRole('row', { name: /^A / })).toHaveLength(1)
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
 })
 
@@ -429,51 +551,29 @@ it('preserves selected channel labels and off-filter selections while searching'
   )
 })
 
-it('requires a new member choice after membership changes', async () => {
-  const { post, get, workspace } = mountWorkspace('organization')
-  await screen.findByRole('heading', {
-    name: 'Organization preview without personal overrides',
+it('saves a keyboard-disabled personal rule with its original ratio and channels', async () => {
+  const { workspace } = mountWorkspace()
+  const disabledRule = { ...workspace.config.items[0], disabled: true }
+  const put = vi.spyOn(api, 'put').mockResolvedValue({
+    data: { success: true, data: { revision: 8, items: [disabledRule] } },
   })
-  post.mockImplementation(
-    async (_path, body) =>
-      ({
-        data: (body as { user_id: number })?.user_id
-          ? { success: false, code: 'REALTIME_PRICING_MEMBER_CHANGED' }
-          : {
-              success: true,
-              data: {
-                rows: [],
-                user_revision: 0,
-                organization_revision: 1,
-                organization_id: 2,
-                user_id: 0,
-                generated_at: 1,
-              },
-            },
-      }) as never
-  )
-  await userEvent.click(
-    screen.getByPlaceholderText('Select member for personal overrides')
-  )
-  await userEvent.click(
-    await screen.findByRole('option', { name: 'member #4' })
-  )
-  expect(
-    await screen.findByText(
-      'This user is no longer a current organization member. Select another member.'
-    )
-  ).toBeVisible()
-  get.mockResolvedValue({
-    data: { success: true, data: { ...workspace, members: [] } },
+  const toggle = await screen.findByRole('switch', {
+    name: 'Enable personal pricing for A',
   })
-  await userEvent.click(
-    screen.getByRole('button', { name: 'Select another member' })
-  )
-  expect(
-    await screen.findByRole('heading', {
-      name: 'Organization preview without personal overrides',
+  expect(toggle).toBeChecked()
+  toggle.focus()
+  await userEvent.keyboard(' ')
+  expect(toggle).not.toBeChecked()
+  expect(screen.getByText('Disabled')).toBeVisible()
+  expect(screen.getByText('Inherited')).toBeVisible()
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() =>
+    expect(put).toHaveBeenCalledWith('/api/realtime-pricing/user/2', {
+      expected_revision: 7,
+      items: [disabledRule],
     })
-  ).toBeVisible()
+  )
+  expect(toggle).not.toBeChecked()
 })
 
 it('refreshes the server revision without overwriting a draft or silently rebasing its save', async () => {
@@ -529,14 +629,14 @@ it('renders Chinese discount meaning and responds when the language changes', as
 
 it('hides cached editing controls after a permission rejection', async () => {
   const { client, get } = mountWorkspace()
-  await screen.findByRole('button', { name: 'Add model' })
+  await screen.findByRole('combobox', { name: 'Add model' })
   get.mockRejectedValue({ response: { status: 403 } })
   await client.invalidateQueries({ queryKey: ['realtime-pricing'] })
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'You do not have permission to manage realtime pricing.'
   )
   expect(
-    screen.queryByRole('button', { name: 'Add model' })
+    screen.queryByRole('combobox', { name: 'Add model' })
   ).not.toBeInTheDocument()
 })
 
@@ -546,11 +646,13 @@ it('retries an initial loading failure without presenting an empty editable conf
     'Failed to load data'
   )
   expect(
-    screen.queryByRole('button', { name: 'Add model' })
+    screen.queryByRole('combobox', { name: 'Add model' })
   ).not.toBeInTheDocument()
   get.mockResolvedValue({ data: { success: true, data: workspace } })
   await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
-  expect(await screen.findByRole('button', { name: 'Add model' })).toBeEnabled()
+  expect(
+    await screen.findByRole('combobox', { name: 'Add model' })
+  ).toBeEnabled()
 })
 
 it('does not carry a discarded draft into another subject', async () => {
@@ -586,9 +688,11 @@ it('protects unsaved modal input when Escape is pressed and preserves input on c
   expect(close).not.toHaveBeenCalled()
 })
 
-it('hides the legacy editor after activation and protects the enclosing user dialog draft', async () => {
+it('hides the legacy editor after activation and protects the pricing page draft when returning to the list', async () => {
   mountWorkspace('user', {}, undefined, true)
-  await userEvent.click(await screen.findByRole('button', { name: 'Actions' }))
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Open menu' })
+  )
   await userEvent.click(
     await screen.findByRole('menuitem', { name: 'Personal ratio' })
   )
@@ -599,19 +703,15 @@ it('hides the legacy editor after activation and protects the enclosing user dia
     )
   ).not.toBeInTheDocument()
   await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
-  await userEvent.click(await screen.findByRole('button', { name: 'Close' }))
+  await userEvent.click(screen.getByRole('link', { name: 'Back to list' }))
   expect(await screen.findByRole('alertdialog')).toHaveTextContent(
     'You have unsaved changes'
   )
   await userEvent.click(screen.getByRole('button', { name: 'Stay' }))
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
-  await userEvent.keyboard('{Escape}')
+  await userEvent.click(screen.getByRole('link', { name: 'Back to list' }))
   await userEvent.click(await screen.findByRole('button', { name: /^Leave$/ }))
-  await waitFor(() =>
-    expect(
-      screen.queryByRole('dialog', { name: 'Personal ratio' })
-    ).not.toBeInTheDocument()
-  )
+  expect(await screen.findByRole('heading', { name: 'Users' })).toBeVisible()
 })
 
 it('retains ratio, availability and editing actions in the mobile card layout', async () => {
@@ -651,7 +751,9 @@ it('keeps the legacy draft protected when a clean realtime editor mounts after a
     undefined,
     true
   )
-  await userEvent.click(await screen.findByRole('button', { name: 'Actions' }))
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Open menu' })
+  )
   await userEvent.click(
     await screen.findByRole('menuitem', { name: 'Personal ratio' })
   )
@@ -663,17 +765,17 @@ it('keeps the legacy draft protected when a clean realtime editor mounts after a
   })
   await client.invalidateQueries({ queryKey: ['realtime-pricing'] })
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Add model' })).toBeEnabled()
+    expect(screen.getByRole('combobox', { name: 'Add model' })).toBeEnabled()
   )
-  await userEvent.click(screen.getByRole('button', { name: 'Close' }))
+  await userEvent.click(screen.getByRole('link', { name: 'Back to list' }))
   expect(await screen.findByRole('alertdialog')).toHaveTextContent(
     'You have unsaved changes'
   )
 })
 
 it('does not describe an unknown preview source as system default', async () => {
-  const { post, client } = mountWorkspace()
-  await screen.findByText('User revision 7')
+  const { post, client } = mountWorkspace('organization')
+  await screen.findByText('Organization revision 1')
   post.mockResolvedValue({
     data: {
       success: true,

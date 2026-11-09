@@ -1,0 +1,5 @@
+{{define "delivery-test"}}{{template "email-open" .}}
+<h1>{{.Subject}}</h1><p style="font-size:16px;font-weight:600">邮件配置测试 · Email delivery test</p><p style="color:#64748b">收到此邮件表示本次测试邮件已到达当前邮箱。</p>
+<div style="background:#f0f9ff;border:1px dashed #7dd3fc;padding:20px;border-radius:8px" class="message-body">{{.Body}}</div>
+<p style="font-size:12px;color:#64748b;margin-top:24px">此测试不会更改账户、安全设置、余额或通知订阅。</p>
+{{template "email-close" .}}{{end}}

@@ -45,7 +45,7 @@ func StartAdministrativeEmailChange(userID int, state SecurityEmailChange) (stri
 		if err != nil {
 			return err
 		}
-		token, _, err = createAuthFlowWithTx(tx, AuthFlowCreate{Purpose: SecurityEmailChangePurpose, UserId: userID, Payload: string(payload), ExpiresAt: time.Now().Add(10 * time.Minute)})
+		token, _, err = createAuthFlowWithTx(tx, AuthFlowCreate{Purpose: SecurityEmailChangePurpose, UserId: userID, Payload: string(payload), ExpiresAt: time.Now().Add(SecurityMailTTL)})
 		return err
 	})
 	return token, err

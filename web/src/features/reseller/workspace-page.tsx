@@ -34,6 +34,11 @@ import { formatQuotaWithCurrency } from '@/lib/currency'
 import { formatNumber } from '@/lib/format'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { sendResellerActivationEmail } from './activation-mail'
+import { ResellerAgentConfigHistory } from './agent-config-history'
+import { ResellerAgentControls } from './agent-controls'
+import { ResellerAgentDiscounts } from './agent-discounts'
+import { ResellerAgentInformation } from './agent-information'
 import {
   resellerKey,
   resellerPath,
@@ -149,6 +154,7 @@ export function ResellerWorkspacePage({
   const [quotaSession, setQuotaSession] = useState(0)
   const [enabledOpen, setEnabledOpen] = useState(false)
   const [email, setEmail] = useState('')
+  const [tab, setTab] = useState('information')
   const query = useQuery({
     meta: { errorToast: false },
     refetchOnWindowFocus: false,
@@ -158,21 +164,7 @@ export function ResellerWorkspacePage({
       resellerRequest<Workspace>(`${resellerPath(admin)}/${userID}`),
   })
   const user = query.data?.user
-  const enabled = user?.account ? user.account.enabled : !user?.agent_disabled
-  let restrictionDescription: string
-  if (!admin) {
-    restrictionDescription = t(
-      'This changes only the agent restriction. Platform restrictions remain in effect.'
-    )
-  } else if (enabled) {
-    restrictionDescription = t(
-      'Disabling this reseller stops new requests for all its customers. Existing billing continues.'
-    )
-  } else {
-    restrictionDescription = t(
-      'Restoring this reseller keeps each customer’s independent restrictions in effect.'
-    )
-  }
+  const enabled = !user?.agent_disabled
   const toggle = useMutation({
     meta: { errorToast: false },
     mutationFn: () =>
@@ -186,14 +178,24 @@ export function ResellerWorkspacePage({
   })
   const activation = useMutation({
     meta: { errorToast: false },
-    mutationFn: () =>
-      resellerRequest(
-        `${resellerPath(admin)}/${userID}/activation`,
-        'post',
-        email ? { email } : {}
-      ),
+    mutationFn: () => sendResellerActivationEmail(false, userID, email),
     onSuccess: () => void query.refetch(),
   })
+  const configEditor = query.data && (
+    <ResellerConfigEditor
+      key={`${userID}:${query.data.config.revision}`}
+      userID={userID}
+      admin={admin}
+      consumptionEditable={admin || query.data.pricing_phase !== 'active'}
+      config={query.data.config}
+      candidates={query.data.candidates}
+      onSuccess={() => void query.refetch()}
+      onReload={async () => {
+        const result = await query.refetch()
+        if (result.isError) throw result.error
+      }}
+    />
+  )
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>
@@ -213,13 +215,23 @@ export function ResellerWorkspacePage({
         >
           {t('Adjust Quota')}
         </Button>
-        <Button
-          variant='outline'
-          onClick={() => setEnabledOpen(true)}
-          disabled={!user}
-        >
-          {enabled ? t('Disable') : t('Enable')}
-        </Button>
+        {admin ? (
+          user && (
+            <ResellerAgentControls
+              user={user}
+              onChanged={() => void query.refetch()}
+              detail
+            />
+          )
+        ) : (
+          <Button
+            variant='outline'
+            onClick={() => setEnabledOpen(true)}
+            disabled={!user}
+          >
+            {enabled ? t('Disable') : t('Enable')}
+          </Button>
+        )}
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
         <ResellerQueryStatus
@@ -230,7 +242,7 @@ export function ResellerWorkspacePage({
         {query.data && user && (
           <div className='space-y-4'>
             {user.account && <ProcurementSummary account={user.account} />}
-            <Tabs defaultValue='information'>
+            <Tabs value={tab} onValueChange={setTab}>
               <TabsList className='max-w-full overflow-x-auto'>
                 <TabsTrigger value='information'>
                   {t('Basic information')}
@@ -248,89 +260,107 @@ export function ResellerWorkspacePage({
                 </TabsTrigger>
               </TabsList>
               <TabsContent value='information'>
-                <div className='space-y-3 py-3'>
-                  <p>
-                    {user.display_name} · {user.email}
-                  </p>
-                  <p>
-                    {user.activation === 'active'
-                      ? t('Active')
-                      : t('Pending activation')}
-                  </p>
-                  <p>
-                    {t('Available quota')}:{' '}
-                    {formatQuotaWithCurrency(
-                      user.account
-                        ? user.account.balance - user.account.reserved
-                        : user.quota,
-                      { locale }
+                {admin ? (
+                  <ResellerAgentInformation user={user} />
+                ) : (
+                  <div className='space-y-3 py-3'>
+                    <p>
+                      {user.display_name} · {user.email}
+                    </p>
+                    <p>
+                      {(
+                        {
+                          active: t('Active'),
+                          security_pending: t('Pending MFA setup'),
+                        } as Record<string, string>
+                      )[user.activation] ?? t('Pending activation')}
+                    </p>
+                    <p>
+                      {t('Available quota')}:{' '}
+                      {formatQuotaWithCurrency(
+                        user.account
+                          ? user.account.balance - user.account.reserved
+                          : user.quota,
+                        { locale }
+                      )}
+                    </p>
+                    {user.platform_disabled && <p>{t('Platform disabled')}</p>}
+                    {user.agent_disabled && <p>{t('Agent disabled')}</p>}
+                    {user.activation === 'pending' && (
+                      <div className='max-w-md space-y-2'>
+                        <Label htmlFor='activation-email'>
+                          {t('Correct pending email')}
+                        </Label>
+                        <Input
+                          id='activation-email'
+                          type='email'
+                          value={email}
+                          onChange={(event) => setEmail(event.target.value)}
+                        />
+                        <Button
+                          disabled={
+                            user.platform_disabled || activation.isPending
+                          }
+                          onClick={() => activation.mutate()}
+                        >
+                          {t('Resend activation email')}
+                        </Button>
+                      </div>
                     )}
-                  </p>
-                  {user.platform_disabled && <p>{t('Platform disabled')}</p>}
-                  {user.agent_disabled && <p>{t('Agent disabled')}</p>}
-                  {user.activation !== 'active' && (
-                    <div className='max-w-md space-y-2'>
-                      <Label htmlFor='activation-email'>
-                        {t('Correct pending email')}
-                      </Label>
-                      <Input
-                        id='activation-email'
-                        type='email'
-                        value={email}
-                        onChange={(event) => setEmail(event.target.value)}
-                      />
-                      <Button
-                        disabled={activation.isPending}
-                        onClick={() => activation.mutate()}
-                      >
-                        {t('Resend activation email')}
-                      </Button>
-                    </div>
-                  )}
-                  {activation.isSuccess && (
-                    <p role='status'>{t('Activation email sent')}</p>
-                  )}
-                  {activation.isError && (
-                    <p role='alert'>{t('Failed to send activation email')}</p>
-                  )}
-                </div>
+                    {activation.isSuccess && (
+                      <p role='status'>
+                        {t('Activation email submitted to the mail server.')}
+                      </p>
+                    )}
+                    {activation.isError && (
+                      <p role='alert'>{t('Failed to send activation email')}</p>
+                    )}
+                  </div>
+                )}
               </TabsContent>
               <TabsContent value='configuration' keepMounted>
-                <ResellerConfigEditor
-                  key={`${userID}:${query.data.config.revision}`}
-                  userID={userID}
-                  admin={admin}
-                  consumptionEditable={
-                    admin || query.data.pricing_phase !== 'active'
-                  }
-                  config={query.data.config}
-                  candidates={query.data.candidates}
-                  onSuccess={() => void query.refetch()}
-                  onReload={async () => {
-                    const result = await query.refetch()
-                    if (result.isError) throw result.error
-                  }}
-                />
+                {admin ? (
+                  <ResellerAgentDiscounts
+                    items={query.data.config.items}
+                    candidates={query.data.candidates}
+                  >
+                    {configEditor}
+                  </ResellerAgentDiscounts>
+                ) : (
+                  configEditor
+                )}
                 {!admin && query.data.pricing_phase && (
                   <RealtimePricingEditor subject='user' subjectID={userID} />
                 )}
-                <section
-                  aria-label={t('Configuration history')}
-                  className='mt-4 space-y-2'
-                >
-                  <h3 className='font-medium'>{t('Configuration history')}</h3>
-                  {query.data.history.length === 0 && <p>{t('No results')}</p>}
-                  {query.data.history.map((entry) => (
-                    <p
-                      key={entry.revision}
-                      className='text-muted-foreground text-sm'
-                    >
-                      {t('Revision')}: {formatNumber(entry.revision, locale)} ·{' '}
-                      {t('Operator')}: {entry.operator_id} ·{' '}
-                      <ResellerTimestamp value={entry.created_at} />
-                    </p>
-                  ))}
-                </section>
+                {admin && tab === 'configuration' && (
+                  <ResellerAgentConfigHistory
+                    userID={userID}
+                    revision={query.data.config.revision}
+                  />
+                )}
+                {!admin && (
+                  <section
+                    aria-label={t('Configuration history')}
+                    className='mt-4 space-y-2'
+                  >
+                    <h3 className='font-medium'>
+                      {t('Configuration history')}
+                    </h3>
+                    {query.data.history.length === 0 && (
+                      <p>{t('No results')}</p>
+                    )}
+                    {query.data.history.map((entry) => (
+                      <p
+                        key={entry.revision}
+                        className='text-muted-foreground text-sm'
+                      >
+                        {t('Revision')}: {formatNumber(entry.revision, locale)}{' '}
+                        · {t('Operator')}: {entry.operator_id} ·{' '}
+                        <ResellerTimestamp value={entry.created_at} />
+                      </p>
+                    ))}
+                  </section>
+                )}
               </TabsContent>
               {!admin && (
                 <TabsContent value='billing'>
@@ -355,10 +385,12 @@ export function ResellerWorkspacePage({
               onSuccess={() => void query.refetch()}
             />
             <ConfirmDialog
-              open={enabledOpen}
+              open={!admin && enabledOpen}
               onOpenChange={setEnabledOpen}
               title={enabled ? t('Disable account') : t('Enable account')}
-              desc={restrictionDescription}
+              desc={t(
+                'This changes only the agent restriction. Platform restrictions remain in effect.'
+              )}
               destructive={enabled}
               isLoading={toggle.isPending}
               handleConfirm={() => toggle.mutate()}

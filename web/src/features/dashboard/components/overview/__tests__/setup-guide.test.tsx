@@ -23,10 +23,20 @@ import {
   createRouter,
   RouterProvider,
 } from '@tanstack/react-router'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import i18next from 'i18next'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { RatioRange } from '@/features/reseller/api'
+import zh from '@/i18n/locales/zh.json'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 import { useSystemConfigStore } from '@/stores/system-config-store'
@@ -36,6 +46,10 @@ import { OverviewDashboard } from '../overview-dashboard'
 const storageKey = 'dashboard_overview_setup_guide_expanded'
 let client: QueryClient
 let keyLookupError: Error | null
+let ratioLookupError: Error | null
+let ratioRanges: RatioRange[]
+let uptimeEnabled: boolean
+let apiInfoEnabled: boolean
 
 beforeEach(() => {
   window.localStorage.clear()
@@ -52,6 +66,10 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false } },
   })
   keyLookupError = null
+  ratioLookupError = null
+  ratioRanges = []
+  uptimeEnabled = false
+  apiInfoEnabled = false
   vi.spyOn(api, 'get').mockImplementation(async (url) => {
     switch (url) {
       case '/api/token/?p=1&size=10':
@@ -68,16 +86,21 @@ beforeEach(() => {
         return {
           data: {
             data: {
-              api_info_enabled: false,
+              api_info_enabled: apiInfoEnabled,
               announcements_enabled: false,
               faq_enabled: false,
-              uptime_kuma_enabled: false,
+              uptime_kuma_enabled: uptimeEnabled,
             },
           },
         }
       case '/api/user/models':
         return { data: { success: true, data: ['gpt-4o-mini'] } }
       case '/api/data/self':
+        return { data: { success: true, data: [] } }
+      case '/api/reseller/personal/ratios':
+        if (ratioLookupError) throw ratioLookupError
+        return { data: { success: true, data: ratioRanges } }
+      case '/api/uptime/status':
         return { data: { success: true, data: [] } }
       default:
         throw new Error(`Unexpected dashboard request: ${url}`)
@@ -114,7 +137,7 @@ describe('overview setup guide', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     expect(
       screen.getAllByRole('heading').map((heading) => heading.textContent)
-    ).toEqual(['Overview', 'Usage at a glance'])
+    ).toEqual(['Overview', 'Usage at a glance', 'My model discounts'])
     expect(screen.queryByText('Setup guide complete')).not.toBeInTheDocument()
     expect(screen.queryByText('Setup progress: 3/3')).not.toBeInTheDocument()
     for (const name of ['API Keys', 'Channels', 'Usage Logs', 'Pricing']) {
@@ -237,5 +260,107 @@ describe('overview setup guide', () => {
     expect(
       screen.queryByRole('button', { name: 'Setup guide' })
     ).not.toBeInTheDocument()
+  })
+})
+
+describe('overview model discounts', () => {
+  it('shows ten discounted models and expands the same table with the keyboard', async () => {
+    const user = userEvent.setup()
+    ratioRanges = [
+      { model: 'base-price', min: '1', max: '1' },
+      { model: 'markup', min: '1.1', max: '1.2' },
+      { model: 'mixed-coverage', min: '0.8', max: '1.2' },
+      { model: 'discount-range', min: '0.8', max: '0.9' },
+      ...Array.from({ length: 9 }, (_, index) => ({
+        model: `discounted-${index + 1}`,
+        min: '0.85',
+        max: '0.85',
+      })),
+    ]
+    await renderOverview()
+
+    const table = within(
+      await screen.findByRole('table', { name: 'My model discounts' })
+    )
+    expect(table.getByRole('columnheader', { name: 'Model' })).toBeVisible()
+    expect(
+      table.getByRole('columnheader', { name: 'Active discount' })
+    ).toBeVisible()
+    expect(table.getByText('Up to 20% off')).toBeVisible()
+    expect(table.getByText('10–20% off')).toBeVisible()
+    expect(table.getAllByRole('row')).toHaveLength(11)
+    expect(table.queryByText('discounted-9')).not.toBeInTheDocument()
+
+    const toggle = screen.getByRole('button', { name: 'View all' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    toggle.focus()
+    await user.keyboard('{Enter}')
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(table.getAllByRole('row')).toHaveLength(12)
+    expect(table.getByText('discounted-9')).toBeVisible()
+    expect(table.queryByText('base-price')).not.toBeInTheDocument()
+    expect(table.queryByText('markup')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Collapse' }))
+    expect(table.queryByText('discounted-9')).not.toBeInTheDocument()
+  })
+
+  it('keeps uptime below discounts when uptime is enabled', async () => {
+    uptimeEnabled = true
+    apiInfoEnabled = true
+    await renderOverview()
+
+    const discounts = screen.getByRole('heading', {
+      name: 'My model discounts',
+    })
+    const apiInfo = await screen.findByText('API Info')
+    const uptime = await screen.findByText('Uptime')
+    expect(
+      discounts.compareDocumentPosition(uptime) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(
+      apiInfo.compareDocumentPosition(uptime) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(await screen.findByText('No active model discounts')).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: 'View all' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows an error and allows retry when the discount lookup fails', async () => {
+    const user = userEvent.setup()
+    ratioLookupError = new Error('Discount lookup unavailable')
+    await renderOverview()
+
+    const alert = await screen.findByRole('alert')
+    expect(
+      screen.queryByText('No active model discounts')
+    ).not.toBeInTheDocument()
+    ratioLookupError = null
+    ratioRanges = [{ model: 'my-model', min: '0.8', max: '0.8' }]
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByText('my-model')).toBeVisible()
+    expect(screen.getByText('20% off')).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: 'View all' })
+    ).not.toBeInTheDocument()
+  })
+
+  it('uses fold notation when the user switches to Simplified Chinese', async () => {
+    ratioRanges = [{ model: 'my-model', min: '0.85', max: '0.85' }]
+    i18next.addResourceBundle('zhCN', 'translation', zh.translation)
+    try {
+      await renderOverview()
+      expect(await screen.findByText('15% off')).toBeVisible()
+
+      await act(() => i18next.changeLanguage('zhCN'))
+      const table = within(screen.getByRole('table', { name: '我的模型折扣' }))
+      expect(table.getByText('8.5 折')).toBeVisible()
+    } finally {
+      await act(() => i18next.changeLanguage('en'))
+      i18next.removeResourceBundle('zhCN', 'translation')
+    }
   })
 })

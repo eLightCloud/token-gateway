@@ -35,6 +35,7 @@ func RecordRelayResult(ctx context.Context, info *relaycommon.RelayInfo, apiErr 
 		return
 	}
 	outcome := ClassifyRelayOutcome(ctx, info, apiErr)
+	recordOperationsRelayOutcome(ctx, info, apiErr, outcome)
 	if outcome == OutcomeIgnored {
 		return
 	}

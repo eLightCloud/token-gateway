@@ -22,13 +22,13 @@ export type PricingRule = {
   model: string
   ratio: string
   channel_ids: number[]
+  disabled?: boolean
 }
 export type PricingConfig = { revision: number; items: PricingRule[] }
 export type PricingWorkspace = {
   phase: 'legacy' | 'frozen' | 'active'
   config: PricingConfig
   candidates: { id: number; name: string; status: number; models: string }[]
-  members: { id: number; name: string }[] | null
   history: {
     id: number
     revision: number
@@ -74,13 +74,12 @@ export const savePricing = (
 export const previewPricing = (
   subject: string,
   id: number,
-  items: PricingRule[],
-  user_id: number
+  items: PricingRule[]
 ) =>
   resellerRequest<PricingPreview>(
     `${pricingPath(subject, id)}/preview`,
     'post',
-    { items, user_id }
+    { items }
   )
 export const migratePricing = (action: string) =>
   resellerRequest<PricingMigration>('/api/realtime-pricing-migration', 'post', {
@@ -93,6 +92,7 @@ export function pricingRulesKey(rules: PricingRule[]): string {
       .map((rule) => ({
         model: rule.model,
         ratio: Number(rule.ratio),
+        disabled: rule.disabled === true,
         channel_ids: [...rule.channel_ids].sort((a, b) => a - b),
       }))
       .sort((a, b) => a.model.localeCompare(b.model))

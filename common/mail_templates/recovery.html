@@ -1,0 +1,5 @@
+{{define "recovery"}}{{template "email-open" .}}
+<h1>{{.Subject}}</h1><p style="font-size:16px;font-weight:600">事件恢复 · Recovery update</p><p style="color:#64748b">以下列出的事件已达到恢复条件。</p>
+<div style="background:#ecfdf5;border:1px solid #a7f3d0;padding:20px;border-radius:8px" class="message-body">{{.Body}}</div>
+<p style="font-size:12px;color:#64748b;margin-top:24px">恢复结论仅对应本邮件列出的事件，不代表其他告警也已解除。</p>
+{{template "email-close" .}}{{end}}

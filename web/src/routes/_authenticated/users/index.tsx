@@ -24,6 +24,7 @@ import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
 const usersSearchSchema = z.object({
+  pricingUserId: z.number().int().positive().optional().catch(undefined),
   reseller_kind: z.string().optional().catch(''),
   agent_id: z.string().optional().catch(''),
   page: z.number().optional().catch(1),

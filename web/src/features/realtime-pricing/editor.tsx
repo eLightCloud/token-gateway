@@ -16,14 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryKey,
+} from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StaticDataTable } from '@/components/data-table'
 import { Button } from '@/components/ui/button'
-import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { ResellerConfigError } from '@/features/reseller/config-error'
 import {
@@ -50,9 +54,11 @@ import {
   type PricingWorkspace,
 } from './api'
 import { PricingHistory } from './history'
+import { PersonalPricingModelPicker } from './personal-rule-editor'
 import { PricingRuleDialog } from './rule-dialog'
 import { PricingRulesTable } from './rules-table'
 import { pricingSourceLabel, pricingMigrationReason } from './source'
+import { usePersonalRuleEditor } from './use-personal-rule-editor'
 
 export function RealtimePricingEditor(props: {
   subject: 'user' | 'organization'
@@ -61,8 +67,9 @@ export function RealtimePricingEditor(props: {
 }) {
   const { t } = useTranslation()
   const viewer = useAuthStore((s) => s.auth.user?.id)
+  const queryKey = ['realtime-pricing', viewer, props.subject, props.subjectID]
   const query = useQuery({
-    queryKey: ['realtime-pricing', viewer, props.subject, props.subjectID],
+    queryKey,
     queryFn: () => getPricing(props.subject, props.subjectID),
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
@@ -90,6 +97,7 @@ export function RealtimePricingEditor(props: {
           key={`${viewer}:${props.subject}:${props.subjectID}:${query.data.phase}`}
           {...props}
           data={query.data}
+          queryKey={queryKey}
           reload={async () => {
             const result = await query.refetch()
             if (result.isError || !result.data) throw result.error
@@ -105,6 +113,7 @@ function PricingDraft(props: {
   subject: 'user' | 'organization'
   subjectID: number
   data: PricingWorkspace
+  queryKey: QueryKey
   reload: () => Promise<PricingWorkspace>
   onDirtyChange?: (dirty: boolean) => void
 }) {
@@ -114,26 +123,40 @@ function PricingDraft(props: {
   const client = useQueryClient()
   const [baseline, setBaseline] = useState(props.data.config)
   const [items, setItems] = useState(props.data.config.items)
+  const personal = props.subject === 'user'
+  const personalRule = usePersonalRuleEditor(items)
+  const draft = personal ? personalRule.items : items
   const [filter, setFilter] = useState('')
   const [editing, setEditing] = useState<PricingRule | null>(null)
   const [creating, setCreating] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
-  const [member, setMember] = useState('')
   const [history, setHistory] = useState(false)
   const [migrationConfirm, setMigrationConfirm] = useState<string | null>(null)
-  const dirty = pricingRulesKey(items) !== pricingRulesKey(baseline.items)
+  const draftKey = pricingRulesKey(draft)
+  const dirty = draftKey !== pricingRulesKey(baseline.items)
   const [modalDirty, setModalDirty] = useState(false)
   const blocked = props.data.phase !== 'active'
   const save = useMutation({
-    mutationFn: () =>
-      savePricing(props.subject, props.subjectID, baseline.revision, items),
+    mutationFn: (rules: PricingRule[]) =>
+      savePricing(props.subject, props.subjectID, baseline.revision, rules),
     meta: { errorToast: false },
-    onSuccess: async (config) => {
+    onSuccess: (config) => {
       setBaseline(config)
       setItems(config.items)
-      await client.invalidateQueries({ queryKey: ['realtime-preview'] })
-      await client.invalidateQueries({ queryKey: ['reseller'] })
-      await client.invalidateQueries({ queryKey: ['realtime-pricing'] })
+      if (personal) {
+        personalRule.cancel()
+        client.setQueryData<PricingWorkspace>(props.queryKey, (current) =>
+          current && current.config.revision <= config.revision
+            ? { ...current, config }
+            : current
+        )
+      }
+      const refresh = Promise.all([
+        client.invalidateQueries({ queryKey: ['realtime-preview'] }),
+        client.invalidateQueries({ queryKey: ['reseller'] }),
+        client.invalidateQueries({ queryKey: ['realtime-pricing'] }),
+      ])
+      if (!personal) return refresh
     },
   })
   const migration = useMutation({
@@ -150,7 +173,6 @@ function PricingDraft(props: {
     meta: { errorToast: false },
     onSuccess: () => migration.reset(),
   })
-  const draftKey = pricingRulesKey(items)
   const preview = useQuery({
     queryKey: [
       'realtime-preview',
@@ -158,31 +180,19 @@ function PricingDraft(props: {
       props.subject,
       props.subjectID,
       props.data.config.revision,
-      member,
-      draftKey,
+      personal ? null : draftKey,
     ],
-    queryFn: () =>
-      previewPricing(
-        props.subject,
-        props.subjectID,
-        items,
-        Number(member) || 0
-      ),
-    enabled: !blocked,
+    queryFn: () => previewPricing(props.subject, props.subjectID, items),
+    enabled: !blocked && !personal,
     staleTime: 0,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     refetchInterval: 30_000,
     meta: { errorToast: false },
   })
-  const memberChanged = getServerErrorSources(preview.error).some(
-    (source) => source.code === 'REALTIME_PRICING_MEMBER_CHANGED'
-  )
   const serverRevision = Math.max(
     props.data.config.revision,
-    (props.subject === 'user'
-      ? preview.data?.user_revision
-      : preview.data?.organization_revision) ?? 0
+    (personal ? undefined : preview.data?.organization_revision) ?? 0
   )
   const revisionError =
     serverRevision !== baseline.revision
@@ -195,6 +205,7 @@ function PricingDraft(props: {
     const data = await props.reload()
     setBaseline(data.config)
     setItems(data.config.items)
+    personalRule.cancel()
     setEditing(null)
     setModalDirty(false)
     save.reset()
@@ -203,6 +214,13 @@ function PricingDraft(props: {
   const editRule = useCallback((rule: PricingRule) => {
     setCreating(false)
     setEditing({ ...rule, channel_ids: [...rule.channel_ids] })
+  }, [])
+  const toggleRule = useCallback((model: string, enabled: boolean) => {
+    setItems((old) =>
+      old.map((rule) =>
+        rule.model === model ? { ...rule, disabled: !enabled } : rule
+      )
+    )
   }, [])
   const filteredRules = useMemo(
     () => items.filter((r) => r.model.includes(filter)),
@@ -230,7 +248,15 @@ function PricingDraft(props: {
       <h3 className='font-medium'>{t('Realtime model pricing')}</h3>
       <p className='text-muted-foreground text-sm'>
         {t(
-          'One ratio per model. Channels define discount coverage and do not restrict routing. User overrides organization; uncovered channels inherit.'
+          'One ratio per model. Selected channels define the discount scope. Routing is unchanged.'
+        )}
+        {props.subject === 'user' && (
+          <>
+            {' '}
+            {t(
+              'Enabled personal rules take priority on selected channels. Disabled rules keep their settings and inherit pricing.'
+            )}
+          </>
         )}
       </p>
       <p className='text-muted-foreground text-sm'>
@@ -315,30 +341,44 @@ function PricingDraft(props: {
         error={save.error ?? revisionError}
         onReload={reload}
       />
-      <div className='flex flex-wrap gap-2'>
-        <Input
-          aria-label={t('Search models')}
-          placeholder={t('Search models')}
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className='max-w-sm'
+      {personal ? (
+        <PersonalPricingModelPicker
+          models={models}
+          rules={items}
+          disabled={blocked || save.isPending || !!personalRule.edit}
+          onSelect={personalRule.begin}
         />
-        <Button
-          disabled={blocked || save.isPending}
-          onClick={() => {
-            setCreating(true)
-            setEditing({ model: '', ratio: '1', channel_ids: [] })
-          }}
-        >
-          {t('Add model')}
-        </Button>
-      </div>
+      ) : (
+        <div className='flex flex-wrap gap-2'>
+          <Input
+            aria-label={t('Search models')}
+            placeholder={t('Search models')}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className='max-w-sm'
+          />
+          <Button
+            disabled={blocked || save.isPending}
+            onClick={() => {
+              setCreating(true)
+              setEditing({ model: '', ratio: '1', channel_ids: [] })
+            }}
+          >
+            {t('Add model')}
+          </Button>
+        </div>
+      )}
       <PricingRulesTable
-        rules={filteredRules}
+        rules={personal ? draft : filteredRules}
         candidates={props.data.candidates}
         disabled={blocked || save.isPending}
-        onEdit={editRule}
+        emptyDescription={
+          personal ? t('Type a model name to add it') : undefined
+        }
+        inlineEdit={personal ? personalRule.edit : undefined}
+        onEdit={personal ? personalRule.begin : editRule}
         onDelete={setDeleting}
+        onToggle={props.subject === 'user' ? toggleRule : undefined}
       />
       <ConfirmDialog
         open={deleting !== null}
@@ -351,9 +391,7 @@ function PricingDraft(props: {
             ? t(
                 'Removing this rule restores organization or system pricing on its channels. Changes take effect after saving.'
               )
-            : t(
-                'Removing this rule restores system pricing. Personal overrides are preserved. Changes take effect after saving.'
-              )
+            : t('The organization default discount is removed after saving.')
         }
         handleConfirm={() => {
           setItems((old) => old.filter((r) => r.model !== deleting))
@@ -361,17 +399,25 @@ function PricingDraft(props: {
         }}
       />
       <Button
-        disabled={blocked || !dirty || save.isPending || editing !== null}
-        onClick={() => save.mutate()}
+        disabled={
+          blocked ||
+          !dirty ||
+          save.isPending ||
+          editing !== null ||
+          (personal && !personalRule.isValid)
+        }
+        onClick={() => save.mutate(draft)}
       >
         {save.isPending ? t('Saving...') : t('Save changes')}
       </Button>
       {dirty && <p role='status'>{t('Unsaved changes')}</p>}
+      {personal && !dirty && save.isSuccess && (
+        <p role='status'>{t('Saved successfully')}</p>
+      )}
       {editing && (
         <PricingRuleDialog
           key={`${creating}:${editing.model}`}
           rule={editing}
-          subject={props.subject}
           configuredRules={items}
           onSelectConfigured={editRule}
           creating={creating}
@@ -393,52 +439,14 @@ function PricingDraft(props: {
           }}
         />
       )}
-      {!blocked && (
+      {!blocked && !personal && (
         <section className='space-y-2'>
-          <h4 className='font-medium'>
-            {props.subject === 'organization' && !member
-              ? t('Organization preview without personal overrides')
-              : t('Effective pricing preview')}
-          </h4>
-          {props.subject === 'organization' && (
-            <Combobox
-              options={(props.data.members ?? []).map((m) => ({
-                value: String(m.id),
-                label: `${m.name} #${m.id}`,
-              }))}
-              value={member}
-              onValueChange={(value) => setMember(value ?? '')}
-              placeholder={t('Select member for personal overrides')}
-            />
-          )}
-          {member && (
-            <Button variant='ghost' onClick={() => setMember('')}>
-              {t('Organization preview without personal overrides')}
-            </Button>
-          )}
+          <h4 className='font-medium'>{t('Organization default discounts')}</h4>
           <ResellerQueryStatus
             pending={preview.isPending}
-            error={preview.isError && !memberChanged}
+            error={preview.isError}
             retry={() => void preview.refetch()}
           />
-          {memberChanged && (
-            <div role='alert' className='space-y-2'>
-              <p>
-                {t(
-                  'This user is no longer a current organization member. Select another member.'
-                )}
-              </p>
-              <Button
-                variant='outline'
-                onClick={() => {
-                  setMember('')
-                  void props.reload().catch(() => undefined)
-                }}
-              >
-                {t('Select another member')}
-              </Button>
-            </div>
-          )}
           {preview.data && !preview.isError && (
             <>
               <div className='text-muted-foreground space-y-1 text-sm'>
@@ -446,15 +454,6 @@ function PricingDraft(props: {
                   <ResellerTimestamp value={preview.data.generated_at} />
                 </p>
                 <p>
-                  <span>
-                    {t('User revision {{revision}}', {
-                      revision: formatNumber(
-                        preview.data.user_revision,
-                        locale
-                      ),
-                    })}
-                  </span>{' '}
-                  ·{' '}
                   <span>
                     {t('Organization revision {{revision}}', {
                       revision: formatNumber(
@@ -471,11 +470,6 @@ function PricingDraft(props: {
                     })}
                   </p>
                 )}
-                <p>
-                  {t(
-                    'Preview explains the current configuration; future requests may use a different channel or version.'
-                  )}
-                </p>
               </div>
               <StaticDataTable
                 data={preview.data.rows}

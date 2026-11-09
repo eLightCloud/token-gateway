@@ -1,0 +1,5 @@
+{{define "notice"}}{{template "email-open" .}}
+<h1>{{.Subject}}</h1><p style="font-size:16px;font-weight:600">系统消息 · System message</p><p style="color:#64748b">请查看本次通知的具体内容。</p>
+<div class="message-body" style="padding:16px 0">{{.Body}}</div>
+<p style="font-size:12px;color:#64748b;margin-top:24px">如需处理，请通过应用内对应页面查看最新状态。</p>
+{{template "email-close" .}}{{end}}

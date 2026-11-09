@@ -20,7 +20,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useEffect, useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
-import { z } from 'zod'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Dialog } from '@/components/dialog'
@@ -31,19 +30,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 import type { PricingRule, PricingWorkspace } from './api'
+import { ruleSchema } from './lib/rule-schema'
 import { PricingRatioLabel } from './ratio-label'
-
-const ruleSchema = z.object({
-  model: z.string().min(1),
-  ratio: z
-    .string()
-    .regex(/^(?:[0-4](?:\.[0-9]{1,2})?|5(?:\.0{1,2})?)$/)
-    .refine((value) => Number(value) > 0),
-  channel_ids: z
-    .array(z.number().int().positive())
-    .min(1)
-    .refine((ids) => new Set(ids).size === ids.length),
-})
 
 export function PricingRuleDialog(props: {
   rule: PricingRule
@@ -55,7 +43,6 @@ export function PricingRuleDialog(props: {
   onDirtyChange: (dirty: boolean) => void
   configuredRules?: PricingRule[]
   onSelectConfigured?: (rule: PricingRule) => void
-  subject?: 'user' | 'organization'
 }) {
   const { t } = useTranslation()
   const form = useForm<PricingRule>({
@@ -226,19 +213,12 @@ export function PricingRuleDialog(props: {
             />
             <p id='realtime-ratio-hint'>
               {t(
-                'A ratio of 1 explicitly charges the base price on selected channels. Delete the rule to inherit.'
+                'A ratio of 1 uses the base price on selected channels when the rule is enabled.'
               )}
             </p>
             {ruleSchema.shape.ratio.safeParse(ratio).success && (
               <p role='status'>
                 <PricingRatioLabel ratio={ratio} />
-              </p>
-            )}
-            {props.subject === 'user' && (
-              <p>
-                {t(
-                  'This user rule overrides organization pricing only on the selected channels.'
-                )}
               </p>
             )}
           </div>

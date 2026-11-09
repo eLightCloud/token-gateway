@@ -77,7 +77,7 @@ export function EmailProviderFields(props: {
       {props.microsoft && (
         <p className='text-muted-foreground text-sm md:col-span-2'>
           {t(
-            'Microsoft 365 international cloud: smtp.office365.com, port 587, verified STARTTLS. SMTP AUTH must be allowed by your tenant.'
+            'Sends through Microsoft Graph. The application needs Mail.Send permission for the sender mailbox.'
           )}
         </p>
       )}

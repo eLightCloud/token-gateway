@@ -16,6 +16,8 @@ import (
 func emailDeliveryError(c *gin.Context, err error) {
 	status, code, message := http.StatusServiceUnavailable, "EMAIL_CONFIG_UNAVAILABLE", common.ErrEmailDeliveryUnavailable.Error()
 	switch {
+	case errors.Is(err, model.ErrEmailDeliveryEncryptionUnavailable):
+		code, message = "EMAIL_ENCRYPTION_UNAVAILABLE", "Email credentials cannot be decrypted. Restore the original EMAIL_DELIVERY_STORAGE_KEY on every server and retry."
 	case errors.Is(err, model.ErrEmailDeliveryConflict):
 		status, code, message = http.StatusConflict, "EMAIL_CONFIG_CONFLICT", model.ErrEmailDeliveryConflict.Error()
 	case errors.Is(err, model.ErrEmailDeliveryInvalid):
@@ -87,7 +89,7 @@ func TestEmailDeliverySettings(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer cancel()
-	report, sendErr := common.DeliverConfiguredEmail(ctx, config, "Email delivery test", ""+intent.Recipient, "<p>This is a test of the system email delivery settings.</p>")
+	report, sendErr := common.DeliverNotificationEmail(ctx, config, common.EmailDeliveryTest, "Email delivery test", ""+intent.Recipient, "<p>This is a test of the system email delivery settings.</p>")
 	recordManageAudit(c, "email.delivery.test", map[string]any{"revision": config.Revision, "code": report.Code, "request_id": report.RequestID, "success": sendErr == nil})
 	// A completed diagnostic returns its safe report even when the provider rejected it.
 	common.ApiSuccess(c, report)

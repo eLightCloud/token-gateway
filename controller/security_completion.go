@@ -29,7 +29,7 @@ func StartSecurityEmail(c *gin.Context) {
 		writeSecurityCompletionError(c, service.ErrAuthTokenInvalid)
 		return
 	}
-	if err := service.SendSecurityCompletionMail(identity.UserID, model.SecurityEmailPurpose, &identity); err != nil {
+	if err := service.SendSecurityCompletionMail(identity.UserID, model.SecurityEmailPurpose, &identity, securityMailLanguage(c)); err != nil {
 		writeSecurityCompletionError(c, err)
 		return
 	}
@@ -87,7 +87,7 @@ func FinishAccountActivation(c *gin.Context) {
 		writeSecurityCompletionError(c, err)
 		return
 	}
-	action, event := "security.account.activated", "Your account was activated and a password was set"
+	action, event := "security.account.activated", "Your account password was set. Complete authenticator setup when you sign in."
 	if purpose == model.SecurityPasswordPurpose {
 		action, event = "security.password.recovered", "Your password was reset; your authenticator remains required"
 	}
@@ -138,7 +138,7 @@ func ResendAccountActivation(c *gin.Context) {
 			return
 		}
 	}
-	if err := service.SendSecurityCompletionMail(userID, model.SecurityActivationPurpose, nil); err != nil {
+	if err := service.SendSecurityCompletionMail(userID, model.SecurityActivationPurpose, nil, securityMailLanguage(c)); err != nil {
 		writeSecurityCompletionError(c, err)
 		return
 	}
@@ -232,7 +232,7 @@ func sendSecurityPasswordRecovery(c *gin.Context) bool {
 	if model.SecurityCompletionRequired("") {
 		// Keep SMTP latency and account existence out of the public response. The
 		// request owns no identity grant; only a delivered one-time token can act.
-		go deliverSecurityPasswordRecovery(email)
+		go deliverSecurityPasswordRecovery(email, securityMailLanguage(c))
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 		return true
 	}
@@ -240,7 +240,7 @@ func sendSecurityPasswordRecovery(c *gin.Context) bool {
 	if err != nil || !model.SecurityCompletionRequired(user.ResellerKind) {
 		return false
 	}
-	go deliverSecurityPasswordRecovery(email)
+	go deliverSecurityPasswordRecovery(email, securityMailLanguage(c))
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 	return true
 }
@@ -292,7 +292,7 @@ func AdminRequestEmailChange(c *gin.Context) {
 		writeSecurityCompletionError(c, err)
 		return
 	}
-	if err := service.DeliverSecurityMail(targetID, model.SecurityEmailChangePurpose, email, token); err != nil {
+	if err := service.DeliverSecurityMail(targetID, model.SecurityEmailChangePurpose, email, token, securityMailLanguage(c)); err != nil {
 		writeSecurityCompletionError(c, err)
 		return
 	}
@@ -359,7 +359,7 @@ func writeSecurityCompletionError(c *gin.Context, err error) {
 	c.JSON(status, gin.H{"success": false, "code": code, "message": message})
 }
 
-func deliverSecurityPasswordRecovery(email string) {
+func deliverSecurityPasswordRecovery(email, lang string) {
 	defer func() {
 		if recover() != nil {
 			common.SysError("password recovery mail worker failed")
@@ -367,7 +367,7 @@ func deliverSecurityPasswordRecovery(email string) {
 	}()
 	user, err := model.GetUniqueUserByEmail(email)
 	if err == nil {
-		if err := service.SendSecurityCompletionMail(user.Id, model.SecurityPasswordPurpose, nil); err != nil {
+		if err := service.SendSecurityCompletionMail(user.Id, model.SecurityPasswordPurpose, nil, lang); err != nil {
 			common.SysError("password recovery email delivery failed user_id=" + strconv.Itoa(user.Id))
 		}
 	}

@@ -53,6 +53,7 @@ import { Route as AuthenticatedPlaygroundIndexRouteImport } from './routes/_auth
 import { Route as AuthenticatedProfileIndexRouteImport } from './routes/_authenticated/profile/index'
 import { Route as AuthenticatedReconciliationIndexRouteImport } from './routes/_authenticated/reconciliation/index'
 import { Route as AuthenticatedRedemptionCodesIndexRouteImport } from './routes/_authenticated/redemption-codes/index'
+import { Route as AuthenticatedResellerAccountRouteImport } from './routes/_authenticated/reseller/account'
 import { Route as AuthenticatedResellerBillingRouteImport } from './routes/_authenticated/reseller/billing'
 import { Route as AuthenticatedResellerProcurementRouteImport } from './routes/_authenticated/reseller/procurement'
 import { Route as AuthenticatedSecurityIndexRouteImport } from './routes/_authenticated/security/index'
@@ -323,6 +324,12 @@ const AuthenticatedRedemptionCodesIndexRoute =
     path: '/redemption-codes/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedResellerAccountRoute =
+  AuthenticatedResellerAccountRouteImport.update({
+    id: '/reseller/account',
+    path: '/reseller/account',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedResellerBillingRoute =
   AuthenticatedResellerBillingRouteImport.update({
     id: '/reseller/billing',
@@ -566,6 +573,7 @@ export interface FileRoutesByFullPath {
   '/organization/logs': typeof AuthenticatedOrganizationLogsRoute
   '/organization/members': typeof AuthenticatedOrganizationMembersRoute
   '/organization/usage': typeof AuthenticatedOrganizationUsageRoute
+  '/reseller/account': typeof AuthenticatedResellerAccountRoute
   '/reseller/billing': typeof AuthenticatedResellerBillingRoute
   '/reseller/procurement': typeof AuthenticatedResellerProcurementRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
@@ -644,6 +652,7 @@ export interface FileRoutesByTo {
   '/organization/logs': typeof AuthenticatedOrganizationLogsRoute
   '/organization/members': typeof AuthenticatedOrganizationMembersRoute
   '/organization/usage': typeof AuthenticatedOrganizationUsageRoute
+  '/reseller/account': typeof AuthenticatedResellerAccountRoute
   '/reseller/billing': typeof AuthenticatedResellerBillingRoute
   '/reseller/procurement': typeof AuthenticatedResellerProcurementRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
@@ -726,6 +735,7 @@ export interface FileRoutesById {
   '/_authenticated/organization/logs': typeof AuthenticatedOrganizationLogsRoute
   '/_authenticated/organization/members': typeof AuthenticatedOrganizationMembersRoute
   '/_authenticated/organization/usage': typeof AuthenticatedOrganizationUsageRoute
+  '/_authenticated/reseller/account': typeof AuthenticatedResellerAccountRoute
   '/_authenticated/reseller/billing': typeof AuthenticatedResellerBillingRoute
   '/_authenticated/reseller/procurement': typeof AuthenticatedResellerProcurementRoute
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
@@ -807,6 +817,7 @@ export interface FileRouteTypes {
     | '/organization/logs'
     | '/organization/members'
     | '/organization/usage'
+    | '/reseller/account'
     | '/reseller/billing'
     | '/reseller/procurement'
     | '/usage-logs/$section'
@@ -885,6 +896,7 @@ export interface FileRouteTypes {
     | '/organization/logs'
     | '/organization/members'
     | '/organization/usage'
+    | '/reseller/account'
     | '/reseller/billing'
     | '/reseller/procurement'
     | '/usage-logs/$section'
@@ -966,6 +978,7 @@ export interface FileRouteTypes {
     | '/_authenticated/organization/logs'
     | '/_authenticated/organization/members'
     | '/_authenticated/organization/usage'
+    | '/_authenticated/reseller/account'
     | '/_authenticated/reseller/billing'
     | '/_authenticated/reseller/procurement'
     | '/_authenticated/usage-logs/$section'
@@ -1341,6 +1354,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRedemptionCodesIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/reseller/account': {
+      id: '/_authenticated/reseller/account'
+      path: '/reseller/account'
+      fullPath: '/reseller/account'
+      preLoaderRoute: typeof AuthenticatedResellerAccountRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/reseller/billing': {
       id: '/_authenticated/reseller/billing'
       path: '/reseller/billing'
@@ -1693,6 +1713,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedOrganizationLogsRoute: typeof AuthenticatedOrganizationLogsRoute
   AuthenticatedOrganizationMembersRoute: typeof AuthenticatedOrganizationMembersRoute
   AuthenticatedOrganizationUsageRoute: typeof AuthenticatedOrganizationUsageRoute
+  AuthenticatedResellerAccountRoute: typeof AuthenticatedResellerAccountRoute
   AuthenticatedResellerBillingRoute: typeof AuthenticatedResellerBillingRoute
   AuthenticatedResellerProcurementRoute: typeof AuthenticatedResellerProcurementRoute
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
@@ -1733,6 +1754,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedOrganizationLogsRoute: AuthenticatedOrganizationLogsRoute,
   AuthenticatedOrganizationMembersRoute: AuthenticatedOrganizationMembersRoute,
   AuthenticatedOrganizationUsageRoute: AuthenticatedOrganizationUsageRoute,
+  AuthenticatedResellerAccountRoute: AuthenticatedResellerAccountRoute,
   AuthenticatedResellerBillingRoute: AuthenticatedResellerBillingRoute,
   AuthenticatedResellerProcurementRoute: AuthenticatedResellerProcurementRoute,
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,

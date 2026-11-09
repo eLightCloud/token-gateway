@@ -127,6 +127,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		if relayFormat != types.RelayFormatOpenAIRealtime {
 			perfmetrics.RecordRelayResult(c.Request.Context(), relayInfo, resultErr)
+			service.RecordOperationsRoutingAttempts(c)
 		}
 		if recovered != nil {
 			panic(recovered)

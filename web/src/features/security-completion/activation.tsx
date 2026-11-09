@@ -16,28 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
-import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
-import { z } from 'zod'
+import { toast } from 'sonner'
 
-import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@/components/ui/form'
 import { encryptPassword } from '@/features/auth/lib/password-encryption'
 import type { AccountSecurityResult } from '@/features/profile/types'
 import { api } from '@/lib/api'
-import { accountPasswordSchema } from '@/lib/password-policy'
 import {
   AuthOperationError,
   authRequestOptions,
@@ -45,13 +33,11 @@ import {
 } from '@/lib/secure-verification'
 
 import { confirmSecurityEmail } from './api'
-
-const schema = z.object({
-  password: accountPasswordSchema,
-})
+import { PasswordSetupForm } from './password-setup-form'
 
 export function AccountActivation() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [link] = useState(() => {
     const params = new URLSearchParams(window.location.hash.slice(1))
     window.history.replaceState(null, '', window.location.pathname)
@@ -61,11 +47,13 @@ export function AccountActivation() {
       purpose: params.get('purpose'),
     }
   })
-  const form = useForm<z.infer<typeof schema>>({
-    resolver: zodResolver(schema),
-    defaultValues: { password: '' },
-  })
+  const confirmsEmail =
+    link.purpose === 'security_email' ||
+    link.purpose === 'security_email_change'
+  const resetsPassword = link.purpose === 'security_password_reset'
   const complete = useMutation({
+    meta: { errorToast: false },
+    gcTime: 0,
     mutationFn: async (password: string) => {
       if (link.purpose === 'security_email') {
         return confirmSecurityEmail(link.token)
@@ -81,13 +69,36 @@ export function AccountActivation() {
       const encrypted = await encryptPassword(password)
       return authResult<AccountSecurityResult>(
         api.post(
-          link.purpose === 'security_password_reset'
+          resetsPassword
             ? '/api/security/password/reset'
             : '/api/security/activation',
           { ...link, ...encrypted },
           { ...authRequestOptions, skipAuthRefresh: true }
         )
       )
+    },
+    onSuccess: async (result) => {
+      if (confirmsEmail) return
+
+      toast.success(
+        resetsPassword
+          ? t(
+              'Password reset completed. Sign in with your password and authenticator.'
+            )
+          : t('Password set successfully')
+      )
+      if (result?.notification_warning) {
+        toast.warning(
+          t(
+            'The change succeeded, but the notification email could not be sent.'
+          )
+        )
+      }
+      await navigate({
+        to: '/sign-in',
+        search: { passwordSetupComplete: true },
+        replace: true,
+      })
     },
   })
   return (
@@ -102,8 +113,7 @@ export function AccountActivation() {
       )}
       {link.token &&
         !complete.isSuccess &&
-        (link.purpose === 'security_email' ||
-        link.purpose === 'security_email_change' ? (
+        (confirmsEmail ? (
           <Button
             disabled={complete.isPending}
             onClick={() => complete.mutate('')}
@@ -111,33 +121,10 @@ export function AccountActivation() {
             {t('Verify Email')}
           </Button>
         ) : (
-          <Form {...form}>
-            <form
-              className='space-y-4'
-              onSubmit={form.handleSubmit((values) =>
-                complete.mutate(values.password)
-              )}
-            >
-              <FormField
-                control={form.control}
-                name='password'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('New Password')}</FormLabel>
-                    <FormControl>
-                      <PasswordInput {...field} autoComplete='new-password' />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <Button type='submit' disabled={complete.isPending}>
-                {link.purpose === 'security_password_reset'
-                  ? t('Reset Password')
-                  : t('Activate account')}
-              </Button>
-            </form>
-          </Form>
+          <PasswordSetupForm
+            pending={complete.isPending}
+            onConfirm={complete.mutate}
+          />
         ))}
       {complete.isError && (
         <p role='alert'>
@@ -147,25 +134,22 @@ export function AccountActivation() {
             : t('This link is invalid or has expired. Request a new link.')}
         </p>
       )}
-      {complete.isSuccess && (
+      {confirmsEmail && complete.isSuccess && (
         <p role='status'>
-          {link.purpose === 'security_password_reset'
-            ? t(
-                'Password reset completed. Sign in with your password and authenticator.'
-              )
-            : t('Email verified. Continue with security setup.')}
+          {t('Email verified. Continue with security setup.')}
         </p>
       )}
-      {complete.data?.notification_warning && (
+      {confirmsEmail && complete.data?.notification_warning && (
         <p role='alert'>
           {t(
             'The change succeeded, but the notification email could not be sent.'
           )}
         </p>
       )}
-      {link.purpose === 'security_email' ? (
+      {link.purpose === 'security_email' && (
         <Link to='/security-setup'>{t('Continue')}</Link>
-      ) : (
+      )}
+      {link.purpose === 'security_email_change' && (
         <Link to='/sign-in'>{t('Sign In')}</Link>
       )}
     </main>

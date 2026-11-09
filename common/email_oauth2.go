@@ -31,30 +31,100 @@ func (t microsoftTokenTransport) RoundTrip(r *http.Request) (*http.Response, err
 	return response, err
 }
 
-var microsoftTokens struct {
-	sync.Mutex
+// A refresh is shared only while callers are waiting. Its HTTP request is cancelled
+// when the last caller leaves, without letting one caller cancel other callers.
+type microsoftTokenRefresh struct {
 	fingerprint [32]byte
-	source      oauth2.TokenSource
+	done        chan struct{}
+	cancel      context.CancelFunc
+	waiters     int
+	finished    bool
+	token       *oauth2.Token
+	err         error
 }
 
-func microsoftEmailToken(config EmailDeliveryConfig, refresh bool) (string, error) {
-	// Serialize refreshes and cache only one active configuration; old requests keep their own token.
-	microsoftTokens.Lock()
-	defer microsoftTokens.Unlock()
-	fields, _ := Marshal(config)
+var microsoftTokens struct {
+	sync.Mutex
+	revision    int64
+	fingerprint [32]byte
+	token       *oauth2.Token
+	refresh     *microsoftTokenRefresh
+}
+
+func microsoftEmailToken(ctx context.Context, config EmailDeliveryConfig, forceRefresh bool) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	fields, err := Marshal(config)
+	if err != nil {
+		return "", ErrEmailDeliveryUnavailable
+	}
 	fingerprint := sha256.Sum256(append(fields, []byte(config.Options.Microsoft.ClientSecret)...))
-	if refresh || microsoftTokens.source == nil || microsoftTokens.fingerprint != fingerprint {
-		client := &http.Client{Timeout: 15 * time.Second, Transport: microsoftTokenTransport{http.DefaultTransport}, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-		ctx := context.WithValue(context.Background(), oauth2.HTTPClient, client)
-		settings := config.Options.Microsoft
-		credentials := clientcredentials.Config{ClientID: settings.ClientID, ClientSecret: settings.ClientSecret, TokenURL: "https://login.microsoftonline.com/" + settings.TenantID + "/oauth2/v2.0/token", Scopes: []string{"https://outlook.office365.com/.default"}, AuthStyle: oauth2.AuthStyleInParams}
-		microsoftTokens.source = credentials.TokenSource(ctx)
-		microsoftTokens.fingerprint = fingerprint
+	microsoftTokens.Lock()
+	if config.Revision >= microsoftTokens.revision && microsoftTokens.fingerprint != fingerprint {
+		microsoftTokens.revision, microsoftTokens.fingerprint, microsoftTokens.token = config.Revision, fingerprint, nil
 	}
-	token, err := microsoftTokens.source.Token()
+	if forceRefresh && microsoftTokens.fingerprint == fingerprint {
+		microsoftTokens.token = nil
+	}
+	if microsoftTokens.fingerprint == fingerprint && microsoftTokens.token.Valid() {
+		token := microsoftTokens.token.AccessToken
+		microsoftTokens.Unlock()
+		return token, nil
+	}
+	pending := microsoftTokens.refresh
+	if pending == nil || pending.fingerprint != fingerprint {
+		refreshContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		pending = &microsoftTokenRefresh{fingerprint: fingerprint, done: make(chan struct{}), cancel: cancel}
+		microsoftTokens.refresh = pending
+		go func() {
+			token, requestErr := requestMicrosoftEmailToken(refreshContext, config)
+			microsoftTokens.Lock()
+			pending.token, pending.err, pending.finished = token, requestErr, true
+			if microsoftTokens.refresh == pending {
+				if requestErr == nil && microsoftTokens.fingerprint == fingerprint {
+					microsoftTokens.token = token
+				}
+				microsoftTokens.refresh = nil
+			}
+			close(pending.done)
+			microsoftTokens.Unlock()
+			cancel()
+		}()
+	}
+	pending.waiters++
+	microsoftTokens.Unlock()
+	defer func() {
+		microsoftTokens.Lock()
+		pending.waiters--
+		if pending.waiters == 0 && !pending.finished {
+			pending.cancel()
+			if microsoftTokens.refresh == pending {
+				microsoftTokens.refresh = nil
+			}
+		}
+		microsoftTokens.Unlock()
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-pending.done:
+		if pending.err != nil {
+			return "", pending.err
+		}
+		return pending.token.AccessToken, nil
+	}
+}
+
+func requestMicrosoftEmailToken(ctx context.Context, config EmailDeliveryConfig) (*oauth2.Token, error) {
+	client := &http.Client{Timeout: 15 * time.Second, Transport: microsoftTokenTransport{http.DefaultTransport}, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, client)
+	settings := config.Options.Microsoft
+	credentials := clientcredentials.Config{ClientID: settings.ClientID, ClientSecret: settings.ClientSecret, TokenURL: "https://login.microsoftonline.com/" + settings.TenantID + "/oauth2/v2.0/token", Scopes: []string{microsoftGraphOrigin + "/.default"}, AuthStyle: oauth2.AuthStyleInParams}
+	token, err := credentials.Token(ctx)
 	if err != nil || token == nil || token.AccessToken == "" || !strings.EqualFold(token.TokenType, "Bearer") || token.Expiry.IsZero() || time.Until(token.Expiry) <= 0 {
-		// oauth2.RetrieveError may contain echoed credentials or a usable token. Never propagate it.
-		return "", errors.New("Microsoft token request failed. Check application credentials, consent and network access.")
+		// RetrieveError can contain echoed credentials or usable tokens. Never propagate it.
+		return nil, errors.New("Microsoft token request failed. Check application credentials, consent and network access.")
 	}
-	return token.AccessToken, nil
+	return token, nil
 }

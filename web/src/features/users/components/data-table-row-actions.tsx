@@ -1,3 +1,4 @@
+import { getRouteApi } from '@tanstack/react-router'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -45,10 +46,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import {
-  UserPersonalPricingAction,
-  UserPersonalPricingDialog,
-} from '@/features/reseller/user-pricing-action'
 import { SecurityRecoveryDialog } from '@/features/security-completion/recovery-dialog'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
 import { hasPermission } from '@/lib/admin-permissions'
@@ -85,7 +82,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [emailChangeOpen, setEmailChangeOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
-  const [personalPricingOpen, setPersonalPricingOpen] = useState(false)
+  const navigate = getRouteApi('/_authenticated/users/').useNavigate()
 
   const handleEdit = () => {
     setCurrentRow(user)
@@ -142,7 +139,15 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         contentClassName='w-48'
       >
         {!user.reseller_kind && (
-          <UserPersonalPricingAction onOpen={() => setPersonalPricingOpen(true)} />
+          <DropdownMenuItem
+            onSelect={() =>
+              void navigate({
+                search: (search) => ({ ...search, pricingUserId: user.id }),
+              })
+            }
+          >
+            {t('Personal ratio')}
+          </DropdownMenuItem>
         )}
         {isDisabled ? (
           <DropdownMenuItem onClick={() => handleManage('enable')}>
@@ -260,11 +265,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         )}
       </DataTableRowActionMenu>
 
-      <UserPersonalPricingDialog
-        userID={user.id}
-        open={personalPricingOpen}
-        onOpenChange={setPersonalPricingOpen}
-      />
       <SecurityRecoveryDialog
         key={`passkey-${user.id}`}
         passkeyRecovery
