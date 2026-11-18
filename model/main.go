@@ -413,6 +413,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := migrateCustomerSecurityCompletion(DB); err != nil {
+		return err
+	}
 	if err := MigrateOperations(DB); err != nil {
 		return err
 	}

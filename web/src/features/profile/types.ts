@@ -36,6 +36,7 @@ export interface ApiResponse<T = unknown> {
  */
 export interface UserProfile {
   security_completion_required?: boolean
+  mfa_required?: boolean
   reseller_kind?: string
   has_password?: boolean
   permissions?: UserPermissions

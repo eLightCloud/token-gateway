@@ -491,6 +491,7 @@ func buildSelfUserData(user *model.User) map[string]any {
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
 	return map[string]any{
 		"security_completion_required": model.SecurityCompletionRequired(user.ResellerKind),
+		"mfa_required":                 model.SecurityMFARequired(user.ResellerKind),
 		"reseller_kind":                user.ResellerKind,
 		"id":                           user.Id,
 		"username":                     user.Username,
@@ -766,6 +767,10 @@ func UpdateSelf(c *gin.Context) {
 	var requestData map[string]any
 	if err := common.DecodeJson(c.Request.Body, &requestData); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if !middleware.ResellerSelfProfileWriteAllowed(c, requestData) {
+		resellerResponse(c, nil, model.ErrResellerForbidden)
 		return
 	}
 
@@ -1404,6 +1409,10 @@ func UpdateUserSetting(c *gin.Context) {
 		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
 		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
 		RecordIpLog:                      req.RecordIpLog,
+	}
+	if user.ResellerKind == "agent" {
+		settings.Language = existingSettings.Language
+		settings.SidebarModules = existingSettings.SidebarModules
 	}
 
 	// 如果是webhook类型,添加webhook相关设置

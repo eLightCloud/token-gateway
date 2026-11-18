@@ -25,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/alicebob/miniredis/v2"
@@ -89,9 +90,12 @@ func setupResponsesWSRequestTest(t *testing.T) (*model.User, *model.Token) {
 		require.NoError(t, sqlDB.Close())
 	})
 	require.NoError(t, db.AutoMigrate(&model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.User{}, &model.Token{}, &model.TaskSettlementJournal{}, &model.SystemTask{}, &model.SystemTaskLock{}))
-	// The shared in-memory limiter outlives each database fixture. Give every
-	// user a separate quota bucket, including when the tests run with -count.
-	user := &model.User{Id: 5062000 + int(responsesWSTestUserSequence.Add(1)), Username: "responses-ws-user", Status: common.UserStatusEnabled, Group: "default", Quota: 1000, AuthVersion: 1}
+	user := &model.User{Username: "responses-ws-user", Status: common.UserStatusEnabled, Group: "default", Quota: 1000, AuthVersion: 1}
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+		// Separate quota buckets across temporary databases: the in-memory
+		// limiter outlives each fixture.
+		user.Id = 5062000 + int(responsesWSTestUserSequence.Add(1))
+	}
 	require.NoError(t, db.Create(user).Error)
 	token := &model.Token{UserId: user.Id, Key: "responseswstoken", Status: common.TokenStatusEnabled, ExpiredTime: -1, RemainQuota: 100}
 	require.NoError(t, db.Create(token).Error)
@@ -410,7 +414,7 @@ func newResponsesWSBillingTest(t *testing.T, expression string, handle func(*web
 	})
 	engine.POST("/v1/responses", middleware.TokenAuth(), middleware.ModelRequestRateLimit(), middleware.Distribute(), func(c *gin.Context) {
 		defer func() { fixture.httpDone <- struct{}{} }()
-		c.Set(common.RequestIdKey, "responses-http-billing")
+		c.Set(common.RequestIdKey, fmt.Sprintf("responses-http-billing-%d", user.Id))
 		Relay(c, types.RelayFormatOpenAIResponses)
 	})
 	fixture.engine = engine
@@ -1324,4 +1328,43 @@ func TestResponsesWebSocketPreRoutingRejectionsFollowHealthClassification(t *tes
 			assert.Zero(t, successes)
 		})
 	}
+}
+
+func TestResponsesWebSocketPersistsDispatchForEachPersonalRequest(t *testing.T) {
+	secondReceived := make(chan struct{})
+	finishSecond := make(chan struct{})
+	fixture := newResponsesWSBillingTest(t, `tier("request", fixed(0.002))`, func(ws *websocket.Conn, _ *http.Request) {
+		for index := 1; index <= 2; index++ {
+			if _, _, err := ws.ReadMessage(); !assert.NoError(t, err) {
+				return
+			}
+			if index == 2 {
+				close(secondReceived)
+				<-finishSecond
+			}
+			terminal := fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_%d","status":"completed","usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}`, index)
+			if !assert.NoError(t, ws.WriteMessage(websocket.TextMessage, []byte(terminal))) {
+				return
+			}
+		}
+		_, _, _ = ws.ReadMessage()
+	})
+	defer close(finishSecond)
+	seedPersonalRelayAccount(t, fixture, "0.8", 2500)
+	require.NoError(t, fixture.client.SetReadDeadline(time.Now().Add(5*time.Second)))
+	require.NoError(t, fixture.client.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"ws-billing","input":"first"}`)))
+	_, frame, err := fixture.client.ReadMessage()
+	require.NoError(t, err)
+	require.Contains(t, string(frame), `"id":"resp_1"`)
+	require.NoError(t, fixture.client.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"ws-billing","input":"second","previous_response_id":"resp_1"}`)))
+	select {
+	case <-secondReceived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream did not receive the second request")
+	}
+	assert.EqualValues(t, 1, fixture.connections.Load())
+	var pending model.ResellerRequest
+	require.NoError(t, model.DB.Where("customer_user_id = ? AND state <> ?", fixture.user.Id, "settled").Take(&pending).Error)
+	require.Equal(t, "outcome_unknown", pending.State, "an upstream that has received the frame must not leave the request refundable as unsent")
+	assert.ErrorIs(t, service.RecoverUnsentPersonalRequest(context.Background(), pending.ID), model.ErrResellerConflict)
 }

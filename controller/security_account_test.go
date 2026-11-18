@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -639,6 +640,99 @@ func TestSecurityAccountEmailConfirmationAndAudit(t *testing.T) {
 			assert.Contains(t, string(encoded), "user.binding_bind")
 			assert.NotContains(t, string(encoded), flow.FlowToken)
 			assert.NotContains(t, string(encoded), newCode)
+		})
+	}
+}
+
+func TestResellerCustomerPasswordReset(t *testing.T) {
+	agent, identity := setupSecurityEnrollmentTest(t)
+	db := model.DB
+	require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}))
+	mailbox := newSecurityMailbox(t)
+	require.NoError(t, db.Model(agent).Updates(map[string]any{
+		"reseller_kind": "agent",
+		"email":         "reset-agent@example.com",
+	}).Error)
+	require.NoError(t, db.Create(&model.UserSecurityState{UserID: agent.Id, VerifiedEmail: "reset-agent@example.com"}).Error)
+	require.NoError(t, db.Create(&model.TwoFA{UserId: agent.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}).Error)
+	require.NoError(t, db.Create(&model.ResellerIdentity{UserID: agent.Id, Kind: "agent", Activation: "active"}).Error)
+	require.NoError(t, db.Create(&model.ResellerAccount{UserID: agent.Id, Enabled: true}).Error)
+	require.NoError(t, model.PublishUserAuthCache(agent.Id))
+	agentToken, _, err := service.IssueAccessToken(identity)
+	require.NoError(t, err)
+
+	customers := []struct {
+		name       string
+		ownerID    int
+		activation string
+		password   string
+		wantStatus int
+	}{
+		{"foreign", agent.Id + 100, "active", agent.Password, http.StatusNotFound},
+		{"pending", agent.Id, "pending", "", http.StatusBadRequest},
+		{"owned", agent.Id, "active", agent.Password, http.StatusOK},
+	}
+	const path = "/api/reseller/self/customers/:id/password-reset"
+	router := gin.New()
+	router.POST(path, middleware.UserAuth(), SendResellerCustomerPasswordReset)
+	for _, customer := range customers {
+		t.Run(customer.name, func(t *testing.T) {
+			user := model.User{
+				Username: customer.name, Email: customer.name + "@example.com",
+				AffCode: customer.name, Password: customer.password, ResellerKind: "agent_customer",
+				Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AuthVersion: 1,
+			}
+			require.NoError(t, db.Create(&user).Error)
+			require.NoError(t, db.Create(&model.ResellerIdentity{
+				UserID: user.Id, Kind: "agent_customer", AgentUserID: customer.ownerID, Activation: customer.activation,
+			}).Error)
+			post := func() *httptest.ResponseRecorder {
+				url := fmt.Sprintf("/api/reseller/self/customers/%d/password-reset", user.Id)
+				req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(`{"email":"override@example.com","password":"override-password"}`))
+				req.Header.Set("Authorization", "Bearer "+agentToken)
+				req.Header.Set("Content-Type", "application/json")
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, req)
+				return response
+			}
+			response := post()
+			require.Equal(t, customer.wantStatus, response.Code, response.Body.String())
+			mailbox.mutex.Lock()
+			messages := append([]string(nil), mailbox.mail[user.Email]...)
+			overrideCount := len(mailbox.mail["override@example.com"])
+			mailbox.mutex.Unlock()
+			assert.Zero(t, overrideCount)
+			if customer.wantStatus != http.StatusOK {
+				assert.Empty(t, messages)
+				return
+			}
+			require.Len(t, messages, 1)
+			match := regexp.MustCompile(`purpose=security_password_reset&amp;token=([A-Za-z0-9_-]+)`).FindStringSubmatch(messages[0])
+			require.Len(t, match, 2)
+			assert.NotContains(t, response.Body.String(), match[1])
+			assert.Equal(t, http.StatusTooManyRequests, post().Code)
+			require.NoError(t, db.First(&user, user.Id).Error)
+			assert.Equal(t, customer.password, user.Password)
+			require.NoError(t, db.Create(&model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}).Error)
+			session, err := service.CreateLoginSession(user.Id, "2fa", "127.0.0.1", "reset-test")
+			require.NoError(t, err)
+
+			const newPassword = "new-customer-password!42"
+			flow, err := model.GetAuthFlow(match[1], model.AuthFlowMatch{Purpose: model.SecurityPasswordPurpose, UserId: user.Id})
+			require.NoError(t, err)
+			expiresAt := flow.ExpiresAt
+			require.NoError(t, db.Model(flow).Update("expires_at", time.Now().Add(-time.Minute)).Error)
+			require.ErrorIs(t, model.CompleteSecurityMail(user.Id, model.SecurityPasswordPurpose, match[1], newPassword, nil), model.ErrAuthFlowExpired)
+			require.NoError(t, db.Model(flow).Update("expires_at", expiresAt).Error)
+			require.NoError(t, model.CompleteSecurityMail(user.Id, model.SecurityPasswordPurpose, match[1], newPassword, nil))
+			require.ErrorIs(t, model.CompleteSecurityMail(user.Id, model.SecurityPasswordPurpose, match[1], newPassword, nil), model.ErrAuthFlowConsumed)
+			require.NoError(t, db.First(&user, user.Id).Error)
+			assert.True(t, common.ValidatePasswordAndHash(newPassword, user.Password))
+			mfaEnabled, err := model.IsTwoFAEnabled(user.Id)
+			require.NoError(t, err)
+			assert.True(t, mfaEnabled)
+			_, _, err = service.RefreshLoginSession(session.RefreshToken, session.Session.SID, "127.0.0.1", "reset-test")
+			assert.ErrorIs(t, err, service.ErrLoginSessionRevoked)
 		})
 	}
 }

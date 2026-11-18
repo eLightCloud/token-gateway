@@ -20,8 +20,8 @@ func SendSecurityCompletionMail(userID int, purpose string, identity *AuthIdenti
 	if err != nil {
 		return err
 	}
-	if purpose == model.SecurityActivationPurpose && user.ResellerKind == "agent" {
-		return deliverSecurityMail(userID, purpose, email, token, user.Username, lang)
+	if purpose == model.SecurityActivationPurpose && user.ResellerKind != "" {
+		return deliverSecurityMail(userID, purpose, email, token, user.Username, user.ResellerKind, lang)
 	}
 	return DeliverSecurityMail(userID, purpose, email, token, lang)
 }

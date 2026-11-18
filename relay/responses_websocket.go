@@ -285,6 +285,11 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if apiErr != nil {
 			return apiErr
 		}
+		// The upstream connection was already dialed, so this request has
+		// not crossed the dispatch barrier in DoWssRequest.
+		if err := service.MarkPersonalRequestDispatch(info); err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeUpdateDataError, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry(), types.ErrOptionWithHideErrMsg("could not record request dispatch"))
+		}
 		if err := s.writeTarget(websocket.TextMessage, payload); err != nil {
 			state.closeAfter = true
 			return types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
@@ -310,6 +315,9 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 			}
 			service.PinPersonalPricingChannel(c, info)
+			if apiErr = helper.RefreshPersonalRequestQuota(info); apiErr != nil {
+				return apiErr
+			}
 			service.ApplyOrganizationDiscountForChannel(info, channel.Id)
 			if apiErr = service.PrepareOrganizationDiscountReservation(info); apiErr != nil {
 				return apiErr

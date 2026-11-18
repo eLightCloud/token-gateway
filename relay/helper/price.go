@@ -84,7 +84,6 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		return modelPriceHelperTiered(c, info, billingModelName, promptTokens, groupRatioInfo)
 	}
 
-	var preConsumedQuota int
 	var modelRatio float64
 	var completionRatio float64
 	var cacheRatio float64
@@ -100,7 +99,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if err != nil {
 			return hosttypes.PriceData{}, err
 		}
-		preConsumedTokens := float64(promptTokens) * preConsumeMultiplier
+		info.LegacyPreConsumeTokens = float64(promptTokens) * preConsumeMultiplier
 		var success bool
 		var matchName string
 		modelRatio, success, matchName = ratio_setting.GetModelRatio(billingModelName)
@@ -122,14 +121,8 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		imageRatio, _ = ratio_setting.GetImageRatio(billingModelName)
 		audioRatio = ratio_setting.GetAudioRatio(billingModelName)
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(billingModelName)
-		ratio := modelRatio * groupRatioInfo.GroupRatio
-		quota, err := common.QuotaFromFloatStrict(preConsumedTokens * ratio)
-		if err != nil {
-			return hosttypes.PriceData{}, err
-		}
-		preConsumedQuota = quota
 		if _, image := info.Request.(*dto.ImageRequest); image {
-			info.ImageQuotaBeforeGroup = preConsumedTokens * modelRatio
+			info.ImageQuotaBeforeGroup = info.LegacyPreConsumeTokens * modelRatio
 		}
 	} else {
 		if meta.ImagePriceRatio != 0 {
@@ -144,16 +137,13 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 		// if model price or ratio is 0, do not pre-consume quota
 		if groupRatioInfo.GroupRatio == 0 {
-			preConsumedQuota = 0
 			freeModel = true
 		} else if usePrice {
 			if modelPrice == 0 {
-				preConsumedQuota = 0
 				freeModel = true
 			}
 		} else {
 			if modelRatio == 0 {
-				preConsumedQuota = 0
 				freeModel = true
 			}
 		}
@@ -175,7 +165,6 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		CacheCreationRatio:     cacheCreationRatio,
 		CacheCreation5mRatio:   cacheCreationRatio5m,
 		CacheCreation1hRatio:   cacheCreationRatio1h,
-		QuotaToPreConsume:      preConsumedQuota,
 	}
 	if usePrice {
 		for name, ratio := range meta.BillingRatios {
@@ -190,22 +179,12 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if usePrice {
 			priceData.AddOtherRatio("n", float64(count))
 		}
-		if !usePrice {
-			quota, err := common.QuotaFromFloatStrict(priceData.ApplyOtherRatiosToFloat(info.ImageQuotaBeforeGroup * groupRatioInfo.GroupRatio))
-			if err != nil {
-				return hosttypes.PriceData{}, err
-			}
-			priceData.QuotaToPreConsume = quota
-		}
 	}
-	if usePrice {
-		quotaToPreConsume := priceData.ApplyOtherRatiosToFloat(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
-		quota, err := common.QuotaFromFloatStrict(quotaToPreConsume)
-		if err != nil {
-			return hosttypes.PriceData{}, err
-		}
-		priceData.QuotaToPreConsume = quota
+	quota, err := legacyRequestPreConsumeQuota(info, &priceData)
+	if err != nil {
+		return hosttypes.PriceData{}, err
 	}
+	priceData.QuotaToPreConsume = quota
 
 	if common.DebugEnabled {
 		logger.LogDebug(c, "model_price_helper result: %s", priceData.ToSetting())

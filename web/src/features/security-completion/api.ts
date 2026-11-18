@@ -24,6 +24,7 @@ export interface SecurityCompletion {
   required: boolean
   email_verified: boolean
   mfa_enabled: boolean
+  mfa_required?: boolean
   has_password: boolean
   complete: boolean
   kind: string

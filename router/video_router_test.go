@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -25,10 +26,10 @@ func TestGetOpenAIVideoRouteRendersJimengTask(t *testing.T) {
 	common.SQLitePath = t.TempDir() + "/router-video.db"
 	common.IsMasterNode = false
 	common.RedisEnabled = false
-	t.Setenv("SQL_DSN", "")
+	t.Setenv("SQL_DSN", os.Getenv("TEST_VIDEO_SQL_DSN"))
 	require.NoError(t, model.InitDB())
 	database := model.DB
-	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Task{}))
+	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Task{}, &model.ResellerIdentity{}, &model.ResellerAccount{}))
 	t.Cleanup(func() {
 		sqlDB, closeErr := database.DB()
 		require.NoError(t, closeErr)
@@ -148,4 +149,70 @@ func TestGetOpenAIVideoRouteRendersJimengTask(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("legacy route keeps results and hides reseller channel metadata", func(t *testing.T) {
+		fetch := func(taskID string) *httptest.ResponseRecorder {
+			request := httptest.NewRequest(http.MethodGet, "/v1/video/generations/"+taskID, nil)
+			request.Header.Set("Authorization", "Bearer sk-jimengfetch")
+			recorder := httptest.NewRecorder()
+			engine.ServeHTTP(recorder, request)
+			return recorder
+		}
+		ordinary := fetch(task.TaskID)
+		require.Equal(t, http.StatusOK, ordinary.Code, ordinary.Body.String())
+		assert.Contains(t, ordinary.Body.String(), `"channel_id":17`)
+		assert.Contains(t, ordinary.Body.String(), "jimeng-private-1")
+
+		agent := model.User{Username: "jimeng-fetch-agent", AffCode: "fetch-agent", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, ResellerKind: "agent"}
+		require.NoError(t, database.Create(&agent).Error)
+		require.NoError(t, database.Create(&model.ResellerAccount{UserID: agent.Id, Enabled: true}).Error)
+		require.NoError(t, database.Model(&model.User{}).Where("id = ?", task.UserId).Update("reseller_kind", "agent_customer").Error)
+		require.NoError(t, database.Create(&model.ResellerIdentity{UserID: task.UserId, Kind: "agent_customer", AgentUserID: agent.Id, Activation: "active"}).Error)
+
+		failed := *task
+		failed.ID, failed.TaskID, failed.Status = 0, "task_jimeng_failed", model.TaskStatusFailure
+		failed.PrivateData.ResultURL = ""
+		failed.FailReason = "private upstream failure on channel 17"
+		require.NoError(t, database.Create(&failed).Error)
+		legacy := *task
+		legacy.ID, legacy.TaskID = 0, "task_jimeng_legacy"
+		legacy.PrivateData.ResultURL = ""
+		legacy.FailReason = "https://cdn.example/legacy.mp4"
+		require.NoError(t, database.Create(&legacy).Error)
+		stale := legacy
+		stale.ID, stale.TaskID, stale.FailReason = 0, "task_jimeng_stale", failed.FailReason
+		require.NoError(t, database.Create(&stale).Error)
+		foreign := *task
+		foreign.ID, foreign.TaskID, foreign.UserId = 0, "task_jimeng_foreign", agent.Id
+		require.NoError(t, database.Create(&foreign).Error)
+
+		for _, own := range []*model.Task{task, &failed, &legacy, &stale} {
+			response := fetch(own.TaskID)
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			var result struct {
+				Code string
+				Data map[string]any
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+			assert.Equal(t, "success", result.Code)
+			assert.Equal(t, own.TaskID, result.Data["task_id"])
+			assert.Equal(t, string(own.Status), result.Data["status"])
+			for _, key := range []string{"channel_id", "platform", "group", "properties", "data"} {
+				assert.NotContains(t, result.Data, key)
+			}
+			switch own.TaskID {
+			case task.TaskID, legacy.TaskID:
+				assert.Equal(t, own.GetResultURL(), result.Data["result_url"])
+			case failed.TaskID:
+				assert.Equal(t, "Task failed", result.Data["fail_reason"])
+				assert.NotContains(t, result.Data, "result_url")
+			case stale.TaskID:
+				assert.NotContains(t, result.Data, "result_url")
+				assert.NotContains(t, response.Body.String(), stale.FailReason)
+			}
+		}
+		response := fetch(foreign.TaskID)
+		assert.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+		assert.Contains(t, response.Body.String(), "task_not_exist")
+	})
 }

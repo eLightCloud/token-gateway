@@ -26,20 +26,33 @@ import { handleServerError } from '@/lib/handle-server-error'
 
 import { ResellerAgentActivationDialog } from './agent-activation-dialog'
 import { ResellerAgentPasswordReset } from './agent-password-reset'
+import { hasResellerAgentPassword } from './agent-status'
 import { resellerPath, resellerRequest, type ResellerUser } from './api'
 
 type ResellerAgentControlsProps = {
   user: ResellerUser
   onChanged: () => void
-  detail?: boolean
+  customer?: boolean
+  sending?: boolean
 }
 
 export function ResellerAgentControls(props: ResellerAgentControlsProps) {
   const { t } = useTranslation()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const { user } = props
-  const enabled = user.account?.enabled
-  const path = `${resellerPath(true)}/${user.user_id}`
+  const enabled = props.customer ? !user.agent_disabled : user.account?.enabled
+  const path = `${resellerPath(!props.customer)}/${user.user_id}`
+  const action = enabled ? t('Disable') : t('Activate account')
+  const title = enabled ? t('Disable account') : action
+  const description = props.customer
+    ? t(
+        'This changes only the agent restriction. Platform restrictions remain in effect.'
+      )
+    : t(
+        enabled
+          ? 'Disabling this reseller stops new requests for all its customers. Existing billing continues.'
+          : 'Restoring this reseller keeps each customer’s independent restrictions in effect.'
+      )
   const toggle = useMutation({
     meta: { errorToast: false },
     mutationFn: (next: boolean) =>
@@ -59,18 +72,18 @@ export function ResellerAgentControls(props: ResellerAgentControlsProps) {
           disabled={toggle.isPending || (!enabled && user.platform_disabled)}
           onClick={() => setConfirmOpen(true)}
         >
-          {enabled ? t('Disable') : t('Activate account')}
+          {action}
         </Button>
       )}
-      {user.activation === 'pending' ? (
+      {user.activation === 'pending' && (
         <ResellerAgentActivationDialog
           user={user}
           onChanged={props.onChanged}
-          triggerLabel={
-            props.detail ? t('Reset Password') : t('Send account information')
-          }
+          customer={props.customer}
+          sending={props.sending}
         />
-      ) : (
+      )}
+      {hasResellerAgentPassword(user.activation) && (
         <ResellerAgentPasswordReset
           accountPath={path}
           disabled={user.platform_disabled}
@@ -79,16 +92,8 @@ export function ResellerAgentControls(props: ResellerAgentControlsProps) {
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title={enabled ? t('Disable account') : t('Activate account')}
-        desc={
-          enabled
-            ? t(
-                'Disabling this reseller stops new requests for all its customers. Existing billing continues.'
-              )
-            : t(
-                'Restoring this reseller keeps each customer’s independent restrictions in effect.'
-              )
-        }
+        title={title}
+        desc={description}
         destructive={enabled}
         isLoading={toggle.isPending}
         handleConfirm={() => toggle.mutate(!enabled)}

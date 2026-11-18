@@ -18,15 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute } from '@tanstack/react-router'
 
-import { ResellerSecurity } from '@/features/reseller/personal'
 import { Security } from '@/features/security'
-import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/_authenticated/security/')({
-  component: RouteComponent,
+  component: Security,
 })
-
-function RouteComponent() {
-  const kind = useAuthStore((s) => s.auth.user?.reseller_kind)
-  return kind ? <ResellerSecurity /> : <Security />
-}

@@ -19,13 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
-import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { TwoFACard } from '@/features/security/components/two-fa-card'
 import { toIntlLocale } from '@/i18n/languages'
-import { getSelf } from '@/lib/api'
-import { formatQuotaWithCurrency } from '@/lib/currency'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { resellerKey, resellerRequest, type RatioRange } from './api'
@@ -53,61 +49,6 @@ function AuthenticatedPersonalRatioBadge({
     <span className='text-muted-foreground text-xs'>
       <PersonalRatioLabel min={range.min} max={range.max} />
     </span>
-  )
-}
-
-export function ResellerWallet() {
-  const { t, i18n } = useTranslation()
-  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
-  const userID = useAuthStore((s) => s.auth.user?.id)
-  const query = useQuery({
-    meta: { errorToast: false },
-    queryKey: resellerKey(userID, 'wallet'),
-    queryFn: getSelf,
-  })
-  return (
-    <SectionPageLayout>
-      <SectionPageLayout.Title>{t('Quota')}</SectionPageLayout.Title>
-      <SectionPageLayout.Content>
-        <ResellerQueryStatus
-          pending={query.isPending}
-          error={query.isError}
-          retry={() => void query.refetch()}
-        />
-        <div className='space-y-4'>
-          {query.data?.data && (
-            <Card>
-              <CardHeader>
-                <CardTitle>{t('Available quota')}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className='text-2xl tabular-nums'>
-                  {formatQuotaWithCurrency(query.data.data.quota, { locale })}
-                </p>
-                <p className='text-muted-foreground mt-3 text-sm'>
-                  {t(
-                    'Contact your reseller to adjust quota. Consumption and refunds appear in your usage logs.'
-                  )}
-                </p>
-              </CardContent>
-            </Card>
-          )}
-          <PersonalPricingHistory />
-        </div>
-      </SectionPageLayout.Content>
-    </SectionPageLayout>
-  )
-}
-
-export function ResellerSecurity() {
-  const { t } = useTranslation()
-  return (
-    <SectionPageLayout>
-      <SectionPageLayout.Title>{t('Account Security')}</SectionPageLayout.Title>
-      <SectionPageLayout.Content>
-        <TwoFACard loading={false} required />
-      </SectionPageLayout.Content>
-    </SectionPageLayout>
   )
 }
 

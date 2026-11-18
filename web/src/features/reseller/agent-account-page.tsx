@@ -17,13 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Input } from '@/components/ui/input'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { ResellerDiscountTable } from './agent-discounts'
+import { ResellerProcurementRatioTable } from './agent-discounts'
 import { ResellerAgentInformation } from './agent-information'
 import {
   resellerKey,
@@ -31,20 +32,51 @@ import {
   resellerRequest,
   type ResellerOwnAccount,
 } from './api'
-import { ProcurementSummary, ResellerQueryStatus } from './shared'
+import { ResellerQueryStatus } from './shared'
 
-export function ResellerOwnAccountPage() {
-  const { t } = useTranslation()
+function useResellerOwnAccount() {
   const viewer = useAuthStore((s) => s.auth.user?.id)
-  const query = useQuery({
+  return useQuery({
     meta: { errorToast: false },
     queryKey: resellerKey(viewer, 'own-account'),
     queryFn: () => resellerRequest<ResellerOwnAccount>(resellerOwnAccountPath),
     enabled: viewer !== undefined,
   })
+}
+
+export function ResellerOwnProfile(props: { onSaved?: () => void }) {
+  const query = useResellerOwnAccount()
+  if (query.data) {
+    return (
+      <ResellerAgentInformation
+        key={query.data.user.user_id}
+        user={query.data.user}
+        onSaved={() => {
+          void query.refetch()
+          props.onSaved?.()
+        }}
+      />
+    )
+  }
+  return (
+    <ResellerQueryStatus
+      pending={query.isPending}
+      error={query.isError}
+      retry={() => void query.refetch()}
+    />
+  )
+}
+
+export function ResellerOwnProcurementRatiosPage() {
+  const { t } = useTranslation()
+  const [search, setSearch] = useState('')
+  const query = useResellerOwnAccount()
+  const filter = search.trim().toLowerCase()
   return (
     <SectionPageLayout>
-      <SectionPageLayout.Title>{t('Account details')}</SectionPageLayout.Title>
+      <SectionPageLayout.Title>
+        {t('My procurement ratios')}
+      </SectionPageLayout.Title>
       <SectionPageLayout.Content>
         <ResellerQueryStatus
           pending={query.isPending}
@@ -53,29 +85,19 @@ export function ResellerOwnAccountPage() {
         />
         {query.data && (
           <div className='space-y-4'>
-            {query.data.user.account && (
-              <ProcurementSummary account={query.data.user.account} />
-            )}
-            <Tabs defaultValue='information'>
-              <TabsList>
-                <TabsTrigger value='information'>
-                  {t('Basic information')}
-                </TabsTrigger>
-                <TabsTrigger value='configuration'>
-                  {t('Model discounts')}
-                </TabsTrigger>
-              </TabsList>
-              <TabsContent value='information'>
-                <ResellerAgentInformation
-                  key={viewer}
-                  user={query.data.user}
-                  onSaved={() => void query.refetch()}
-                />
-              </TabsContent>
-              <TabsContent value='configuration' className='pt-2'>
-                <ResellerDiscountTable items={query.data.discounts} />
-              </TabsContent>
-            </Tabs>
+            <Input
+              className='max-w-xs'
+              aria-label={t('Search models')}
+              placeholder={t('Search models')}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            <ResellerProcurementRatioTable
+              items={query.data.procurement_ratios.filter((item) =>
+                item.model.toLowerCase().includes(filter)
+              )}
+              filtered={Boolean(filter)}
+            />
           </div>
         )}
       </SectionPageLayout.Content>

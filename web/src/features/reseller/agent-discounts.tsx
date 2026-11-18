@@ -35,7 +35,7 @@ function modelChannelKey(item: ConfigItem): string {
   return `${item.model}:${item.channel_id}`
 }
 
-export function ResellerAgentDiscounts(props: {
+export function ResellerAgentProcurementRatios(props: {
   items: ConfigItem[]
   candidates: ConfigItem[]
   children: ReactNode
@@ -44,11 +44,8 @@ export function ResellerAgentDiscounts(props: {
   // Mount the editor on demand, then keep the draft when it is collapsed.
   const [editing, setEditing] = useState<boolean | null>(null)
   const available = new Set(props.candidates.map(modelChannelKey))
-  const discounts = props.items.filter(
-    (item) =>
-      item.authorized &&
-      Number(item.ratio) < 1 &&
-      available.has(modelChannelKey(item))
+  const ratios = props.items.filter(
+    (item) => item.authorized && available.has(modelChannelKey(item))
   )
 
   return (
@@ -60,7 +57,7 @@ export function ResellerAgentDiscounts(props: {
       <CollapsibleTrigger render={<Button variant='outline' />}>
         {editing ? t('Collapse') : t('Edit')}
       </CollapsibleTrigger>
-      {!editing && <ResellerDiscountTable items={discounts} />}
+      {!editing && <ResellerProcurementRatioTable items={ratios} />}
       <CollapsibleContent keepMounted={editing !== null}>
         {props.children}
       </CollapsibleContent>
@@ -68,14 +65,19 @@ export function ResellerAgentDiscounts(props: {
   )
 }
 
-export function ResellerDiscountTable(props: { items: ConfigItem[] }) {
+export function ResellerProcurementRatioTable(props: {
+  items: ConfigItem[]
+  filtered?: boolean
+}) {
   const { t, i18n } = useTranslation()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   return (
     <StaticDataTable
       data={props.items}
       getRowKey={modelChannelKey}
-      emptyContent={t('No active model discounts')}
+      emptyContent={
+        props.filtered ? t('No results') : t('No active procurement ratios')
+      }
       columns={[
         { id: 'model', header: t('Model'), cell: (row) => row.model },
         {
@@ -85,8 +87,8 @@ export function ResellerDiscountTable(props: { items: ConfigItem[] }) {
         },
         {
           id: 'ratio',
-          header: t('Personal ratio'),
-          cell: (row) => formatPersonalRatio(row.ratio, locale),
+          header: t('Procurement ratio'),
+          cell: (row) => `×${formatPersonalRatio(row.ratio, locale)}`,
         },
       ]}
     />

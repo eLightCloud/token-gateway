@@ -41,6 +41,7 @@ export type ResellerUser = {
   remark?: string
   activation: string
   agent_disabled: boolean
+  awaiting_enablement?: boolean
   platform_disabled: boolean
   quota: number
   account?: ResellerAccount
@@ -54,7 +55,7 @@ export type ConfigItem = {
 export type Config = { revision: number; items: ConfigItem[] }
 export type ResellerOwnAccount = {
   user: ResellerUser
-  discounts: ConfigItem[]
+  procurement_ratios: ConfigItem[]
 }
 export type ConfigSetting = Pick<ConfigItem, 'authorized' | 'ratio'>
 export type ConfigChangePage = {

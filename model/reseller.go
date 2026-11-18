@@ -29,6 +29,7 @@ type ResellerIdentity struct {
 	AgentUserID        int    `gorm:"index;not null" json:"agent_user_id"`
 	Activation         string `gorm:"size:20;not null" json:"activation"`
 	AgentDisabled      bool   `json:"agent_disabled"`
+	AwaitingEnablement bool   `json:"awaiting_enablement"`
 	CreatedAt          int64  `json:"created_at"`
 	Phone              string `gorm:"size:16" json:"-"`
 }
@@ -66,7 +67,7 @@ type ResellerModelConfig struct {
 	Model      string `gorm:"type:text;not null"`
 	ChannelID  int    `gorm:"uniqueIndex:reseller_config_key"`
 	Authorized bool
-	Ratio      int64 `gorm:"not null"` // millionths, 1..2_000_000
+	Ratio      int64 `gorm:"not null"` // millionths, bounded by the subject's pricing rule
 	Revision   int64
 }
 
@@ -163,7 +164,7 @@ func CreateResellerUser(operatorID int, kind string, input ResellerCreateInput) 
 	if err != nil || address.Address != input.Email || len(input.Email) > 50 || input.Username == "" || utf8.RuneCountInString(input.Username) > UserNameMaxLength || utf8.RuneCountInString(input.DisplayName) > 20 || (kind != "agent" && kind != "agent_customer") {
 		return nil, ErrResellerInvalid
 	}
-	if err := input.normalizeContact(kind); err != nil {
+	if err := input.normalizeContact(); err != nil {
 		return nil, err
 	}
 	var identity ResellerIdentity
@@ -206,6 +207,10 @@ func CreateResellerUser(operatorID int, kind string, input ResellerCreateInput) 
 				return err
 			}
 			identity = ResellerIdentity{UserID: user.Id, Kind: kind, AgentUserID: agentID, Activation: "pending", CreatedAt: common.GetTimestamp(), Phone: input.Phone}
+			if kind == "agent_customer" {
+				identity.AgentDisabled = true
+				identity.AwaitingEnablement = true
+			}
 			if err := tx.Create(&identity).Error; err != nil {
 				return err
 			}

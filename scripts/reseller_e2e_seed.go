@@ -15,6 +15,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,9 +132,22 @@ export function parseTaskResult(ctx,body){return {status:body.status,progress:"1
 	}
 	_, err = model.SaveResellerConfig(ids["root"], ids["ordinary"], true, input)
 	must(err)
-	for key, value := range map[string]string{"performance_setting.monitor_enabled": "false", "passkey.enabled": "true", "passkey.allow_insecure_origin": "true", "passkey.rp_id": "localhost", "passkey.origins": os.Getenv("RESELLER_E2E_ORIGIN"), "ModelPrice": `{"reseller-demo":0.0002,"hidden-demo":0.0002,"reseller-task":0.0002}`, "ModelRatio": `{"reseller-demo":1,"hidden-demo":1,"reseller-task":1}`, "GroupRatio": `{"default":1}`, "SMTPServer": "127.0.0.1", "SMTPPort": os.Getenv("RESELLER_E2E_SMTP_PORT"), "SMTPFrom": "gateway@e2e.invalid", "ServerAddress": os.Getenv("RESELLER_E2E_ORIGIN"), "PasswordLoginEnabled": "true", "GlobalApiRateLimitNum": "1000000", "GlobalWebRateLimitNum": "1000000"} {
+	for key, value := range map[string]string{"performance_setting.monitor_enabled": "false", "passkey.enabled": "true", "passkey.allow_insecure_origin": "true", "passkey.rp_id": "localhost", "passkey.origins": os.Getenv("RESELLER_E2E_ORIGIN"), "ModelPrice": `{"reseller-demo":0.0002,"hidden-demo":0.0002,"reseller-task":0.0002}`, "ModelRatio": `{"reseller-demo":1,"hidden-demo":1,"reseller-task":1}`, "GroupRatio": `{"default":1}`, "ServerAddress": os.Getenv("RESELLER_E2E_ORIGIN"), "PasswordLoginEnabled": "true", "GlobalApiRateLimitNum": "1000000", "GlobalWebRateLimitNum": "1000000"} {
 		must(model.UpdateOption(key, value))
 	}
+	smtpPort, err := strconv.Atoi(os.Getenv("RESELLER_E2E_SMTP_PORT"))
+	must(err)
+	_, err = model.SaveEmailDeliveryConfig(common.EmailDeliveryUpdate{Intent: common.EmailDeliveryIntent{
+		Options: common.EmailDeliveryOptions{
+			AuthMode: common.EmailAuthLegacy,
+			Legacy: common.LegacyEmailSettings{
+				Host: "127.0.0.1", Port: smtpPort, From: "gateway@e2e.invalid",
+			},
+		},
+		LegacyPasswordAction: "keep",
+		ClientSecretAction:   "keep",
+	}})
+	must(err)
 	var databaseVersion string
 	must(model.DB.Raw("SELECT sqlite_version()").Scan(&databaseVersion).Error)
 	payload, err := common.Marshal(map[string]any{"database_version": databaseVersion, "users": ids, "channel_id": channel.Id, "passkeys": passkeys, "tokens": tokens})

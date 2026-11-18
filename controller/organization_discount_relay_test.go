@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -545,6 +546,89 @@ func TestRealtimePricingHTTPRelay(t *testing.T) {
 			var user model.User
 			require.NoError(t, model.DB.First(&user, fixture.user.Id).Error)
 			assert.EqualValues(t, 50, user.Quota)
+		})
+	}
+}
+
+func TestPersonalBillingHTTPAutoGroupRetryReservesSelectedGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name, groupRatios string
+		balance           int64
+		status, vipCalls  int
+	}{
+		{"higher reservation rejected", `{"default":1,"vip":2}`, 1200, http.StatusForbidden, 0},
+		{"free to paid reservation rejected", `{"default":0,"vip":2}`, 1200, http.StatusForbidden, 0},
+		{"higher reservation paid before send", `{"default":1,"vip":2}`, 1800, http.StatusOK, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newResponsesWSBillingTest(t, `tier("request", fixed(0.002))`, func(*websocket.Conn, *http.Request) {})
+			configureTokenAutoGroupsTest(t, "2", `["default","vip"]`)
+			require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"auto":"Auto","default":"Default","vip":"VIP"}`))
+			require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(tc.groupRatios))
+			require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"billing_setting.billing_mode": "{}"}))
+			savedPrices, savedRetries := ratio_setting.ModelPrice2JSONString(), common.RetryTimes
+			t.Cleanup(func() {
+				common.RetryTimes = savedRetries
+				require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+			})
+			common.RetryTimes = 1
+			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"ws-billing":0.002}`))
+			token, err := model.GetTokenByKey(fixture.token.Key, true)
+			require.NoError(t, err)
+			token.Group, token.CrossGroupRetry = "auto", true
+			require.NoError(t, token.Update())
+
+			expensive := &model.Channel{Name: "expensive", Key: "expensive-key", Type: fixture.channel.Type, Group: "vip", Models: "ws-billing", BaseURL: fixture.channel.BaseURL, Status: common.ChannelStatusEnabled}
+			require.NoError(t, model.DB.Create(expensive).Error)
+			require.NoError(t, model.DB.Create(&model.Ability{ChannelId: expensive.Id, Model: "ws-billing", Group: "vip", Enabled: true}).Error)
+			t.Cleanup(func() {
+				require.NoError(t, model.DB.Where("channel_id = ?", expensive.Id).Delete(&model.Ability{}).Error)
+				require.NoError(t, model.DB.Delete(expensive).Error)
+			})
+			agentID := seedPersonalRelayAccount(t, fixture, "0.8", tc.balance)
+			items := []model.ResellerConfigItem{
+				{Model: "ws-billing", ChannelID: fixture.channel.Id, Authorized: true, Ratio: "0.8"},
+				{Model: "ws-billing", ChannelID: expensive.Id, Authorized: true, Ratio: "0.8"},
+			}
+			var root model.User
+			require.NoError(t, model.DB.Where("role = ?", common.RoleRootUser).First(&root).Error)
+			_, err = model.SaveResellerConfig(root.Id, agentID, true, model.ResellerConfigInput{ExpectedRevision: 1, Items: items})
+			require.NoError(t, err)
+			_, err = model.SaveResellerConfig(agentID, fixture.user.Id, false, model.ResellerConfigInput{ExpectedRevision: 1, Items: items})
+			require.NoError(t, err)
+
+			var cheapCalls, vipCalls atomic.Int32
+			fixture.httpUpstream = func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer expensive-key" {
+					cheapCalls.Add(1)
+					http.Error(w, "retry in next group", http.StatusServiceUnavailable)
+					return
+				}
+				vipCalls.Add(1)
+				var user model.User
+				if assert.NoError(t, model.DB.First(&user, fixture.user.Id).Error) {
+					assert.Equal(t, tc.balance-1600, user.Quota, "actual group charge is reserved before upstream receives the attempt")
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"retry\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":1,\"total_tokens\":11}}}\n\ndata: [DONE]\n\n")
+			}
+
+			request, err := http.NewRequest(http.MethodPost, fixture.gatewayURL+"/v1/responses", strings.NewReader(`{"model":"ws-billing","input":"hello","stream":true}`))
+			require.NoError(t, err)
+			request.Header.Set("Authorization", "Bearer sk-"+fixture.token.Key)
+			request.Header.Set("Content-Type", "application/json")
+			response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+			require.NoError(t, err)
+			body, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			require.NoError(t, response.Body.Close())
+			require.EqualValues(t, 2, cheapCalls.Load(), string(body))
+			<-fixture.httpDone
+			assert.EqualValues(t, tc.vipCalls, vipCalls.Load())
+			assert.Equal(t, tc.status, response.StatusCode, string(body))
+			var user model.User
+			require.NoError(t, model.DB.First(&user, fixture.user.Id).Error)
+			assert.Equal(t, tc.balance-1600*int64(tc.vipCalls), user.Quota)
 		})
 	}
 }

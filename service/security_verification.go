@@ -37,6 +37,7 @@ const (
 	VerificationScopePasswordSet         = "account.password.set"
 	VerificationScopePasswordChange      = "account.password.change"
 	VerificationScopeAccountDelete       = "account.delete"
+	VerificationScopeSessionRevoke       = "account.sessions.revoke"
 )
 
 var (
@@ -67,6 +68,10 @@ type AccountBindingContext struct {
 
 type AccountUnbindingContext struct {
 	ProviderID int `json:"provider_id"`
+}
+
+type SessionRevocationContext struct {
+	SessionID string `json:"session_id"`
 }
 
 // VerificationBinding contains no original operation parameters. It can safely
@@ -117,6 +122,14 @@ func BindVerificationOperation(operation VerificationOperation) (VerificationBin
 	case VerificationScopeAccountUnbind:
 		var context AccountUnbindingContext
 		if len(fields) != 1 || common.Unmarshal(fields["provider_id"], &context.ProviderID) != nil || context.ProviderID <= 0 {
+			return VerificationBinding{}, ErrVerificationContextInvalid
+		}
+		normalized = context
+	case VerificationScopeSessionRevoke:
+		var context SessionRevocationContext
+		if len(fields) != 1 || common.GetJsonType(fields["session_id"]) != "string" ||
+			common.Unmarshal(fields["session_id"], &context.SessionID) != nil ||
+			len(context.SessionID) > 64 || context.SessionID != strings.TrimSpace(context.SessionID) {
 			return VerificationBinding{}, ErrVerificationContextInvalid
 		}
 		normalized = context
@@ -193,7 +206,7 @@ func securityVerificationPolicy(scope string, state model.UserVerificationState)
 		methods = append(methods, VerificationMethodPasskey)
 	}
 	switch scope {
-	case VerificationScopeChannelKeyRead, VerificationScopePasskeyDelete, VerificationScopeLogin:
+	case VerificationScopeChannelKeyRead, VerificationScopePasskeyDelete, VerificationScopeLogin, VerificationScopeSessionRevoke:
 	case VerificationScopeSecurityEmailChange, VerificationScopeSecurityRecovery, VerificationScopePasskeyRecovery, VerificationScopeTwoFADisable, VerificationScopeTwoFABackupCodes:
 		if !state.HasTwoFA {
 			return nil, model.ErrTwoFANotEnabled

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const resellerCustomerCreateSchema = z.object({
+export const resellerCreateSchema = z.object({
   username: z.string().trim().min(1, 'Required').max(20, 'Value is too long'),
   display_name: z.string().max(20, 'Value is too long'),
   email: z
@@ -14,9 +14,6 @@ export const resellerCustomerCreateSchema = z.object({
         error: 'Enter a valid email address',
       })
     ),
-})
-
-export const resellerAgentCreateSchema = resellerCustomerCreateSchema.extend({
   phone: z
     .string()
     .trim()
@@ -25,7 +22,4 @@ export const resellerAgentCreateSchema = resellerCustomerCreateSchema.extend({
   remark: z.string().trim().max(255, 'Value is too long'),
 })
 
-export type ResellerCreateValues = z.infer<
-  typeof resellerCustomerCreateSchema
-> &
-  Partial<Pick<z.infer<typeof resellerAgentCreateSchema>, 'phone' | 'remark'>>
+export type ResellerCreateValues = z.infer<typeof resellerCreateSchema>

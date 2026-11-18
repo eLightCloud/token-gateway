@@ -38,9 +38,14 @@ import type { UserProfile } from '../types'
 interface ProfileHeaderProps {
   profile: UserProfile | null
   loading: boolean
+  showUsage?: boolean
 }
 
-export function ProfileHeader({ profile, loading }: ProfileHeaderProps) {
+export function ProfileHeader({
+  profile,
+  loading,
+  showUsage = true,
+}: ProfileHeaderProps) {
   const { t } = useTranslation()
 
   if (loading) {
@@ -62,17 +67,19 @@ export function ProfileHeader({ profile, loading }: ProfileHeaderProps) {
             </div>
           </div>
         </CardContent>
-        <div className='border-t'>
-          <div className='divide-border/60 grid grid-cols-1 divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0'>
-            {['balance', 'usage', 'requests'].map((key) => (
-              <div key={key} className='px-4 py-3.5 sm:px-5 sm:py-4'>
-                <Skeleton className='h-3.5 w-20' />
-                <Skeleton className='mt-2 h-7 w-28' />
-                <Skeleton className='mt-1.5 h-3.5 w-24' />
-              </div>
-            ))}
+        {showUsage && (
+          <div className='border-t'>
+            <div className='divide-border/60 grid grid-cols-1 divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0'>
+              {['balance', 'usage', 'requests'].map((key) => (
+                <div key={key} className='px-4 py-3.5 sm:px-5 sm:py-4'>
+                  <Skeleton className='h-3.5 w-20' />
+                  <Skeleton className='mt-2 h-7 w-28' />
+                  <Skeleton className='mt-1.5 h-3.5 w-24' />
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </Card>
     )
   }
@@ -83,7 +90,10 @@ export function ProfileHeader({ profile, loading }: ProfileHeaderProps) {
   const avatarName = profile.username || displayName
   const avatarFallback = getUserAvatarFallback(avatarName)
   const avatarFallbackStyle = getUserAvatarStyle(avatarName)
-  const roleLabel = getRoleLabel(profile.role)
+  const roleLabel =
+    profile.reseller_kind === 'agent'
+      ? t('Reseller')
+      : getRoleLabel(profile.role)
   const stats: {
     label: string
     value: string
@@ -162,29 +172,34 @@ export function ProfileHeader({ profile, loading }: ProfileHeaderProps) {
           </div>
         </div>
       </CardContent>
-      <div className='border-t'>
-        <div className='divide-border/60 grid grid-cols-3 divide-x'>
-          {stats.map((item) => (
-            <div key={item.label} className='min-w-0 px-3 py-3 sm:px-5 sm:py-4'>
-              <div className='flex items-center gap-2'>
-                <IconBadge tone={item.tone} size='stat'>
-                  <item.icon />
-                </IconBadge>
-                <div className='text-muted-foreground truncate text-xs font-medium tracking-wider uppercase'>
-                  {item.label}
+      {showUsage && (
+        <div className='border-t'>
+          <div className='divide-border/60 grid grid-cols-3 divide-x'>
+            {stats.map((item) => (
+              <div
+                key={item.label}
+                className='min-w-0 px-3 py-3 sm:px-5 sm:py-4'
+              >
+                <div className='flex items-center gap-2'>
+                  <IconBadge tone={item.tone} size='stat'>
+                    <item.icon />
+                  </IconBadge>
+                  <div className='text-muted-foreground truncate text-xs font-medium tracking-wider uppercase'>
+                    {item.label}
+                  </div>
+                </div>
+
+                <div className='text-foreground mt-1.5 truncate font-mono text-lg font-bold tracking-tight tabular-nums sm:mt-2 sm:text-2xl'>
+                  {item.value}
+                </div>
+                <div className='text-muted-foreground/60 mt-1 hidden text-xs md:block'>
+                  {item.description}
                 </div>
               </div>
-
-              <div className='text-foreground mt-1.5 truncate font-mono text-lg font-bold tracking-tight tabular-nums sm:mt-2 sm:text-2xl'>
-                {item.value}
-              </div>
-              <div className='text-muted-foreground/60 mt-1 hidden text-xs md:block'>
-                {item.description}
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </Card>
   )
 }

@@ -246,7 +246,7 @@ func DisableTwoFAForSession(identity AuthSessionIdentity) error {
 	if err != nil {
 		return err
 	}
-	if SecurityCompletionRequired(kind) {
+	if SecurityMFARequired(kind) {
 		return ErrResellerForbidden
 	}
 	return disableTwoFAWithAuthVersion(identity.UserID, &identity)

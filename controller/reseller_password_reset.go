@@ -48,17 +48,32 @@ func SendResellerOwnPasswordReset(c *gin.Context) {
 // SendResellerAgentPasswordReset starts the existing recovery flow for the
 // stored address. The administrator never receives the recovery token.
 func SendResellerAgentPasswordReset(c *gin.Context) {
-	userID, err := strconv.Atoi(c.Param("id"))
-	if err != nil || userID <= 0 {
-		resellerResponse(c, nil, model.ErrResellerInvalid)
-		return
-	}
 	operatorID := c.GetInt("id")
 	if !c.GetBool("reseller_admin") || !authz.Can(operatorID, c.GetInt("role"), authz.ResellerCreate) {
 		resellerResponse(c, nil, model.ErrResellerForbidden)
 		return
 	}
-	if err := model.ResellerManageTarget(model.DB, operatorID, userID, true); err != nil {
+	sendResellerManagedPasswordReset(c, operatorID, true)
+}
+
+// SendResellerCustomerPasswordReset lets an agent initiate recovery for an
+// owned customer through the same stored-address flow.
+func SendResellerCustomerPasswordReset(c *gin.Context) {
+	session, ok := middleware.GetSessionAuthIdentity(c)
+	if !ok {
+		resellerResponse(c, nil, model.ErrResellerForbidden)
+		return
+	}
+	sendResellerManagedPasswordReset(c, session.UserID, false)
+}
+
+func sendResellerManagedPasswordReset(c *gin.Context, operatorID int, admin bool) {
+	userID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || userID <= 0 {
+		resellerResponse(c, nil, model.ErrResellerInvalid)
+		return
+	}
+	if err := model.ResellerManageTarget(model.DB, operatorID, userID, admin); err != nil {
 		resellerResponse(c, nil, err)
 		return
 	}
@@ -67,11 +82,11 @@ func SendResellerAgentPasswordReset(c *gin.Context) {
 		resellerResponse(c, nil, err)
 		return
 	}
-	if identity == nil || identity.Kind != "agent" {
+	if identity == nil || (admin && identity.Kind != "agent") {
 		resellerResponse(c, nil, gorm.ErrRecordNotFound)
 		return
 	}
-	if identity.Activation == "pending" {
+	if identity.Activation != "active" && identity.Activation != "security_pending" {
 		resellerResponse(c, nil, model.ErrResellerInvalid)
 		return
 	}

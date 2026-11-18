@@ -12,17 +12,18 @@ import (
 
 // Dedicated white-list DTOs never embed User, Task, Log, or credential structs.
 type ResellerUserView struct {
-	UserID           int              `json:"user_id"`
-	Username         string           `json:"username"`
-	DisplayName      string           `json:"display_name"`
-	Email            string           `json:"email"`
-	Phone            string           `json:"phone,omitempty"`
-	Remark           string           `json:"remark,omitempty"`
-	Activation       string           `json:"activation"`
-	AgentDisabled    bool             `json:"agent_disabled"`
-	PlatformDisabled bool             `json:"platform_disabled"`
-	Quota            int64            `json:"quota"`
-	Account          *ResellerAccount `json:"account,omitempty"`
+	UserID             int              `json:"user_id"`
+	Username           string           `json:"username"`
+	DisplayName        string           `json:"display_name"`
+	Email              string           `json:"email"`
+	Phone              string           `json:"phone,omitempty"`
+	Remark             string           `json:"remark,omitempty"`
+	Activation         string           `json:"activation"`
+	AgentDisabled      bool             `json:"agent_disabled"`
+	AwaitingEnablement bool             `json:"awaiting_enablement"`
+	PlatformDisabled   bool             `json:"platform_disabled"`
+	Quota              int64            `json:"quota"`
+	Account            *ResellerAccount `json:"account,omitempty"`
 }
 type ResellerUserPage struct {
 	Items      []ResellerUserView `json:"items"`
@@ -64,13 +65,11 @@ func ListResellerUsers(operatorID int, admin bool, after int, search string, act
 	case "pending", "security_pending", "active":
 		query = query.Where("activation = ?", activation)
 	case "password_set":
-		if !admin {
-			return nil, ErrResellerInvalid
-		}
 		query = query.Where("activation IN ?", []string{"security_pending", "active"})
 	default:
 		return nil, ErrResellerInvalid
 	}
+	platformEnabled := DB.Model(&User{}).Select("id").Where("status = ?", common.UserStatusEnabled)
 	switch serviceStatus {
 	case "":
 	case "disabled":
@@ -80,16 +79,21 @@ func ListResellerUsers(operatorID int, admin bool, after int, search string, act
 		platformDisabled := DB.Model(&User{}).Select("id").Where("status <> ?", common.UserStatusEnabled)
 		accountDisabled := DB.Model(&ResellerAccount{}).Select("user_id").Where("enabled = ?", false)
 		query = query.Where(DB.Where("user_id IN (?)", platformDisabled).Or("user_id IN (?)", accountDisabled))
+	case "awaiting_enablement":
+		if admin {
+			return nil, ErrResellerInvalid
+		}
+		query = query.Where("awaiting_enablement = ? AND user_id IN (?)", true, platformEnabled)
 	case "platform_disabled":
 		query = query.Where("user_id IN (?)", DB.Model(&User{}).Select("id").Where("status <> ?", common.UserStatusEnabled))
 	case "agent_disabled":
 		if admin {
 			query = query.Where("user_id IN (?)", DB.Model(&ResellerAccount{}).Select("user_id").Where("enabled = ?", false))
 		} else {
-			query = query.Where("agent_disabled = ?", true)
+			query = query.Where("agent_disabled = ? AND (awaiting_enablement IS NULL OR awaiting_enablement = ?) AND user_id IN (?)", true, false, platformEnabled)
 		}
 	case "enabled":
-		query = query.Where("user_id IN (?)", DB.Model(&User{}).Select("id").Where("status = ?", common.UserStatusEnabled))
+		query = query.Where("user_id IN (?)", platformEnabled)
 		if admin {
 			query = query.Where("user_id IN (?)", DB.Model(&ResellerAccount{}).Select("user_id").Where("enabled = ?", true))
 		} else {
@@ -114,9 +118,8 @@ func ListResellerUsers(operatorID int, admin bool, after int, search string, act
 		if err := DB.Select("id", "username", "display_name", "email", "quota", "status").First(&user, identity.UserID).Error; err != nil {
 			return nil, err
 		}
-		view := ResellerUserView{UserID: user.Id, Username: user.Username, DisplayName: user.DisplayName, Email: user.Email, Quota: user.Quota, Activation: identity.Activation, AgentDisabled: identity.AgentDisabled, PlatformDisabled: user.Status != common.UserStatusEnabled}
+		view := ResellerUserView{UserID: user.Id, Username: user.Username, DisplayName: user.DisplayName, Email: user.Email, Quota: user.Quota, Activation: identity.Activation, AgentDisabled: identity.AgentDisabled, AwaitingEnablement: identity.AwaitingEnablement, Phone: identity.Phone, PlatformDisabled: user.Status != common.UserStatusEnabled}
 		if admin {
-			view.Phone = identity.Phone
 			var account ResellerAccount
 			if err := DB.First(&account, "user_id = ?", user.Id).Error; err != nil {
 				return nil, err
@@ -140,7 +143,7 @@ func SetResellerEnabled(operatorID, userID int, admin, enabled bool) error {
 			}
 			return tx.Model(&ResellerAccount{}).Where("user_id = ?", userID).Update("enabled", enabled).Error
 		}
-		return tx.Model(&ResellerIdentity{}).Where("user_id = ?", userID).Update("agent_disabled", !enabled).Error
+		return setCustomerEnabled(tx, userID, enabled)
 	})
 }
 

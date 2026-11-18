@@ -139,7 +139,7 @@ func TestResellerS1(t *testing.T) {
 	require.ErrorIs(t, ResellerDashboardAllowed(a.UserID, "/api/reseller/self/customers"), ErrResellerForbidden)
 	_, err = CreateResellerUser(a.UserID, "agent", ResellerCreateInput{Username: "s1-nested", Email: "nested@example.invalid", Phone: "13800138000"})
 	require.ErrorIs(t, err, ErrResellerForbidden)
-	_, err = CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s1-pending-child", Email: "pending@example.invalid"})
+	_, err = CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s1-pending-child", Email: "pending@example.invalid", Phone: "13800138000"})
 	require.ErrorIs(t, err, ErrResellerForbidden)
 	// Activation is a fixture only: S1 exposes no activation or conversion API.
 	require.NoError(t, db.Model(&ResellerIdentity{}).Where("user_id = ?", a.UserID).Update("activation", "active").Error)
@@ -147,15 +147,61 @@ func TestResellerS1(t *testing.T) {
 	require.NoError(t, SetResellerEnabled(root.Id, a.UserID, true, true))
 	require.NoError(t, ResellerDashboardAllowed(a.UserID, "/api/reseller/self/customers"))
 	require.ErrorIs(t, ResellerDashboardAllowed(a.UserID, "/api/user/self"), ErrResellerForbidden)
-	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s1-customer", Email: "customer@example.invalid", Phone: "+8613800138000", Remark: "ignored"})
+	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s1-customer", Email: "customer@example.invalid", Phone: "+8613800138000", Remark: "内部备注"})
 	require.NoError(t, err)
 	var customer User
 	require.NoError(t, db.First(&customer, b.UserID).Error)
 	assert.Zero(t, customer.Quota)
 	assert.Empty(t, customer.Password)
-	assert.Empty(t, customer.Remark)
-	assert.Empty(t, b.Phone)
+	assert.Equal(t, "内部备注", customer.Remark)
+	assert.Equal(t, "+8613800138000", b.Phone)
 	assert.Equal(t, "agent_customer", customer.ResellerKind)
+	t.Run("customer sets a password without MFA and waits for owner enablement", func(t *testing.T) {
+		t.Setenv("SECURITY_COMPLETION_ENFORCED", "false")
+		input := ResellerCreateInput{Username: "s1-onboarding", Email: "onboarding@example.invalid", Phone: "13800138000"}
+		account, err := CreateResellerUser(a.UserID, "agent_customer", input)
+		require.NoError(t, err)
+		require.ErrorIs(t, ResellerLoginAllowed(account.UserID), ErrResellerForbidden)
+		require.ErrorIs(t, SetResellerEnabled(root.Id, account.UserID, true, true), ErrResellerForbidden)
+
+		page, err := ListResellerUsers(a.UserID, false, 0, input.Username, "pending", "awaiting_enablement", 50)
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1)
+		assert.Equal(t, account.UserID, page.Items[0].UserID)
+
+		token, err := NewSecurityMailFlow(account.UserID, SecurityActivationPurpose, input.Email, nil)
+		require.NoError(t, err)
+		require.NoError(t, CompleteSecurityMail(account.UserID, SecurityActivationPurpose, token, "customer-password", nil))
+		require.ErrorIs(t, CompleteSecurityMail(account.UserID, SecurityActivationPurpose, token, "customer-password", nil), ErrAuthFlowConsumed)
+		state, err := GetSecurityCompletion(account.UserID)
+		require.NoError(t, err)
+		assert.True(t, state.Complete)
+		assert.True(t, state.EmailVerified)
+		assert.False(t, state.MFAEnabled)
+		assert.False(t, state.MFARequired)
+		require.ErrorIs(t, ResellerLoginAllowed(account.UserID), ErrResellerForbidden)
+		require.ErrorIs(t, ResellerDashboardAllowed(account.UserID, "/api/token/"), ErrResellerForbidden)
+
+		require.NoError(t, db.Model(&User{}).Where("id = ?", account.UserID).Update("status", common.UserStatusDisabled).Error)
+		require.ErrorIs(t, SetResellerEnabled(a.UserID, account.UserID, false, true), ErrResellerForbidden)
+		require.NoError(t, db.Model(&User{}).Where("id = ?", account.UserID).Update("status", common.UserStatusEnabled).Error)
+
+		require.NoError(t, SetResellerEnabled(a.UserID, account.UserID, false, true))
+		require.NoError(t, ResellerLoginAllowed(account.UserID))
+		require.NoError(t, ResellerDashboardAllowed(account.UserID, "/api/token/"))
+		page, err = ListResellerUsers(a.UserID, false, 0, input.Username, "password_set", "enabled", 50)
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1)
+		assert.False(t, page.Items[0].AwaitingEnablement)
+
+		require.NoError(t, SetResellerEnabled(a.UserID, account.UserID, false, false))
+		page, err = ListResellerUsers(a.UserID, false, 0, input.Username, "password_set", "agent_disabled", 50)
+		require.NoError(t, err)
+		require.Len(t, page.Items, 1)
+		require.ErrorIs(t, ResellerLoginAllowed(account.UserID), ErrResellerForbidden)
+		require.NoError(t, SetResellerEnabled(a.UserID, account.UserID, false, true))
+	})
+
 	t.Run("dispatch barrier replay", func(t *testing.T) {
 		request := ResellerRequest{ID: "dispatch-replay", CustomerUserID: b.UserID, AgentUserID: a.UserID, State: "reserved"}
 		require.NoError(t, db.Create(&request).Error)
@@ -237,7 +283,7 @@ func TestResellerS1(t *testing.T) {
 	}
 
 	t.Run("cache applies only committed differences once", func(t *testing.T) {
-		cacheCustomer, err := CreateResellerUser(a2.UserID, "agent_customer", ResellerCreateInput{Username: "s1-cache", Email: "cache@example.invalid"})
+		cacheCustomer, err := CreateResellerUser(a2.UserID, "agent_customer", ResellerCreateInput{Username: "s1-cache", Email: "cache@example.invalid", Phone: "13800138000"})
 		require.NoError(t, err)
 		server := miniredis.RunT(t)
 		client := redis.NewClient(&redis.Options{Addr: server.Addr()})
@@ -524,29 +570,39 @@ func TestResellerS1(t *testing.T) {
 		require.ErrorIs(t, UpdateResellerOwnProfile(ordinary.Id, ResellerOwnProfileInput{Phone: &phone}), ErrResellerForbidden)
 		require.NoError(t, UpdateResellerOwnProfile(a.UserID, ResellerOwnProfileInput{DisplayName: &name, Phone: &phone}))
 
-		channel := Channel{Name: "detail-channel", Models: "discount,revoked,markup", Status: common.ChannelStatusEnabled, Type: 1, Key: "synthetic"}
+		channel := Channel{Name: "detail-channel", Models: "discount,revoked,markup,default,removed", Status: common.ChannelStatusEnabled, Type: 1, Key: "synthetic"}
 		require.NoError(t, db.Create(&channel).Error)
-		discount := ResellerConfigItem{Model: "discount", ChannelID: channel.Id, Authorized: true, Ratio: "0.8"}
+		discount := ResellerConfigItem{Model: "discount", ChannelID: channel.Id, Authorized: true, Ratio: "0.000001"}
 		revoked := ResellerConfigItem{Model: "revoked", ChannelID: channel.Id, Ratio: "0.5"}
-		markup := ResellerConfigItem{Model: "markup", ChannelID: channel.Id, Authorized: true, Ratio: "1.2"}
-		input := ResellerConfigInput{Items: []ResellerConfigItem{discount, revoked, markup}}
+		markup := ResellerConfigItem{Model: "markup", ChannelID: channel.Id, Authorized: true, Ratio: "5.000000"}
+		fullPrice := ResellerConfigItem{Model: "default", ChannelID: channel.Id, Authorized: true}
+		removed := ResellerConfigItem{Model: "removed", ChannelID: channel.Id, Authorized: true, Ratio: "1.4"}
+		input := ResellerConfigInput{Items: []ResellerConfigItem{discount, revoked, markup, fullPrice, removed}}
+		_, err = PreviewResellerConfig(root.Id, a.UserID, input)
+		require.NoError(t, err)
 		_, err = SaveResellerConfig(root.Id, a.UserID, true, input)
 		require.NoError(t, err)
+		require.NoError(t, db.Model(&channel).Update("models", "discount,revoked,markup,default").Error)
+		fullPrice.Ratio = "1"
+		markup.Ratio = "5"
 
 		input.ExpectedRevision = 1
-		input.Items[0].Ratio = "-0.1"
-		_, err = PreviewResellerConfig(root.Id, a.UserID, input)
-		require.ErrorIs(t, err, ErrResellerInvalid)
-		_, err = SaveResellerConfig(root.Id, a.UserID, true, input)
-		require.ErrorIs(t, err, ErrResellerInvalid)
+		for _, invalid := range []string{"0", "-0.1", "5.000001", "0.1234567"} {
+			input.Items[0].Ratio = invalid
+			_, err = PreviewResellerConfig(root.Id, a.UserID, input)
+			require.ErrorIs(t, err, ErrResellerInvalid)
+			_, err = SaveResellerConfig(root.Id, a.UserID, true, input)
+			require.ErrorIs(t, err, ErrResellerInvalid)
+		}
 		profile, err = ReadResellerOwnAccount(a.UserID)
 		require.NoError(t, err)
 		assert.Equal(t, "新代理", profile.User.DisplayName)
 		assert.Equal(t, "13900139000", profile.User.Phone)
 		assert.Equal(t, "agent@example.invalid", profile.User.Email)
 		assert.Equal(t, []ResellerConfigItem{discount}, profile.Discounts)
+		assert.Equal(t, []ResellerConfigItem{discount, markup, fullPrice}, profile.ProcurementRatios)
 
-		input.Items = []ResellerConfigItem{{Model: "discount", ChannelID: channel.Id, Ratio: "0.7"}, markup}
+		input.Items = []ResellerConfigItem{{Model: "discount", ChannelID: channel.Id, Ratio: "0.7"}, markup, fullPrice, removed}
 		_, err = SaveResellerConfig(root.Id, a.UserID, true, input)
 		require.NoError(t, err)
 		// Fill the first page so revision 2 is compared to revision 1 across the cursor.
@@ -568,7 +624,7 @@ func TestResellerS1(t *testing.T) {
 		require.Len(t, changes, 2)
 		assert.Equal(t, ResellerConfigChange{
 			Model: "discount", ChannelID: channel.Id,
-			Before: &ResellerConfigSetting{Authorized: true, Ratio: "0.8"},
+			Before: &ResellerConfigSetting{Authorized: true, Ratio: "0.000001"},
 			After:  &ResellerConfigSetting{Ratio: "0.7"},
 		}, changes[0])
 		assert.Equal(t, "revoked", changes[1].Model)
@@ -578,7 +634,7 @@ func TestResellerS1(t *testing.T) {
 		require.Len(t, oldest.Items, 1)
 		assert.EqualValues(t, 1, oldest.Items[0].Revision)
 		assert.EqualValues(t, root.Id, oldest.Items[0].OperatorID)
-		require.Len(t, oldest.Items[0].Changes, 3)
+		require.Len(t, oldest.Items[0].Changes, 5)
 		assert.Nil(t, oldest.Items[0].Changes[0].Before)
 		assert.Zero(t, oldest.NextCursor)
 	})
@@ -607,15 +663,6 @@ func (*resellerQuotaHydrationHook) BeforeProcessPipeline(ctx context.Context, _ 
 }
 func (*resellerQuotaHydrationHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
 	return nil
-}
-
-func TestResellerCustomerAPIKeyPaths(t *testing.T) {
-	for _, path := range []string{"/api/token", "/api/token/", "/api/token/123", "/api/token/search"} {
-		assert.True(t, ResellerCustomerDashboardPath(path), path)
-	}
-	for _, path := range []string{"/api/token-admin", "/api/tokens", "/api/user/token"} {
-		assert.False(t, ResellerCustomerDashboardPath(path), path)
-	}
 }
 
 func TestResellerSubscriptionNilTransactionReturnsError(t *testing.T) {
@@ -793,9 +840,10 @@ func testResellerBillingLifecycle(t *testing.T, rootID int) {
 	require.NoError(t, err)
 	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", a.UserID).Update("activation", "active").Error)
 	require.NoError(t, SetResellerEnabled(rootID, a.UserID, true, true))
-	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s3-customer", Email: "s3-customer@example.invalid"})
+	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "s3-customer", Email: "s3-customer@example.invalid", Phone: "13800138000"})
 	require.NoError(t, err)
 	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", b.UserID).Update("activation", "active").Error)
+	require.NoError(t, SetResellerEnabled(a.UserID, b.UserID, false, true))
 	channel := Channel{Name: "s3-channel", Models: "s3-model", Status: common.ChannelStatusEnabled, Type: 1, Key: "synthetic"}
 	require.NoError(t, DB.Create(&channel).Error)
 	_, err = AdjustResellerQuota(rootID, a.UserID, ResellerQuotaInput{OperationID: "s3-fund-a", Mode: "add", Quota: 10000, Reason: "fixture"})
@@ -807,6 +855,9 @@ func testResellerBillingLifecycle(t *testing.T, rootID int) {
 	require.NoError(t, err)
 	_, err = SaveResellerConfig(rootID, a.UserID, true, input)
 	require.ErrorIs(t, err, ErrResellerConflict)
+	input.Items[0].Ratio = "5"
+	_, err = SaveResellerConfig(a.UserID, b.UserID, false, input)
+	require.ErrorIs(t, err, ErrResellerInvalid)
 	input.Items[0].Ratio = "0.9"
 	_, err = SaveResellerConfig(a.UserID, b.UserID, false, input)
 	require.NoError(t, err)
@@ -1022,9 +1073,10 @@ func testResellerDisplayBatch(t *testing.T, rootID int) {
 	require.NoError(t, err)
 	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", a.UserID).Update("activation", "active").Error)
 	require.NoError(t, SetResellerEnabled(rootID, a.UserID, true, true))
-	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "display-customer", Email: "display-customer@example.invalid"})
+	b, err := CreateResellerUser(a.UserID, "agent_customer", ResellerCreateInput{Username: "display-customer", Email: "display-customer@example.invalid", Phone: "13800138000"})
 	require.NoError(t, err)
 	require.NoError(t, DB.Model(&ResellerIdentity{}).Where("user_id = ?", b.UserID).Update("activation", "active").Error)
+	require.NoError(t, SetResellerEnabled(a.UserID, b.UserID, false, true))
 	channel := Channel{Name: "display-channel", Models: "display-a,display-b,display-c,display-hidden", Group: "default", Status: common.ChannelStatusEnabled, Type: 1, Key: "synthetic-display-key"}
 	require.NoError(t, DB.Create(&channel).Error)
 	items := []ResellerConfigItem{}

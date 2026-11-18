@@ -9,8 +9,9 @@ import (
 )
 
 type ResellerOwnAccount struct {
-	User      ResellerUserView     `json:"user"`
-	Discounts []ResellerConfigItem `json:"discounts"`
+	User              ResellerUserView     `json:"user"`
+	Discounts         []ResellerConfigItem `json:"discounts"`
+	ProcurementRatios []ResellerConfigItem `json:"procurement_ratios"`
 }
 
 type ResellerOwnProfileInput struct {
@@ -54,21 +55,20 @@ func ReadResellerOwnAccount(userID int) (*ResellerOwnAccount, error) {
 	if err != nil {
 		return nil, err
 	}
-	config, err := ReadResellerConfig(DB, userID)
+	config, err := readResellerConfig(DB, userID, maxResellerProcurementRatio)
 	if err != nil {
 		return nil, err
 	}
-	result := &ResellerOwnAccount{User: *profile, Discounts: []ResellerConfigItem{}}
-	discounts := make([]ResellerConfigItem, 0, len(config.Items))
+	result := &ResellerOwnAccount{
+		User: *profile, Discounts: []ResellerConfigItem{}, ProcurementRatios: []ResellerConfigItem{},
+	}
 	channelIDs := make([]int, 0, len(config.Items))
 	for _, item := range config.Items {
-		// Config ratios are canonical strings, so only "0.*" represents a discount.
-		if item.Authorized && strings.HasPrefix(item.Ratio, "0.") {
-			discounts = append(discounts, item)
+		if item.Authorized {
 			channelIDs = append(channelIDs, item.ChannelID)
 		}
 	}
-	if len(discounts) == 0 {
+	if len(channelIDs) == 0 {
 		return result, nil
 	}
 	var channels []Channel
@@ -82,8 +82,13 @@ func ReadResellerOwnAccount(userID int) (*ResellerOwnAccount, error) {
 			modelsByChannel[channel.Id][name] = true
 		}
 	}
-	for _, item := range discounts {
-		if modelsByChannel[item.ChannelID][item.Model] {
+	for _, item := range config.Items {
+		if !item.Authorized || !modelsByChannel[item.ChannelID][item.Model] {
+			continue
+		}
+		result.ProcurementRatios = append(result.ProcurementRatios, item)
+		// Preserve the discount-only response field for existing consumers.
+		if strings.HasPrefix(item.Ratio, "0.") {
 			result.Discounts = append(result.Discounts, item)
 		}
 	}

@@ -1,8 +1,6 @@
 package model
 
 import (
-	"strings"
-
 	"github.com/QuantumNous/new-api/common"
 )
 
@@ -90,22 +88,4 @@ func ResellerKeyAllowed(userID int) error {
 		return ErrResellerAgentDisabled
 	}
 	return nil
-}
-
-func ResellerCustomerDashboardPath(path string) bool {
-	switch path {
-	case "/api/security/factor/replace", "/api/user/self/groups", "/api/mj/self", "/api/user/self", "/api/data/self", "/api/data/flow/self", "/api/reseller/personal/ratios", "/api/reseller/personal/history", "/api/log/self", "/api/log/self/stat", "/api/log/token", "/api/task/self", "/api/models", "/api/user/models", "/api/pricing":
-		return true
-	}
-	if rest, ok := strings.CutPrefix(path, "/api/task/"); ok {
-		id, suffix, found := strings.Cut(rest, "/")
-		if found && id != "" && suffix == "artifacts" {
-			return true
-		}
-	}
-	if rest, ok := strings.CutPrefix(path, "/api/log/task_billing/"); ok && rest != "" && !strings.Contains(rest, "/") {
-		return true
-	}
-	// Token CRUD is already ownership-scoped by the existing controller/model.
-	return path == "/api/token" || strings.HasPrefix(path, "/api/token/")
 }

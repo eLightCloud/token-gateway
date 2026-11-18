@@ -386,20 +386,114 @@ try {
   await step("real password and MFA login/ordinary", async () => {
     await login("ordinary");
   });
+  await step("both customer types use the same navigation and personal pages", async () => {
+    for (const name of ["customer", "ordinary"]) {
+      const page = sessions[name].page;
+      await page.goto(origin + "/profile");
+      await page.getByRole("link", { name: "Profile", exact: true }).waitFor();
+      await page.getByRole("link", { name: "Audit Logs", exact: true }).waitFor();
+      await page.getByText("Language Preferences", { exact: true }).waitFor();
+      await page.goto(origin + "/security");
+      await page.getByText("Account Bindings", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "Replace authenticator", exact: true }).waitFor();
+      await page.goto(origin + "/wallet");
+      await page.getByText("Current Balance", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "Order History", exact: true }).waitFor();
+    }
+    assert.equal((await api("customer", "/api/user/topup", "POST", { key: "unused" })).status, 403);
+  });
   await step("real password and MFA login/admin without recovery capability", async () => {
     await login("admin");
   });
   function mailLink(email, purpose) {
     for (const item of [...mail].reverse()) {
       if (item.recipient !== email) continue;
-      const href = item.message.match(/href="([^"]+)"/)?.[1]?.replaceAll("&amp;", "&");
-      if (href && new URLSearchParams(new URL(href).hash.slice(1)).get("purpose") === purpose)
-        return href;
+      for (const [, rawHref] of item.message.matchAll(/href="([^"]+)"/g)) {
+        const href = rawHref.replaceAll("&amp;", "&");
+        if (new URLSearchParams(new URL(href).hash.slice(1)).get("purpose") === purpose)
+          return href;
+      }
     }
     throw new Error("Expected security mail was not delivered for " + purpose);
   }
   const uid = fixture.users,
     channel = fixture.channel_id;
+  await step("agent workspace reuses self-service and links to the scoped customer bill", async () => {
+    const page = sessions.agent.page;
+    await page.getByRole("link", { name: "Profile", exact: true }).click();
+    await page.getByRole("button", { name: "Edit profile", exact: true }).waitFor();
+    await page.getByText("Language Preferences", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Edit profile", exact: true }).click();
+    const profile = page.getByRole("dialog");
+    await profile.getByLabel("Display name", { exact: true }).fill("Verified agent");
+    await profile.getByRole("button", { name: "Save changes", exact: true }).click();
+    await page.getByRole("heading", { name: "Verified agent", exact: true }).waitFor();
+    const language = await api("agent", "/api/user/self", "PUT", { language: "en" });
+    assert.equal(language.data.success, true, language.text);
+    const preferences = await api("agent", "/api/user/setting", "PUT", {
+      notify_type: "email", quota_warning_threshold: 1000, record_ip_log: true,
+    });
+    assert.equal(preferences.data.success, true, preferences.text);
+    const saved = JSON.parse((await api("agent", "/api/user/self")).data.data.setting);
+    assert.equal(saved.language, "en");
+    assert.equal(saved.record_ip_log, true);
+
+    await page.getByRole("link", { name: "Security & Access", exact: true }).click();
+    await page.getByRole("button", { name: "Change Password", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Replace authenticator", exact: true }).waitFor();
+    await page.getByText("Login sessions", { exact: true }).waitFor();
+    await page.getByText("Passkey Login", { exact: true }).waitFor();
+    for (const path of ["/api/user/sessions", "/api/user/passkey", "/api/user/oauth/bindings"]) {
+      const response = await api("agent", path);
+      assert.equal(response.status, 200, response.text);
+      assert.equal(response.data.success, true, response.text);
+    }
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await page.getByRole("alertdialog", { name: "Sign out this device?" })
+      .getByRole("button", { name: "Sign out", exact: true }).click();
+    const verification = page.getByRole("dialog", { name: "Security verification" });
+    await verification.getByRole("button", { name: "Cancel", exact: true }).click();
+    await verification.waitFor({ state: "hidden" });
+    assert.equal((await api("agent", "/api/user/sessions")).status, 200);
+    assert.equal(await page.getByRole("button", { name: "Disable 2FA", exact: true }).count(), 0);
+    const blocked = await api("agent", "/api/user/2fa/disable", "POST", {});
+    assert.equal(blocked.status, 403);
+    assert.equal(blocked.data.code, "MFA_REQUIRED");
+    for (const [path, method, body] of [
+      ["/api/user/token/status", "GET"],
+      ["/api/user/self", "DELETE"],
+      ["/api/user/self", "PUT", { username: "forbidden-rename" }],
+    ]) {
+      const response = await api("agent", path, method, body);
+      assert.equal(response.status, 403, response.text);
+    }
+    const unverified = await api("agent", "/api/user/self", "PUT", {
+      password: password + "-new", original_password: password,
+    });
+    assert.equal(unverified.data.success, false);
+
+    await page.getByRole("link", { name: "My procurement ratios", exact: true }).click();
+    await page.getByRole("heading", { name: "My procurement ratios", exact: true }).waitFor();
+    await page.getByRole("row", { name: /reseller-demo.*×0\.8/ }).waitFor();
+    await page.getByRole("link", { name: "Customer management", exact: true }).click();
+    await page.getByRole("link", { name: "e2e-customer", exact: true }).click();
+    for (const name of ["Customer overview", "Model authorization and discounts", "Quota adjustments"]) {
+      await page.getByRole("tab", { name, exact: true }).waitFor();
+    }
+    assert.equal(await page.getByRole("tab").count(), 3);
+    const [bill] = await Promise.all([
+      page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === "/api/reseller/self/billing" &&
+          url.searchParams.get("customer_id") === String(uid.customer);
+      }),
+      page.getByRole("link", { name: "View customer bill", exact: true }).click(),
+    ]);
+    assert.equal(bill.status(), 200);
+    assert.equal(new URL(page.url()).pathname, "/reseller/billing");
+    assert.equal(await page.getByLabel("Customer ID", { exact: true }).inputValue(), String(uid.customer));
+    await page.screenshot({ path: join(output, "agent-customer-bill.png"), animations: "disabled" });
+  });
   const balance = (id) => Number(db.prepare("SELECT quota FROM users WHERE id = ?").get(id).quota);
   const procurement = () =>
     db.prepare("SELECT balance,reserved FROM reseller_accounts WHERE user_id = ?").get(uid.agent);
@@ -489,10 +583,17 @@ try {
   }
   await step("identity domains and ownership restrictions", async () => {
     assert.equal((await api("root", `/api/reseller/admin/agents/${uid.agent}`)).status, 200);
+    assert.equal((await api("agent", "/api/reseller/self/customers")).status, 200);
     assert.equal((await api("agent", `/api/reseller/self/customers/${uid.customer}`)).status, 200);
-    assert.equal((await api("agent", `/api/reseller/self/customers/${uid.ordinary}`)).status, 404);
+    const foreign = await api("agent", `/api/reseller/self/customers/${uid.ordinary}`);
+    assert.equal(foreign.status, 404, foreign.text);
+    assert.equal(foreign.data.code, "RESELLER_NOT_FOUND");
+    for (const caller of ["customer", "ordinary", "root"]) {
+      const denied = await api(caller, "/api/reseller/self/customers");
+      assert.equal(denied.status, 403, denied.text);
+      assert.equal(denied.data.code, "RESELLER_ACCOUNT_RESTRICTED");
+    }
     assert.equal((await api("agent", "/api/user/")).status, 403);
-    assert.equal((await api("customer", "/api/reseller/self/customers")).status, 403);
     assert.equal((await api("agent", "/api/token/")).status, 403);
   });
   await step("quota allocation is idempotent and does not debit procurement", async () => {
@@ -615,6 +716,84 @@ try {
     await eventually(() => assert.equal(balance(uid.ordinary), b - 120));
     assert.equal(Number(procurement().balance), a);
   });
+  await step("agent observation menus and APIs stay within owned customers", async () => {
+    const prefix = "/api/reseller/self/observability";
+    const views = [
+      ["overview", "Overview"], ["analytics", "Dashboard"], ["usage", "Usage Logs"],
+      ["audit", "Audit Logs"], ["tasks", "Task Logs"],
+    ];
+    for (const [view] of views) {
+      assert.equal((await api("agent", prefix + "/" + view)).status, 200, view);
+      assert.equal((await api("agent", prefix + "/" + view + "?customer_id=" + uid.ordinary)).status, 404, view);
+      assert.equal((await api("ordinary", prefix + "/" + view)).status, 403, view);
+      assert.equal((await api("customer", prefix + "/" + view)).status, 403, view);
+    }
+    for (const path of ["/api/token/", "/api/log/self", "/api/audit/self", "/api/task/self", "/api/task/foreign/artifacts"]) {
+      assert.equal((await api("agent", path)).status, 403, path);
+    }
+    assert.equal((await api("agent", prefix + "/usage?customer_id=-1")).status, 400);
+    const usage = await api("agent", prefix + "/usage?kind=consumption");
+    assert.ok(usage.data.data.items.length >= 2);
+    assert.ok(usage.data.data.items.every((row) => row.user_id === uid.customer));
+    assert.ok(!usage.text.includes("synthetic-upstream-key"));
+
+    const customerPage = await sessions.customer.context.newPage();
+    try {
+      await customerPage.goto(origin + "/reseller/observe/overview");
+      await customerPage.waitForURL((url) => url.pathname === "/403" || url.pathname === "/wallet");
+    } finally {
+      await customerPage.close();
+    }
+    const page = sessions.agent.page;
+    const filters = page.getByRole("form", { name: "Filters", exact: true });
+    assert.equal(await page.getByRole("link", { name: "API Keys", exact: true }).count(), 0);
+    for (const [view, title] of views) {
+      await page.getByRole("link", { name: title, exact: true }).click();
+      await page.waitForURL((url) => url.pathname === "/reseller/observe/" + view);
+      await page.getByRole("heading", { name: title, exact: true }).waitFor();
+      await page.getByText("My customers", { exact: true }).waitFor();
+      await filters.waitFor();
+      assert.equal(await filters.count(), 1);
+    }
+    await page.getByRole("tab", { name: "Drawing Logs", exact: true }).click();
+    await page.waitForURL((url) => url.searchParams.get("kind") === "drawing");
+    await page.getByRole("link", { name: "Audit Logs", exact: true }).click();
+    await page.getByRole("row").filter({ hasText: "e2e-customer" }).first().waitFor();
+    await page.getByRole("link", { name: "Dashboard", exact: true }).click();
+    await page.getByRole("heading", { name: "Model distribution", exact: true }).waitFor();
+    await page.getByRole("row", { name: /reseller-demo/ }).waitFor();
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.screenshot({ path: join(output, "agent-observation-dashboard-mobile.png"), animations: "disabled" });
+    await eventually(async () => {
+      const widths = await page.evaluate(() => ({
+        content: document.documentElement.scrollWidth, viewport: innerWidth,
+      }));
+      assert.ok(widths.content <= widths.viewport, JSON.stringify(widths));
+    }, 2000);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+
+    await page.getByRole("link", { name: "Usage Logs", exact: true }).click();
+    const request = usage.data.data.items[0];
+    const requestInput = page.getByLabel("Request ID", { exact: true });
+    await requestInput.fill("unsaved draft");
+    await filters.getByRole("button", { name: "Reset", exact: true }).click();
+    assert.equal(await requestInput.inputValue(), "");
+    await requestInput.fill(request.request_id);
+    await filters.getByRole("button", { name: "Search", exact: true }).click();
+    await page.waitForURL((url) => url.searchParams.get("request_id") === request.request_id);
+    const row = page.getByRole("row").filter({ hasText: request.request_id });
+    const [bill] = await Promise.all([
+      page.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return url.pathname === "/api/reseller/self/billing" &&
+          url.searchParams.get("customer_id") === String(uid.customer) &&
+          url.searchParams.get("request_id") === request.request_id;
+      }),
+      row.getByRole("link", { name: "View customer bill", exact: true }).click(),
+    ]);
+    assert.equal(bill.status(), 200);
+    await page.waitForURL((url) => url.pathname === "/reseller/billing");
+  });
   await step("ledger JSON and CSV agree, and customer logs hide channel metadata", async () => {
     const until = Math.floor(Date.now() / 1000) + 1;
     const ledger = await api("agent", `/api/reseller/self/billing?until=${until}`),
@@ -724,7 +903,7 @@ try {
     async () => {
       const page = sessions.agent.page,
         path = `/api/reseller/self/customers/${uid.customer}`;
-      await page.getByRole("tab", { name: "Model authorization and ratios", exact: true }).click();
+      await page.getByRole("tab", { name: "Model authorization and discounts", exact: true }).click();
       const input = page.getByRole("textbox", {
         name: `Ratio for reseller-demo channel ${channel}`,
         exact: true,
@@ -745,7 +924,7 @@ try {
         .waitFor();
       assert.equal(await input.inputValue(), "1.1");
       await page
-        .getByRole("tabpanel", { name: "Model authorization and ratios", exact: true })
+        .getByRole("tabpanel", { name: "Model authorization and discounts", exact: true })
         .getByRole("button", { name: "Reload configuration", exact: true })
         .click();
       let confirm = page.getByRole("alertdialog");
@@ -753,7 +932,7 @@ try {
       await confirm.waitFor({ state: "hidden" });
       assert.equal(await input.inputValue(), "1.1");
       await page
-        .getByRole("tabpanel", { name: "Model authorization and ratios", exact: true })
+        .getByRole("tabpanel", { name: "Model authorization and discounts", exact: true })
         .getByRole("button", { name: "Reload configuration", exact: true })
         .click();
       confirm = page.getByRole("alertdialog");
@@ -897,7 +1076,7 @@ try {
   );
   for (const kind of ["agent", "customer"])
     await step(
-      `new ${kind} chooses a password by email and completes mandatory authenticator enrollment`,
+      `new ${kind} uses email setup and the configured MFA policy`,
       async () => {
         const name = "new-" + kind,
           owner = kind === "agent" ? "root" : "agent",
@@ -906,7 +1085,7 @@ try {
           username: "e2e-" + name,
           display_name: "E2E new " + kind,
           email: name + "@e2e.invalid",
-          ...(kind === "agent" && { phone: "+8613800138000" }),
+          phone: "+8613800138000",
         });
         assert.equal(created.status, 200, created.text);
         assert.equal(created.data.data.activation_mail_sent, true, created.text);
@@ -926,26 +1105,40 @@ try {
         const page = await context.newPage();
         page.setDefaultTimeout(15000);
         await page.goto(link);
-        await page.getByLabel("New Password", { exact: true }).fill(password);
+        await page.getByLabel("Password", { exact: true }).fill(password);
+        await page.getByLabel("Confirm password", { exact: true }).fill(password);
         const activationPromise = page.waitForResponse(
           (r) => r.url().endsWith("/api/security/activation") && r.request().method() === "POST",
         );
-        await page.getByRole("button", { name: "Set Password", exact: true }).click();
+        await page.getByRole("button", { name: "Confirm", exact: true }).click();
         const activated = await (await activationPromise).json();
         assert.equal(activated.success, true, JSON.stringify(activated));
         assert.ok(!activated.data.access_token);
         await page.goto(origin + "/sign-in");
         await page.getByLabel("Username or Email", { exact: true }).fill("e2e-" + name);
         await page.getByLabel("Password", { exact: true }).fill(password);
-        const loginPromise = page.waitForResponse(
-          (r) => r.url().includes("/api/user/login?") && r.request().method() === "POST",
-        );
-        await page.getByRole("button", { name: "Sign in", exact: true }).click();
-        const loginResult = await (await loginPromise).json();
+        const signIn = async () => {
+          const loginPromise = page.waitForResponse(
+            (r) => r.url().includes("/api/user/login?") && r.request().method() === "POST",
+          );
+          await page.getByRole("button", { name: "Sign in", exact: true }).click();
+          return (await loginPromise).json();
+        };
+        if (kind === "customer") {
+          const beforeEnablement = await signIn();
+          assert.equal(beforeEnablement.success, false, JSON.stringify(beforeEnablement));
+          const enabled = await api(owner, `${path}/${uid[name]}/enabled`, "PUT", { enabled: true });
+          assert.equal(enabled.status, 200, enabled.text);
+        }
+        const loginResult = await signIn();
         assert.equal(loginResult.success, true, JSON.stringify(loginResult));
         sessions[name] = { page, context, token: loginResult.data.access_token, base: origin };
-        await page.waitForURL((url) => url.pathname === "/security-setup");
         const target = kind === "agent" ? "/api/reseller/self/customers" : "/api/token/";
+        await page.waitForURL((url) => url.pathname === "/security-setup");
+        const security = await api(name, "/api/security/completion");
+        assert.equal(security.data.data.mfa_required, true);
+        assert.equal(security.data.data.mfa_enabled, false);
+        assert.equal(security.data.data.complete, false);
         assert.equal((await api(name, target)).status, 403);
         const verified = await api(name, "/api/verify", "POST", {
           scope: "2fa.setup",

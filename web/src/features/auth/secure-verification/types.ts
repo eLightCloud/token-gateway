@@ -49,6 +49,7 @@ export type SecurityProofScope =
   | 'account.security.recover'
   | 'account.security.passkey_recover'
   | 'account.delete'
+  | 'account.sessions.revoke'
 
 export type VerificationOperation =
   | { scope: 'email.delivery.settings.write'; context: EmailIntent }
@@ -67,6 +68,7 @@ export type VerificationOperation =
       context: { provider: string; email?: string; code?: string }
     }
   | { scope: 'account.binding.unbind'; context: { provider_id: number } }
+  | { scope: 'account.sessions.revoke'; context: { session_id: string } }
   | {
       scope: Exclude<
         SecurityProofScope,
@@ -78,6 +80,7 @@ export type VerificationOperation =
         | 'channel.key.read'
         | 'account.binding.bind'
         | 'account.binding.unbind'
+        | 'account.sessions.revoke'
       >
       context?: Record<string, never>
     }

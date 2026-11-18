@@ -82,9 +82,7 @@ export function AccountActivation() {
 
       toast.success(
         resetsPassword
-          ? t(
-              'Password reset completed. Sign in with your password and authenticator.'
-            )
+          ? t('Password reset completed. Sign in with your new password.')
           : t('Password set successfully')
       )
       if (result?.notification_warning) {

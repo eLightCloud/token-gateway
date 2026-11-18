@@ -39,6 +39,7 @@ import { ResellerAgentControls } from './agent-controls'
 import {
   hasResellerAgentPassword,
   isResellerAgentActivated,
+  resellerCustomerStatus,
 } from './agent-status'
 import {
   resellerKey,
@@ -49,7 +50,7 @@ import {
 import { ResellerCreateDialog } from './create-account-dialog'
 import { ResellerQuotaDialog } from './quota-dialog'
 import { useResellerFilter } from './search'
-import { ProcurementSummary, ResellerQueryStatus } from './shared'
+import { ResellerQueryStatus } from './shared'
 
 export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
   const { t, i18n } = useTranslation()
@@ -75,9 +76,6 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
     admin,
     userID
   )
-  const sendAccountEmailLabel = admin
-    ? t('Reset Password')
-    : t('Send activation email')
   const query = useQuery({
     meta: { errorToast: false },
     refetchInterval: 5000,
@@ -112,9 +110,6 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
         <div className='space-y-4'>
-          {query.data?.account && (
-            <ProcurementSummary account={query.data.account} />
-          )}
           <div className='flex flex-wrap items-end gap-x-3 gap-y-2'>
             <div className='max-w-xs min-w-48 flex-1 space-y-1'>
               <Label htmlFor='customer-search'>
@@ -130,9 +125,7 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
               />
             </div>
             <div className='space-y-1'>
-              <Label htmlFor='customer-activation'>
-                {admin ? t('Password') : t('Activation')}
-              </Label>
+              <Label htmlFor='customer-activation'>{t('Password')}</Label>
               <NativeSelect
                 id='customer-activation'
                 value={activationFilter}
@@ -142,24 +135,13 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
                 }}
               >
                 <option value=''>{t('All')}</option>
-                <option value='pending'>
-                  {admin ? t('Password not set') : t('Pending activation')}
-                </option>
-                {!admin && (
-                  <option value='security_pending'>
-                    {t('Pending MFA setup')}
-                  </option>
-                )}
-                {admin ? (
-                  <option value='password_set'>{t('Configured')}</option>
-                ) : (
-                  <option value='active'>{t('Active')}</option>
-                )}
+                <option value='pending'>{t('Password not set')}</option>
+                <option value='password_set'>{t('Configured')}</option>
               </NativeSelect>
             </div>
             <div className='space-y-1'>
               <Label htmlFor='customer-service'>
-                {admin ? t('Activation') : t('Service status')}
+                {admin ? t('Activation') : t('Account status')}
               </Label>
               <NativeSelect
                 id='customer-service'
@@ -177,6 +159,9 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
                   <option value='disabled'>{t('Disabled')}</option>
                 ) : (
                   <>
+                    <option value='awaiting_enablement'>
+                      {t('Awaiting enablement')}
+                    </option>
                     <option value='platform_disabled'>
                       {t('Platform disabled')}
                     </option>
@@ -217,58 +202,29 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
                   ),
                 },
                 { id: 'email', header: t('Email'), cell: (row) => row.email },
-                ...(admin
-                  ? [
-                      {
-                        id: 'phone',
-                        header: t('Mobile number'),
-                        cell: (row: UserPage['items'][number]) =>
-                          row.phone || '—',
-                      },
-                    ]
-                  : []),
+                {
+                  id: 'phone',
+                  header: t('Mobile number'),
+                  cell: (row) => row.phone || '—',
+                },
                 {
                   id: 'activation',
-                  header: admin ? t('Password') : t('Activation'),
-                  cell: (row) => {
-                    if (admin) {
-                      return hasResellerAgentPassword(row.activation)
-                        ? t('Configured')
-                        : t('Password not set')
-                    }
-                    return (
-                      (
-                        {
-                          active: t('Active'),
-                          security_pending: t('Pending MFA setup'),
-                        } as Record<string, string>
-                      )[row.activation] ?? t('Pending activation')
-                    )
-                  },
+                  header: t('Password'),
+                  cell: (row) =>
+                    hasResellerAgentPassword(row.activation)
+                      ? t('Configured')
+                      : t('Password not set'),
                 },
                 {
                   id: 'service',
-                  header: admin ? t('Activation') : t('Service status'),
+                  header: admin ? t('Activation') : t('Account status'),
                   cell: (row) => {
                     if (admin) {
                       return isResellerAgentActivated(row)
                         ? t('Activated')
                         : t('Disabled')
                     }
-                    const agentDisabled = row.account
-                      ? !row.account.enabled
-                      : row.agent_disabled
-                    return (
-                      <>
-                        {row.platform_disabled && (
-                          <span>{t('Platform disabled')} </span>
-                        )}
-                        {agentDisabled && <span>{t('Agent disabled')} </span>}
-                        {!row.platform_disabled &&
-                          !agentDisabled &&
-                          t('Enabled')}
-                      </>
-                    )
+                    return t(resellerCustomerStatus(row))
                   },
                 },
                 {
@@ -297,27 +253,12 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
                           {t('Adjust Quota')}
                         </Button>
                       )}
-                      {admin && (
-                        <ResellerAgentControls
-                          user={row}
-                          onChanged={() => void query.refetch()}
-                        />
-                      )}
-                      {row.activation === 'pending' && (
-                        <Button
-                          variant='outline'
-                          size='sm'
-                          disabled={
-                            row.platform_disabled ||
-                            sending.includes(row.user_id)
-                          }
-                          onClick={() => sendActivationMail(row.user_id)}
-                        >
-                          {sending.includes(row.user_id)
-                            ? t('Sending...')
-                            : sendAccountEmailLabel}
-                        </Button>
-                      )}
+                      <ResellerAgentControls
+                        user={row}
+                        customer={!admin}
+                        sending={sending.includes(row.user_id)}
+                        onChanged={() => void query.refetch()}
+                      />
                     </div>
                   ),
                 },
@@ -361,7 +302,7 @@ export function ResellerUsersPage({ admin = false }: { admin?: boolean }) {
           onOpenChange={setCreate}
           onCreated={(createdUserID) => {
             toast.success(t('User created successfully'))
-            sendActivationMail(createdUserID)
+            sendActivationMail({ userID: createdUserID, afterCreate: true })
             void query.refetch()
           }}
         />

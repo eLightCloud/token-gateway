@@ -16,17 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StaticDataTable } from '@/components/data-table'
+import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RealtimePricingEditor } from '@/features/realtime-pricing/editor'
 import { toIntlLocale } from '@/i18n/languages'
@@ -34,11 +33,14 @@ import { formatQuotaWithCurrency } from '@/lib/currency'
 import { formatNumber } from '@/lib/format'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { sendResellerActivationEmail } from './activation-mail'
 import { ResellerAgentConfigHistory } from './agent-config-history'
 import { ResellerAgentControls } from './agent-controls'
-import { ResellerAgentDiscounts } from './agent-discounts'
+import { ResellerAgentProcurementRatios } from './agent-discounts'
 import { ResellerAgentInformation } from './agent-information'
+import {
+  hasResellerAgentPassword,
+  resellerCustomerStatus,
+} from './agent-status'
 import {
   resellerKey,
   resellerPath,
@@ -46,7 +48,6 @@ import {
   type AdjustmentPage,
   type Workspace,
 } from './api'
-import { ResellerBillingTable } from './billing-page'
 import { ResellerConfigEditor } from './config-editor'
 import { ResellerQuotaDialog } from './quota-dialog'
 import {
@@ -152,8 +153,6 @@ export function ResellerWorkspacePage({
   const viewer = useAuthStore((s) => s.auth.user?.id)
   const [quotaOpen, setQuotaOpen] = useState(false)
   const [quotaSession, setQuotaSession] = useState(0)
-  const [enabledOpen, setEnabledOpen] = useState(false)
-  const [email, setEmail] = useState('')
   const [tab, setTab] = useState('information')
   const query = useQuery({
     meta: { errorToast: false },
@@ -164,28 +163,34 @@ export function ResellerWorkspacePage({
       resellerRequest<Workspace>(`${resellerPath(admin)}/${userID}`),
   })
   const user = query.data?.user
-  const enabled = !user?.agent_disabled
-  const toggle = useMutation({
-    meta: { errorToast: false },
-    mutationFn: () =>
-      resellerRequest(`${resellerPath(admin)}/${userID}/enabled`, 'put', {
-        enabled: !enabled,
-      }),
-    onSuccess: () => {
-      setEnabledOpen(false)
-      void query.refetch()
-    },
-  })
-  const activation = useMutation({
-    meta: { errorToast: false },
-    mutationFn: () => sendResellerActivationEmail(false, userID, email),
-    onSuccess: () => void query.refetch(),
-  })
+  if (admin && user && !user.account) {
+    return (
+      <SectionPageLayout>
+        <SectionPageLayout.Title>
+          {t('Account details')}
+        </SectionPageLayout.Title>
+        <SectionPageLayout.Content>
+          <ErrorState
+            title={t('Reseller account not found')}
+            action={
+              <Link
+                to='/reseller/agents'
+                className={buttonVariants({ variant: 'outline' })}
+              >
+                {t('Back to list')}
+              </Link>
+            }
+          />
+        </SectionPageLayout.Content>
+      </SectionPageLayout>
+    )
+  }
   const configEditor = query.data && (
     <ResellerConfigEditor
       key={`${userID}:${query.data.config.revision}`}
       userID={userID}
       admin={admin}
+      procurement={admin}
       consumptionEditable={admin || query.data.pricing_phase !== 'active'}
       config={query.data.config}
       candidates={query.data.candidates}
@@ -205,6 +210,15 @@ export function ResellerWorkspacePage({
         <Link to={admin ? '/reseller/agents' : '/reseller/customers'}>
           {t('Back to list')}
         </Link>
+        {!admin && user && (
+          <Link
+            className={buttonVariants({ variant: 'outline' })}
+            to='/reseller/billing'
+            search={{ customer: String(userID) }}
+          >
+            {t('View customer bill')}
+          </Link>
+        )}
         <Button
           variant='outline'
           onClick={() => {
@@ -215,22 +229,12 @@ export function ResellerWorkspacePage({
         >
           {t('Adjust Quota')}
         </Button>
-        {admin ? (
-          user && (
-            <ResellerAgentControls
-              user={user}
-              onChanged={() => void query.refetch()}
-              detail
-            />
-          )
-        ) : (
-          <Button
-            variant='outline'
-            onClick={() => setEnabledOpen(true)}
-            disabled={!user}
-          >
-            {enabled ? t('Disable') : t('Enable')}
-          </Button>
+        {user && (
+          <ResellerAgentControls
+            user={user}
+            customer={!admin}
+            onChanged={() => void query.refetch()}
+          />
         )}
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
@@ -242,90 +246,49 @@ export function ResellerWorkspacePage({
         {query.data && user && (
           <div className='space-y-4'>
             {user.account && <ProcurementSummary account={user.account} />}
+            {!admin && (
+              <div className='flex flex-wrap items-center gap-2 text-sm'>
+                <Badge variant='outline'>
+                  {hasResellerAgentPassword(user.activation)
+                    ? `${t('Password')} · ${t('Configured')}`
+                    : t('Password not set')}
+                </Badge>
+                <Badge variant='secondary'>
+                  {t(resellerCustomerStatus(user))}
+                </Badge>
+                <span>
+                  {t('Available quota')}{' '}
+                  <strong>
+                    {formatQuotaWithCurrency(user.quota, { locale })}
+                  </strong>
+                </span>
+              </div>
+            )}
             <Tabs value={tab} onValueChange={setTab}>
               <TabsList className='max-w-full overflow-x-auto'>
                 <TabsTrigger value='information'>
-                  {t('Basic information')}
+                  {admin ? t('Basic information') : t('Customer overview')}
                 </TabsTrigger>
                 <TabsTrigger value='configuration'>
-                  {t('Model authorization and ratios')}
+                  {admin
+                    ? t('Model authorization and ratios')
+                    : t('Model authorization and discounts')}
                 </TabsTrigger>
-                {!admin && (
-                  <TabsTrigger value='billing'>
-                    {t('Consumption details')}
-                  </TabsTrigger>
-                )}
                 <TabsTrigger value='quota'>
                   {t('Quota adjustments')}
                 </TabsTrigger>
               </TabsList>
               <TabsContent value='information'>
-                {admin ? (
-                  <ResellerAgentInformation user={user} />
-                ) : (
-                  <div className='space-y-3 py-3'>
-                    <p>
-                      {user.display_name} · {user.email}
-                    </p>
-                    <p>
-                      {(
-                        {
-                          active: t('Active'),
-                          security_pending: t('Pending MFA setup'),
-                        } as Record<string, string>
-                      )[user.activation] ?? t('Pending activation')}
-                    </p>
-                    <p>
-                      {t('Available quota')}:{' '}
-                      {formatQuotaWithCurrency(
-                        user.account
-                          ? user.account.balance - user.account.reserved
-                          : user.quota,
-                        { locale }
-                      )}
-                    </p>
-                    {user.platform_disabled && <p>{t('Platform disabled')}</p>}
-                    {user.agent_disabled && <p>{t('Agent disabled')}</p>}
-                    {user.activation === 'pending' && (
-                      <div className='max-w-md space-y-2'>
-                        <Label htmlFor='activation-email'>
-                          {t('Correct pending email')}
-                        </Label>
-                        <Input
-                          id='activation-email'
-                          type='email'
-                          value={email}
-                          onChange={(event) => setEmail(event.target.value)}
-                        />
-                        <Button
-                          disabled={
-                            user.platform_disabled || activation.isPending
-                          }
-                          onClick={() => activation.mutate()}
-                        >
-                          {t('Resend activation email')}
-                        </Button>
-                      </div>
-                    )}
-                    {activation.isSuccess && (
-                      <p role='status'>
-                        {t('Activation email submitted to the mail server.')}
-                      </p>
-                    )}
-                    {activation.isError && (
-                      <p role='alert'>{t('Failed to send activation email')}</p>
-                    )}
-                  </div>
-                )}
+                <ResellerAgentInformation user={user} customer={!admin} />
               </TabsContent>
               <TabsContent value='configuration' keepMounted>
                 {admin ? (
-                  <ResellerAgentDiscounts
+                  <ResellerAgentProcurementRatios
                     items={query.data.config.items}
                     candidates={query.data.candidates}
                   >
                     {configEditor}
-                  </ResellerAgentDiscounts>
+                  </ResellerAgentProcurementRatios>
                 ) : (
                   configEditor
                 )}
@@ -362,11 +325,6 @@ export function ResellerWorkspacePage({
                   </section>
                 )}
               </TabsContent>
-              {!admin && (
-                <TabsContent value='billing'>
-                  <ResellerBillingTable key={userID} customerID={userID} />
-                </TabsContent>
-              )}
               <TabsContent value='quota'>
                 <ResellerAdjustments
                   key={userID}
@@ -384,19 +342,6 @@ export function ResellerWorkspacePage({
               onOpenChange={setQuotaOpen}
               onSuccess={() => void query.refetch()}
             />
-            <ConfirmDialog
-              open={!admin && enabledOpen}
-              onOpenChange={setEnabledOpen}
-              title={enabled ? t('Disable account') : t('Enable account')}
-              desc={t(
-                'This changes only the agent restriction. Platform restrictions remain in effect.'
-              )}
-              destructive={enabled}
-              isLoading={toggle.isPending}
-              handleConfirm={() => toggle.mutate()}
-            >
-              {toggle.isError && <p role='alert'>{t('Operation failed')}</p>}
-            </ConfirmDialog>
           </div>
         )}
       </SectionPageLayout.Content>

@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -2011,6 +2012,7 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 		{"ratio one equal completion", "1", 100, 100, false, false, 900, 9920},
 		{"realtime markup", "5", 500, 100, false, false, 500, 9920},
 		{"realtime markup refund", "5", 500, 0, false, true, 1000, 10000},
+		{"procurement markup", "0.9", 90, 100, false, false, 910, 9500},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			truncate(t)
@@ -2026,7 +2028,12 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 			require.NoError(t, model.DB.Create(&model.ResellerAccount{UserID: a.Id, Enabled: true, Balance: 10000}).Error)
 			channel := model.Channel{Id: 814, Name: "personal-task", Models: "personal-model", Key: "synthetic", Status: common.ChannelStatusEnabled}
 			require.NoError(t, model.DB.Create(&channel).Error)
-			input := model.ResellerConfigInput{Items: []model.ResellerConfigItem{{Model: "personal-model", ChannelID: channel.Id, Authorized: true, Ratio: "0.8"}}}
+			procurementMarkup := tc.name == "procurement markup"
+			procurementRatio := "0.8"
+			if procurementMarkup {
+				procurementRatio = "5"
+			}
+			input := model.ResellerConfigInput{Items: []model.ResellerConfigItem{{Model: "personal-model", ChannelID: channel.Id, Authorized: true, Ratio: procurementRatio}}}
 			_, err := model.SaveResellerConfig(root.Id, a.Id, true, input)
 			require.NoError(t, err)
 			input.Items[0].Ratio = tc.ratio
@@ -2048,6 +2055,13 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 			info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "generate"}, RequestId: "personal-task-request", UserId: b.Id, IsPlayground: true, PersonalPricing: snapshot, OriginModelName: "personal-model", PriceData: types.PriceData{Quota: 100, QuotaToPreConsume: 100}, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id}}
 			info.PriceData.UsePrice = fixedReconciliation
 			require.Nil(t, PreConsumeBilling(ctx, 100, info))
+			if procurementMarkup {
+				_, err := model.ProcessResellerEvents(100)
+				require.NoError(t, err)
+				var account model.ResellerAccount
+				require.NoError(t, model.DB.First(&account, "user_id = ?", a.Id).Error)
+				assert.EqualValues(t, 500, account.Reserved)
+			}
 			task := &model.Task{TaskID: "personal-task", UserId: b.Id, ChannelId: channel.Id, Quota: 100, Status: model.TaskStatusSubmitted, PrivateData: model.TaskPrivateData{BillingSource: BillingSourceWallet, BillingContext: SnapshotTaskBillingContext(info)}}
 			require.NoError(t, model.DB.Create(task).Error)
 			require.NoError(t, SettleOrganizationInvoiceTaskSubmission(ctx, info, task, 100, tc.confirmed))
@@ -2062,7 +2076,13 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 			}
 			// Mutable configuration changes cannot reprice this task.
 			require.NoError(t, model.DB.Model(&model.ResellerModelConfig{}).Where("user_id = ?", b.Id).Update("ratio", 2000000).Error)
-			if tc.name == "delivery topup" {
+			if procurementMarkup {
+				input.ExpectedRevision = 1
+				input.Items[0].Ratio = "0.8"
+				_, err := model.SaveResellerConfig(root.Id, a.Id, true, input)
+				require.NoError(t, err)
+			}
+			if tc.name == "delivery topup" || procurementMarkup {
 				task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{}
 				require.NoError(t, model.DB.Save(task).Error)
 				current := *task
@@ -2071,6 +2091,13 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 				require.NoError(t, model.DB.First(&current, task.ID).Error)
 				require.NoError(t, ReservePersonalTaskDelivery(ctx, task, &current, 150, map[string]any{"seconds": 15}, "delivery"))
 				assert.EqualValues(t, 865, getUserQuota(t, b.Id))
+				if procurementMarkup {
+					_, err := model.ProcessResellerEvents(100)
+					require.NoError(t, err)
+					var account model.ResellerAccount
+					require.NoError(t, model.DB.First(&account, "user_id = ?", a.Id).Error)
+					assert.EqualValues(t, 750, account.Reserved)
+				}
 			}
 
 			if tc.name == "log failure recovery" || tc.name == "refund log recovery" {
@@ -2114,6 +2141,15 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 			require.NoError(t, model.DB.First(&account, "user_id = ?", a.Id).Error)
 			assert.Equal(t, tc.wantA, account.Balance)
 			assert.Zero(t, account.Reserved)
+			if procurementMarkup {
+				require.NoError(t, RefundPersonalRequestToBase(ctx, info.RequestId, "procurement-partial", 60))
+				_, err := model.ProcessResellerEvents(100)
+				require.NoError(t, err)
+				require.NoError(t, model.DB.First(&account, "user_id = ?", a.Id).Error)
+				assert.EqualValues(t, 9700, account.Balance)
+				assert.Zero(t, account.Reserved)
+				assert.EqualValues(t, 946, getUserQuota(t, b.Id))
+			}
 			if tc.name == "pending equal completion" {
 				for _, remaining := range []int{60, 30, 0} {
 					operation := fmt.Sprintf("partial-%d", remaining)
@@ -2346,6 +2382,65 @@ func TestPersonalFundingCorrectness(t *testing.T) {
 			require.NoError(t, connection.Close())
 		})
 	}
+	t.Run("oversized procurement reservations are rejected without exposing the charge", func(t *testing.T) {
+		ctx, info := personalFundingFixture(t)
+		const base = 500_000_000
+		info.PersonalPricing.Channels[info.ChannelId] = types.PersonalChannelPrice{
+			CustomerRatio: model.ResellerRatioScale,
+			AgentRatio:    5 * model.ResellerRatioScale,
+		}
+		info.PriceData.QuotaToPreConsume = base
+		var before model.ResellerAccount
+		require.NoError(t, model.DB.First(&before, "user_id = ?", info.PersonalPricing.AgentUserID).Error)
+		var reservationBefore model.ResellerRequest
+		require.NoError(t, model.DB.First(&reservationBefore, "id = ?", info.RequestId).Error)
+		assert.EqualValues(t, 80, reservationBefore.ReservedQuota)
+		walletBefore := getUserQuota(t, info.UserId)
+		var tokenBefore model.Token
+		require.NoError(t, model.DB.First(&tokenBefore, info.TokenId).Error)
+		var eventsBefore int64
+		require.NoError(t, model.DB.Model(&model.ResellerEvent{}).Where("customer_user_id = ?", info.UserId).Count(&eventsBefore).Error)
+
+		first := *info
+		first.RequestId = "funding-procurement-overflow"
+		first.Billing = nil
+		for _, attempt := range []struct {
+			name string
+			info *relaycommon.RelayInfo
+		}{{"initial", &first}, {"additional", info}} {
+			t.Run(attempt.name, func(t *testing.T) {
+				apiErr := PreparePersonalChannelBilling(ctx, attempt.info)
+				require.NotNil(t, apiErr)
+				assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+				public := apiErr.ToOpenAIError()
+				assert.Equal(t, relaytypes.ErrorCode("reseller_procurement_insufficient"), public.Code)
+				assert.Equal(t, model.ErrResellerProcurementInsufficient.Error(), public.Message)
+			})
+		}
+		task := model.Task{Quota: 90, PrivateData: model.TaskPrivateData{BillingContext: SnapshotTaskBillingContext(info)}}
+		var deliveryErr *relaytypes.NewAPIError
+		require.ErrorAs(t, ReservePersonalTaskDelivery(ctx, &task, &task, base, nil, ""), &deliveryErr)
+		assert.Equal(t, http.StatusForbidden, deliveryErr.StatusCode)
+		assert.Equal(t, relaytypes.ErrorCode("reseller_procurement_insufficient"), deliveryErr.GetErrorCode())
+		assert.Equal(t, model.ErrResellerProcurementInsufficient.Error(), deliveryErr.Error())
+		assert.Nil(t, first.Billing)
+		var requestCount, eventsAfter int64
+		require.NoError(t, model.DB.Model(&model.ResellerRequest{}).Where("id = ?", first.RequestId).Count(&requestCount).Error)
+		assert.Zero(t, requestCount)
+		require.NoError(t, model.DB.Model(&model.ResellerEvent{}).Where("customer_user_id = ?", info.UserId).Count(&eventsAfter).Error)
+		assert.Equal(t, eventsBefore, eventsAfter)
+		var reservationAfter model.ResellerRequest
+		require.NoError(t, model.DB.First(&reservationAfter, "id = ?", info.RequestId).Error)
+		assert.Equal(t, reservationBefore.ReservedQuota, reservationAfter.ReservedQuota)
+		var after model.ResellerAccount
+		require.NoError(t, model.DB.First(&after, "user_id = ?", before.UserID).Error)
+		assert.Equal(t, before.Balance, after.Balance)
+		assert.Equal(t, before.Reserved, after.Reserved)
+		assert.Equal(t, walletBefore, getUserQuota(t, info.UserId))
+		var tokenAfter model.Token
+		require.NoError(t, model.DB.First(&tokenAfter, info.TokenId).Error)
+		assert.Equal(t, tokenBefore.RemainQuota, tokenAfter.RemainQuota)
+	})
 	t.Run("immediate failure uses refund lifecycle", func(t *testing.T) {
 		ctx, info := personalFundingFixture(t)
 		task := model.Task{TaskID: "immediate-failure", UserId: info.UserId, ChannelId: info.ChannelId, Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingSource: "wallet", TokenId: info.TokenId, BillingContext: SnapshotTaskBillingContext(info)}}

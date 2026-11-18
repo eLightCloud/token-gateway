@@ -16,7 +16,7 @@ func allowSecurityCompletion(c *gin.Context, userID int, pat bool) bool {
 	if !state.Required {
 		return allowResellerDashboard(c, userID)
 	}
-	if c.Request.Method == http.MethodPost && c.Request.URL.Path == "/api/user/2fa/disable" {
+	if state.MFARequired && c.Request.Method == http.MethodPost && c.Request.URL.Path == "/api/user/2fa/disable" {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "MFA_REQUIRED", "message": "Two-factor authentication is required"})
 		return false
 	}
@@ -41,6 +41,9 @@ func allowSecurityCompletion(c *gin.Context, userID int, pat bool) bool {
 	}
 	// Enrollment is session-only, including on pending dedicated accounts.
 	if safe && !pat {
+		return state.Kind != "agent_customer" || allowResellerDashboard(c, userID)
+	}
+	if state.Kind == "agent" && state.Complete && !pat && allowResellerSelfAccount(c) {
 		return true
 	}
 	return allowResellerDashboard(c, userID)

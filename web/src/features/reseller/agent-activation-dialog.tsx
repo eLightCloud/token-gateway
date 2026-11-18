@@ -39,7 +39,8 @@ import {
 export function ResellerAgentActivationDialog(props: {
   user: ResellerUser
   onChanged: () => void
-  triggerLabel: string
+  customer?: boolean
+  sending?: boolean
 }) {
   const { t } = useTranslation()
   const id = useId()
@@ -53,15 +54,21 @@ export function ResellerAgentActivationDialog(props: {
     meta: { errorToast: false },
     retry: false,
     mutationFn: (values: PendingResellerEmail) =>
-      sendResellerActivationEmail(true, props.user.user_id, values.email),
+      sendResellerActivationEmail(
+        !props.customer,
+        props.user.user_id,
+        values.email
+      ),
     onSuccess: () => {
-      toast.success(t('Activation email submitted to the mail server.'))
+      toast.success(
+        t('Account information email submitted to the mail server.')
+      )
       setOpen(false)
       form.reset()
       props.onChanged()
     },
     onError: (error) =>
-      handleServerError(error, t('Failed to send activation email')),
+      handleServerError(error, t('Failed to send account information email')),
   })
 
   return (
@@ -69,10 +76,10 @@ export function ResellerAgentActivationDialog(props: {
       <Button
         variant='outline'
         size='sm'
-        disabled={props.user.platform_disabled}
+        disabled={props.user.platform_disabled || props.sending}
         onClick={() => setOpen(true)}
       >
-        {props.triggerLabel}
+        {props.sending ? t('Sending...') : t('Send account information')}
       </Button>
       <Dialog
         open={open}
@@ -83,7 +90,7 @@ export function ResellerAgentActivationDialog(props: {
         }}
         title={t('Set Password')}
         description={t(
-          'An activation email lets the account holder set a password and configure MFA.'
+          'The account email includes the username and a password setup link.'
         )}
       >
         <form
@@ -107,7 +114,7 @@ export function ResellerAgentActivationDialog(props: {
             {error && <FieldError id={`${id}-error`}>{t(error)}</FieldError>}
           </Field>
           <Button type='submit' disabled={send.isPending}>
-            {send.isPending ? t('Sending...') : t('Send activation email')}
+            {send.isPending ? t('Sending...') : t('Send account information')}
           </Button>
         </form>
       </Dialog>

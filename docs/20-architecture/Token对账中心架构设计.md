@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-08-09
+last-reviewed: 2026-11-12
 ---
 
 # Token 账单与人工对账中心架构设计
@@ -40,17 +40,17 @@ last-reviewed: 2026-08-09
 允许：
 
 ```text
-controller/bill -> service/bill -> model/log and existing billing models
+router/token-bill-router.go → controller/token_bill.go → service/token_bill.go / model/token_bill.go
 ```
 
 禁止：
 
 ```text
-relay/*              -> service/bill
-service/quota.go     -> service/bill
-service/text_quota.go -> service/bill
-service/task_*.go    -> service/bill
-controller/relay.go  -> service/bill
+relay/*              -> Token 账单服务
+service/quota.go     -> Token 账单服务
+service/text_quota.go -> Token 账单服务
+service/task_*.go    -> Token 账单服务
+controller/relay.go  -> Token 账单服务
 ```
 
 账单功能不能以“旁路”为名在主链路新增同步或异步写入。无论是 fail-open 还是异步写入，都会形成第二套事实口径，因此不允许。
@@ -139,7 +139,7 @@ completion_tokens = sum(log.completion_tokens)
 
 ## 6. API 架构
 
-后端使用独立只读路由组，统一经过 `middleware.RootAuth()`。建议保留 `/api/reconciliation` 作为页面兼容路径，但仅提供账单查询语义：
+后端使用独立只读路由组，统一经过 `middleware.RootAuth()`。[路由注册](../../router/token-bill-router.go)挂载在 `/api/reconciliation`，仅提供账单查询：
 
 | 方法与路径 | 行为 |
 | --- | --- |
@@ -152,7 +152,7 @@ completion_tokens = sum(log.completion_tokens)
 
 ## 7. 前端架构
 
-前端保留 `web/src/features/reconciliation/` 作为独立 feature 边界，但收敛为已评审的方案 2 单页工作台：
+`web/src/features/reconciliation/` 提供独立的单页工作台：
 
 - 一个路由入口；
 - 一组 URL 可复现的筛选条件；

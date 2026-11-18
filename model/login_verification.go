@@ -65,6 +65,9 @@ func CreateUserSessionFromLoginFlow(token string, session *UserSession, validate
 		if state.Status != common.UserStatusEnabled || state.AuthVersion != session.UserAuthVersion {
 			return ErrUserSessionInactive
 		}
+		if err := resellerLoginAllowed(lockForUpdate(tx), session.UserID, state.ResellerKind); err != nil {
+			return err
+		}
 		if err := validate(tx, flow, state); err != nil {
 			return err
 		}

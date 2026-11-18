@@ -127,16 +127,16 @@ func personalBillingFact(info *relaycommon.RelayInfo, base int, kind, operation 
 	agent := 0
 	if snapshot.AgentUserID > 0 {
 		var clamp *common.QuotaClamp
-		agent, clamp, err = model.PersonalQuota(base, price.AgentRatio)
+		agent, clamp, err = model.ResellerProcurementQuota(base, price.AgentRatio)
 		if err != nil {
 			return nil, err
 		}
 		if clamp != nil {
+			if kind == "reserve" || kind == "pending" {
+				return nil, rejectResellerProcurementReservation(info.RequestId, clamp)
+			}
 			info.QuotaClamp = clamp
 			saturated = true
-			if kind == "reserve" || kind == "pending" {
-				return nil, clamp
-			}
 		}
 	}
 	if info.RequestId == "" {

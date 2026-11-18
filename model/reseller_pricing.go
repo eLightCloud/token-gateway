@@ -70,7 +70,7 @@ func loadPersonalPricings(userID int, modelNames []string, admission bool) (map[
 		}
 		if user.ResellerKind == "" {
 			for _, row := range own {
-				if models[row.ModelKey] != row.Model || row.Ratio < 1 || row.Ratio > 2*ResellerRatioScale {
+				if models[row.ModelKey] != row.Model || row.Ratio < 1 || row.Ratio > maxResellerConsumptionRatio {
 					return ErrResellerDataCorrupt
 				}
 				if row.Ratio != ResellerRatioScale {
@@ -140,7 +140,7 @@ func loadPersonalPricings(userID int, modelNames []string, admission bool) (map[
 			if !row.Authorized || !ok {
 				continue
 			}
-			if row.Ratio < 1 || row.Ratio > 2*ResellerRatioScale || grant.Ratio < 1 || grant.Ratio > 2*ResellerRatioScale {
+			if row.Ratio < 1 || row.Ratio > maxResellerConsumptionRatio || grant.Ratio < 1 || grant.Ratio > maxResellerProcurementRatio {
 				return ErrResellerDataCorrupt
 			}
 			snapshots[row.Model].Channels[row.ChannelID] = types.PersonalChannelPrice{CustomerRatio: row.Ratio, AgentRatio: grant.Ratio}
@@ -151,7 +151,11 @@ func loadPersonalPricings(userID int, modelNames []string, admission bool) (map[
 }
 
 func PersonalQuota(base int, ratio int64) (int, *common.QuotaClamp, error) {
-	if base < 0 || ratio < 1 || ratio > 2*ResellerRatioScale {
+	return resellerQuota(base, ratio, maxResellerConsumptionRatio)
+}
+
+func resellerQuota(base int, ratio, maxRatio int64) (int, *common.QuotaClamp, error) {
+	if base < 0 || ratio < 1 || ratio > maxRatio {
 		return 0, nil, ErrResellerInvalid
 	}
 	quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromInt(int64(base)).Mul(decimal.NewFromInt(ratio)).Div(decimal.NewFromInt(ResellerRatioScale)))

@@ -52,7 +52,7 @@ func settlePersonalTask(ctx context.Context, task *model.Task, base int, refund 
 	agent := 0
 	var agentClamp *common.QuotaClamp
 	if fact.AgentUserID > 0 {
-		agent, agentClamp, err = model.PersonalQuota(base, fact.AgentRatio)
+		agent, agentClamp, err = model.ResellerProcurementQuota(base, fact.AgentRatio)
 		if err != nil {
 			return false
 		}

@@ -23,12 +23,12 @@ func ReservePersonalTaskDelivery(ctx context.Context, task, current *model.Task,
 	}
 	agent := 0
 	if fact.AgentUserID > 0 {
-		agent, clamp, err = model.PersonalQuota(base, fact.AgentRatio)
+		agent, clamp, err = model.ResellerProcurementQuota(base, fact.AgentRatio)
 		if err != nil {
 			return err
 		}
 		if clamp != nil {
-			return clamp
+			return rejectResellerProcurementReservation(fact.RequestID, clamp)
 		}
 	}
 	customer = max(customer, current.Quota)

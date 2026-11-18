@@ -1746,6 +1746,85 @@ func TestSecurityCompletionGatesDashboardCredentialsAndPreservesRelay(t *testing
 	assert.Equal(t, 204, response.Code, response.Body.String())
 }
 
+func TestResellerSelfAccountRequiresCompletedBrowserSession(t *testing.T) {
+	user, identity := setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}))
+	const pat = "synthetic-agent-dashboard-pat"
+	require.NoError(t, model.DB.Model(user).Updates(map[string]any{
+		"reseller_kind": "agent", "email": "agent@example.invalid", "access_token": pat,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.ResellerIdentity{UserID: user.Id, Kind: "agent", Activation: "active"}).Error)
+	require.NoError(t, model.DB.Create(&model.ResellerAccount{UserID: user.Id, Enabled: true}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSecurityState{UserID: user.Id, VerifiedEmail: "agent@example.invalid"}).Error)
+	require.NoError(t, model.PublishUserAuthCache(user.Id))
+	access, _, err := service.IssueAccessToken(identity)
+	require.NoError(t, err)
+
+	router := gin.New()
+	router.Use(middleware.UserAuth())
+	router.PUT("/api/user/self", UpdateSelf)
+	router.PUT("/api/user/setting", UpdateUserSetting)
+	router.GET("/api/user/sessions", GetLoginSessions)
+	router.DELETE("/api/user/sessions/:sid", DeleteLoginSession)
+	router.POST("/api/user/sessions/revoke-others", RevokeOtherLoginSessions)
+	router.GET("/api/user/token/status", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	router.POST("/api/user/2fa/disable", Disable2FA)
+	request := func(method, path, credential, body, proof string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+credential)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Security-Proof", proof)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+	require.Equal(t, http.StatusForbidden, request(http.MethodGet, "/api/user/sessions", access, "", "").Code)
+	require.NoError(t, model.DB.Create(&model.TwoFA{UserId: user.Id, IsEnabled: true}).Error)
+	require.Equal(t, http.StatusOK, request(http.MethodGet, "/api/user/sessions", access, "", "").Code)
+	assert.Equal(t, http.StatusForbidden, request(http.MethodGet, "/api/user/sessions", pat, "", "").Code)
+	assert.Equal(t, http.StatusForbidden, request(http.MethodGet, "/api/user/token/status", access, "", "").Code)
+	assert.Equal(t, http.StatusForbidden, request(http.MethodPost, "/api/user/2fa/disable", access, "{}", "").Code)
+	assert.Equal(t, http.StatusForbidden, request(http.MethodPut, "/api/user/self", access, `{"username":"forbidden"}`, "").Code)
+
+	language := request(http.MethodPut, "/api/user/self", access, `{"language":"en"}`, "")
+	require.Equal(t, http.StatusOK, language.Code)
+	require.Contains(t, language.Body.String(), `"success":true`)
+	preferences := request(http.MethodPut, "/api/user/setting", access, `{"notify_type":"email","quota_warning_threshold":1000,"record_ip_log":true}`, "")
+	require.Equal(t, http.StatusOK, preferences.Code)
+	require.Contains(t, preferences.Body.String(), `"success":true`)
+	require.NoError(t, model.DB.First(user, user.Id).Error)
+	assert.Equal(t, "en", user.GetSetting().Language)
+	assert.True(t, user.GetSetting().RecordIpLog)
+
+	other, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "other-agent-session")
+	require.NoError(t, err)
+	target, err := service.ParseAccessToken(other.AccessToken)
+	require.NoError(t, err)
+	targetPath := "/api/user/sessions/" + target.SessionID
+	assert.Contains(t, request(http.MethodDelete, targetPath, access, "", "").Body.String(), "SECURITY_PROOF_REQUIRED")
+	context, err := common.Marshal(service.SessionRevocationContext{SessionID: target.SessionID})
+	require.NoError(t, err)
+	revokeProof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{
+		Scope: service.VerificationScopeSessionRevoke, Context: context,
+	}, "2fa")
+	mismatched := request(http.MethodPost, "/api/user/sessions/revoke-others", access, "", revokeProof)
+	assert.Contains(t, mismatched.Body.String(), "SECURITY_PROOF_CONTEXT_MISMATCH")
+	revoked := request(http.MethodDelete, targetPath, access, "", revokeProof)
+	require.Equal(t, http.StatusOK, revoked.Code, revoked.Body.String())
+	assert.Contains(t, request(http.MethodDelete, targetPath, access, "", revokeProof).Body.String(), "SECURITY_PROOF_CONSUMED")
+	assert.Equal(t, http.StatusUnauthorized, request(http.MethodGet, "/api/user/sessions", other.AccessToken, "", "").Code)
+
+	const passwordBody = `{"original_password":"enrollment-password","password":"Replacement-verified-passphrase"}`
+	assert.NotContains(t, request(http.MethodPut, "/api/user/self", access, passwordBody, "").Body.String(), `"success":true`)
+	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopePasswordChange}, "2fa")
+	changed := request(http.MethodPut, "/api/user/self", access, passwordBody, proof)
+	require.Equal(t, http.StatusOK, changed.Code, changed.Body.String())
+	require.Contains(t, changed.Body.String(), `"success":true`)
+	require.NoError(t, model.DB.First(user, user.Id).Error)
+	assert.True(t, common.ValidatePasswordAndHash("Replacement-verified-passphrase", user.Password))
+	assert.Equal(t, http.StatusUnauthorized, request(http.MethodGet, "/api/user/sessions", access, "", "").Code)
+}
+
 func TestSecurityCompletionManualRecoveryRequiresPermissionProofAndNotification(t *testing.T) {
 	operator, identity := setupSecurityEnrollmentTest(t)
 	t.Setenv("SECURITY_COMPLETION_ENFORCED", "true")
@@ -2013,7 +2092,102 @@ func TestSecurityCompletionEnrollmentActivationRollsBackWithFactor(t *testing.T)
 	}
 }
 
+func TestResellerCustomerSharedAccountPolicy(t *testing.T) {
+	for _, enforced := range []string{"false", "true"} {
+		t.Run("enforced="+enforced, func(t *testing.T) {
+			t.Setenv("SECURITY_COMPLETION_ENFORCED", enforced)
+			customer, identity := setupSecondBatchReseller(t, "agent_customer")
+			ordinary := model.User{
+				Username: "platform-customer", Email: "platform@example.invalid",
+				Password: customer.Password, AffCode: "platform-customer",
+				Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AuthVersion: 1,
+			}
+			require.NoError(t, model.DB.Create(&ordinary).Error)
+			require.NoError(t, model.DB.Create(&model.UserSecurityState{
+				UserID: ordinary.Id, VerifiedEmail: ordinary.Email,
+			}).Error)
+			require.NoError(t, model.DB.Unscoped().Where("user_id = ?", customer.Id).Delete(&model.TwoFA{}).Error)
+			ordinarySession, err := service.CreateLoginSession(ordinary.Id, "password", "127.0.0.1", "customer-parity")
+			require.NoError(t, err)
+			customerAccess, _, err := service.IssueAccessToken(identity)
+			require.NoError(t, err)
+
+			router := gin.New()
+			router.Use(middleware.UserAuth())
+			router.GET("/api/user/passkey", PasskeyStatus)
+			router.GET("/api/user/sessions", GetLoginSessions)
+			router.GET("/api/security/completion", GetSecurityCompletion)
+			router.POST("/api/user/topup", middleware.RequirePlatformFunding, func(c *gin.Context) {
+				c.Status(http.StatusNoContent)
+			})
+			router.GET("/api/reseller/self/customers", ListResellerUsers)
+			router.POST("/api/user/2fa/disable", Disable2FA)
+			request := func(method, path, access string) *httptest.ResponseRecorder {
+				req := httptest.NewRequest(method, path, nil)
+				req.Header.Set("Authorization", "Bearer "+access)
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, req)
+				return response
+			}
+
+			want := http.StatusOK
+			if enforced == "true" {
+				want = http.StatusForbidden
+			}
+			for _, access := range []string{ordinarySession.AccessToken, customerAccess} {
+				completion := request(http.MethodGet, "/api/security/completion", access)
+				require.Equal(t, http.StatusOK, completion.Code)
+				assert.Contains(t, completion.Body.String(), `"mfa_required":`+enforced)
+				for _, path := range []string{"/api/user/passkey", "/api/user/sessions"} {
+					res := request(http.MethodGet, path, access)
+					assert.Equal(t, want, res.Code, res.Body.String())
+				}
+			}
+			if enforced == "true" {
+				for _, userID := range []int{ordinary.Id, customer.Id} {
+					require.NoError(t, model.DB.Create(&model.TwoFA{UserId: userID, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}).Error)
+				}
+				for _, access := range []string{ordinarySession.AccessToken, customerAccess} {
+					assert.Equal(t, http.StatusOK, request(http.MethodGet, "/api/user/sessions", access).Code)
+					assert.Contains(t, request(http.MethodPost, "/api/user/2fa/disable", access).Body.String(), "MFA_REQUIRED")
+				}
+			}
+			for _, access := range []string{ordinarySession.AccessToken, customerAccess} {
+				assert.Equal(t, http.StatusForbidden, request(http.MethodGet, "/api/reseller/self/customers", access).Code)
+			}
+			assert.Equal(t, http.StatusNoContent, request(http.MethodPost, "/api/user/topup", ordinarySession.AccessToken).Code)
+			assert.Equal(t, http.StatusForbidden, request(http.MethodPost, "/api/user/topup", customerAccess).Code)
+			ownership, err := model.GetResellerIdentity(model.DB, customer.Id)
+			require.NoError(t, err)
+			require.NotNil(t, ownership)
+			require.NoError(t, model.SetResellerEnabled(ownership.AgentUserID, customer.Id, false, false))
+			assert.Equal(t, http.StatusForbidden, request(http.MethodGet, "/api/user/sessions", customerAccess).Code)
+			assert.Equal(t, http.StatusForbidden, request(http.MethodGet, "/api/security/completion", customerAccess).Code)
+		})
+	}
+}
+
 func TestSecuritySecondBatch(t *testing.T) {
+	t.Run("customer MFA cannot issue a session after owner disables the account", func(t *testing.T) {
+		user, _ := setupSecondBatchReseller(t, "agent_customer")
+		challenge, err := service.StartLoginVerification(user, "password", nil)
+		require.NoError(t, err)
+		require.NotNil(t, challenge)
+		require.True(t, challenge.RequireVerification)
+
+		reseller, err := model.GetResellerIdentity(model.DB, user.Id)
+		require.NoError(t, err)
+		require.NotNil(t, reseller)
+		require.NoError(t, model.SetResellerEnabled(reseller.AgentUserID, user.Id, false, false))
+
+		factor, err := model.GetTwoFAByUserId(user.Id)
+		require.NoError(t, err)
+		code, err := totp.GenerateCode(factor.Secret, time.Now())
+		require.NoError(t, err)
+		session, _, err := service.VerifyLoginCode(challenge.FlowToken, code, "127.0.0.1", "regression-test")
+		require.ErrorIs(t, err, model.ErrResellerForbidden)
+		assert.Nil(t, session)
+	})
 	t.Run("customer statistics cannot reveal channel", func(t *testing.T) {
 		user, identity := setupSecondBatchReseller(t, "agent_customer")
 		require.NoError(t, model.LOG_DB.AutoMigrate(&model.Log{}))
@@ -2051,7 +2225,8 @@ func TestSecuritySecondBatch(t *testing.T) {
 		assert.Contains(t, response.Body.String(), `"quota":70`)
 	})
 	for _, kind := range []string{"agent", "agent_customer"} {
-		t.Run("completed account can replace authenticator/"+kind, func(t *testing.T) {
+		t.Run("completed account can manage authenticator with scoped proof/"+kind, func(t *testing.T) {
+			t.Setenv("SECURITY_COMPLETION_ENFORCED", "false")
 			user, identity := setupSecondBatchReseller(t, kind)
 			mailbox := newSecurityMailbox(t)
 			require.NoError(t, model.DB.AutoMigrate(&model.Token{}))
@@ -2060,9 +2235,13 @@ func TestSecuritySecondBatch(t *testing.T) {
 			access, _, err := service.IssueAccessToken(identity)
 			require.NoError(t, err)
 			router := gin.New()
-			router.POST("/api/security/factor/replace", middleware.UserAuth(), ReplaceOwnSecurityFactor)
+			path, handler := "/api/security/factor/replace", ReplaceOwnSecurityFactor
+			if kind == "agent_customer" {
+				path, handler = "/api/user/2fa/disable", Disable2FA
+			}
+			router.POST(path, middleware.UserAuth(), handler)
 			request := func(proof string) *httptest.ResponseRecorder {
-				req := httptest.NewRequest("POST", "/api/security/factor/replace", strings.NewReader(`{}`))
+				req := httptest.NewRequest("POST", path, strings.NewReader(`{}`))
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("Authorization", "Bearer "+access)
 				req.Header.Set("X-Security-Proof", proof)
@@ -2090,7 +2269,7 @@ func TestSecuritySecondBatch(t *testing.T) {
 			state, err := model.GetSecurityCompletion(user.Id)
 			require.NoError(t, err)
 			assert.False(t, state.MFAEnabled)
-			assert.False(t, state.Complete)
+			assert.Equal(t, kind == "agent_customer", state.Complete)
 			var keptKey model.Token
 			require.NoError(t, model.DB.First(&keptKey, key.Id).Error)
 			assert.Equal(t, common.TokenStatusEnabled, keptKey.Status, "factor replacement must preserve consumption keys")

@@ -17,55 +17,40 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { redirect } from '@tanstack/react-router'
-import type { TFunction } from 'i18next'
-import { ReceiptText, ShieldCheck, UserRound, Users } from 'lucide-react'
+import { ReceiptText, ShieldCheck, Tags, UserRound, Users } from 'lucide-react'
 
 import type { NavGroup } from '@/components/layout/types'
+
+import { observationMenu, isObservationPath } from './observation/routes'
 
 export function guardResellerRoute(kind: string, pathname: string) {
   pathname = pathname.replace(/\/$/, '')
   if (
     kind === 'agent' &&
     !pathname.startsWith('/reseller/customers') &&
+    !isObservationPath(pathname) &&
     pathname !== '/reseller/account' &&
     pathname !== '/reseller/billing' &&
     pathname !== '/reseller/procurement' &&
+    pathname !== '/reseller/discounts' &&
+    pathname !== '/profile' &&
     pathname !== '/security'
   ) {
     throw redirect({ to: '/reseller/customers', replace: true })
-  }
-  if (kind === 'agent_customer' && pathname.startsWith('/usage-logs/audit')) {
-    throw redirect({
-      to: '/usage-logs/$section',
-      params: { section: 'common' },
-      replace: true,
-    })
-  }
-  if (
-    kind === 'agent_customer' &&
-    ![
-      '/dashboard',
-      '/keys',
-      '/usage-logs',
-      '/wallet',
-      '/security',
-      '/pricing',
-    ].some((path) => pathname === path || pathname.startsWith(`${path}/`))
-  ) {
-    throw redirect({ to: '/wallet', replace: true })
   }
 }
 
 export function resellerSidebar(
   kind: string | undefined,
   groups: NavGroup[],
-  t: TFunction
+  t: (key: string) => string
 ): NavGroup[] {
   if (kind === 'agent') {
     return [
+      observationMenu(groups, t),
       {
         id: 'reseller',
-        title: t('Reseller'),
+        title: t('Reseller business'),
         items: [
           {
             title: t('Customer management'),
@@ -83,38 +68,29 @@ export function resellerSidebar(
             icon: ReceiptText,
           },
           {
-            title: t('Account details'),
-            url: '/reseller/account',
+            title: t('My procurement ratios'),
+            url: '/reseller/discounts',
+            icon: Tags,
+          },
+        ],
+      },
+      {
+        id: 'reseller-account',
+        title: t('My account'),
+        items: [
+          {
+            title: t('Profile'),
+            url: '/profile',
             icon: UserRound,
           },
-          { title: t('Account Security'), url: '/security', icon: ShieldCheck },
+          {
+            title: t('Security & Access'),
+            url: '/security',
+            icon: ShieldCheck,
+          },
         ],
       },
     ]
-  }
-  if (kind === 'agent_customer') {
-    return groups
-      .filter((group) => group.id !== 'admin' && group.id !== 'chat')
-      .map((group) => ({
-        ...group,
-        items: group.items.filter(
-          (item) =>
-            'url' in item &&
-            item.url &&
-            !item.url.startsWith('/usage-logs/audit') &&
-            [
-              '/dashboard',
-              '/keys',
-              '/usage-logs',
-              '/wallet',
-              '/security',
-              '/pricing',
-            ].some(
-              (path) => item.url === path || item.url?.startsWith(`${path}/`)
-            )
-        ),
-      }))
-      .filter((group) => group.items.length > 0)
   }
   return groups
 }

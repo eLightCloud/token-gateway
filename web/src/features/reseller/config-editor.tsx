@@ -41,12 +41,12 @@ import { ResellerRatioField } from './config-ratio-field'
 
 const configItemKey = (item: ConfigItem) => `${item.model}:${item.channel_id}`
 
-function isValidResellerRatio(value: string): boolean {
+function isValidResellerRatio(value: string, maxRatio: number): boolean {
   return (
     value === '' ||
-    (/^(0|1|2)(\.[0-9]{1,6})?$/.test(value) &&
+    (/^[0-9](\.[0-9]{1,6})?$/.test(value) &&
       Number(value) > 0 &&
-      Number(value) <= 2)
+      Number(value) <= maxRatio)
   )
 }
 
@@ -59,6 +59,7 @@ export function ResellerConfigEditor({
   onReload,
   authorization = true,
   consumptionEditable = true,
+  procurement = false,
   onDirtyChange,
 }: {
   userID: number
@@ -66,6 +67,7 @@ export function ResellerConfigEditor({
   onDirtyChange?: (dirty: boolean) => void
   authorization?: boolean
   consumptionEditable?: boolean
+  procurement?: boolean
   config: Config
   candidates: ConfigItem[]
   onSuccess: () => void
@@ -84,7 +86,10 @@ export function ResellerConfigEditor({
     ...item,
     ratio: item.ratio || '1',
   }))
-  const invalidItems = items.filter((item) => !isValidResellerRatio(item.ratio))
+  const maxRatio = procurement ? 5 : 2
+  const invalidItems = items.filter(
+    (item) => !isValidResellerRatio(item.ratio, maxRatio)
+  )
   const preview = useMutation({
     meta: { errorToast: false },
     mutationFn: () =>
@@ -151,7 +156,8 @@ export function ResellerConfigEditor({
       <p className='text-muted-foreground text-sm'>
         {consumptionEditable
           ? t(
-              'Ratios must be greater than 0 and at most 2, with up to six decimal places. Missing ratios use 1.'
+              'Ratios must be greater than 0 and at most {{max}}, with up to six decimal places. Missing ratios use 1.',
+              { max: maxRatio }
             )
           : t(
               'Configure authorization here. Consumption ratios are managed in realtime model pricing.'
@@ -202,11 +208,12 @@ export function ResellerConfigEditor({
             id: 'ratio',
             className: consumptionEditable ? undefined : 'hidden',
             cellClassName: consumptionEditable ? undefined : 'hidden',
-            header: t('Personal ratio'),
+            header: procurement ? t('Procurement ratio') : t('Personal ratio'),
             cell: (row) => (
               <ResellerRatioField
                 item={row}
-                invalid={!isValidResellerRatio(row.ratio)}
+                invalid={!isValidResellerRatio(row.ratio, maxRatio)}
+                maxRatio={maxRatio}
                 disabled={
                   !consumptionEditable ||
                   busy ||
@@ -221,10 +228,18 @@ export function ResellerConfigEditor({
             header: t('Effective status'),
             cell: (row) => {
               if (!authorization) return '—'
-              if (!admin && !available.has(configItemKey(row))) {
+              if (!available.has(configItemKey(row))) {
+                if (admin) {
+                  return t(
+                    'Model removed from channel. Configuration retained.'
+                  )
+                }
                 return t('Parent authorization revoked; configuration retained')
               }
-              if (consumptionEditable && !isValidResellerRatio(row.ratio)) {
+              if (
+                consumptionEditable &&
+                !isValidResellerRatio(row.ratio, maxRatio)
+              ) {
                 return '—'
               }
               return row.authorized ? t('Effective') : t('Not authorized')

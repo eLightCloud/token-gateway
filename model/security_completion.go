@@ -38,6 +38,7 @@ type SecurityCompletion struct {
 	Required      bool   `json:"required"`
 	EmailVerified bool   `json:"email_verified"`
 	MFAEnabled    bool   `json:"mfa_enabled"`
+	MFARequired   bool   `json:"mfa_required"`
 	HasPassword   bool   `json:"has_password"`
 	Complete      bool   `json:"complete"`
 	Kind          string `json:"kind"`
@@ -56,7 +57,7 @@ func GetSecurityCompletion(userID int) (*SecurityCompletion, error) {
 	if err := DB.First(&user, userID).Error; err != nil {
 		return nil, err
 	}
-	result := &SecurityCompletion{Required: SecurityCompletionRequired(user.ResellerKind), Kind: user.ResellerKind, Email: user.Email, HasPassword: user.Password != ""}
+	result := &SecurityCompletion{Required: SecurityCompletionRequired(user.ResellerKind), MFARequired: SecurityMFARequired(user.ResellerKind), Kind: user.ResellerKind, Email: user.Email, HasPassword: user.Password != ""}
 	if !result.Required {
 		result.Complete = true
 		return result, nil
@@ -81,7 +82,7 @@ func GetSecurityCompletion(userID int) (*SecurityCompletion, error) {
 		}
 		result.Activation = identity.Activation
 	}
-	result.Complete = result.EmailVerified && result.MFAEnabled && (user.ResellerKind == "" || result.HasPassword && result.Activation != "pending")
+	result.Complete = result.EmailVerified && (!result.MFARequired || result.MFAEnabled) && (user.ResellerKind == "" || result.HasPassword && result.Activation == "active")
 	return result, nil
 }
 
@@ -241,12 +242,17 @@ func CompleteSecurityMail(userID int, purpose, token, password string, identity 
 			if err := tx.Model(&user).Update("password", hash).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(id).Update("activation", "security_pending").Error; err != nil {
+			if err := tx.Model(id).Update("activation", resellerPasswordSetupActivation(id.Kind)).Error; err != nil {
 				return err
 			}
 		}
 		if err := setVerifiedEmailWithTx(tx, userID, payload.Email); err != nil {
 			return err
+		}
+		if purpose != SecurityActivationPurpose && user.ResellerKind == "agent_customer" && user.Password != "" {
+			if err := promoteVerifiedCustomerActivation(tx, userID); err != nil {
+				return err
+			}
 		}
 		_, err := IncrementUserAuthVersionWithTx(tx, userID)
 		return err

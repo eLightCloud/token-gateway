@@ -47,20 +47,29 @@ export function useResellerActivationMail(
     mutationKey,
     meta: { errorToast: false },
     retry: false,
-    mutationFn: (userID: number) => sendResellerActivationEmail(admin, userID),
+    mutationFn: (input: { userID: number; afterCreate?: boolean }) =>
+      sendResellerActivationEmail(admin, input.userID),
     onSuccess: () =>
       toast.success(
-        admin
-          ? t('Account information email submitted to the mail server.')
-          : t('Activation email submitted to the mail server.')
+        t('Account information email submitted to the mail server.')
       ),
-    onError: (error) => {
+    onError: (error, input) => {
       const deliveryFailed = getServerErrorSources(error).some(
         (source) => source.code === 'EMAIL_BINDING_DELIVERY_FAILED'
       )
-      const title = admin
-        ? t('Failed to send account information email')
-        : t('Failed to send activation email')
+      const title =
+        !admin && input.afterCreate
+          ? t('Customer created, but the account email could not be sent.')
+          : t('Failed to send account information email')
+      if (!admin && input.afterCreate) {
+        handleServerError(error, title, {
+          title,
+          description: t(
+            'Resend the account email from the customer list or details.'
+          ),
+        })
+        return
+      }
       if (deliveryFailed) {
         handleServerError(error, title, {
           title,
@@ -77,7 +86,8 @@ export function useResellerActivationMail(
   })
   const sending = useMutationState({
     filters: { mutationKey, exact: true, status: 'pending' },
-    select: (mutation) => mutation.state.variables,
+    select: (mutation) =>
+      (mutation.state.variables as { userID: number } | undefined)?.userID,
   })
   return { sendActivationMail: mutate, sending }
 }

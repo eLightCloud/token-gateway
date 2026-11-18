@@ -16,12 +16,8 @@ type ResellerCreateInput struct {
 
 var resellerPhonePattern = regexp.MustCompile(`^\+?[0-9]{7,15}$`)
 
-// Contact details are management metadata. Account activation uses email and MFA.
-func (input *ResellerCreateInput) normalizeContact(kind string) error {
-	if kind != "agent" {
-		input.Phone, input.Remark = "", ""
-		return nil
-	}
+// Contact details are management metadata. The account holder verifies email through the password setup link.
+func (input *ResellerCreateInput) normalizeContact() error {
 	input.Phone = strings.TrimSpace(input.Phone)
 	input.Remark = strings.TrimSpace(input.Remark)
 	if !resellerPhonePattern.MatchString(input.Phone) || utf8.RuneCountInString(input.Remark) > 255 || strings.ContainsRune(input.Remark, 0) {

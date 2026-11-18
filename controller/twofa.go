@@ -74,13 +74,19 @@ func Disable2FA(c *gin.Context) {
 		return
 	}
 
-	// 记录操作日志
 	recordUserSecurityAudit(c, userId, "user.2fa_disable_self", nil)
+	data := authRotationData(bundle)
+	kind, err := model.ResellerUserKind(model.DB, userId)
+	if err != nil {
+		data["notification_warning"] = true
+	} else if kind == "agent_customer" {
+		notifyCompletedSecurityChange(userId, "Two-factor authentication was disabled", data)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "两步验证已禁用",
-		"data":    authRotationData(bundle),
+		"data":    data,
 	})
 }
 

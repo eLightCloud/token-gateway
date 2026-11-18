@@ -120,7 +120,9 @@ export function SecurityCompletionPage() {
               )}
             </CardContent>
           </Card>
-          {status.data.email_verified && <TwoFACard loading={false} required />}
+          {status.data.email_verified && status.data.mfa_required !== false && (
+            <TwoFACard loading={false} required />
+          )}
           <Button
             variant='outline'
             onClick={() => {

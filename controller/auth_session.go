@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -112,9 +113,18 @@ func DeleteLoginSession(c *gin.Context) {
 	if !ok {
 		return
 	}
+	succeeded := false
+	if middleware.IsResellerSelfAccount(c) {
+		defer func() {
+			recordUserSecurityAudit(c, identity.UserID, "user.session_revoke", map[string]any{"success": succeeded, "all_others": false})
+		}()
+	}
 	sid := strings.TrimSpace(c.Param("sid"))
 	if sid == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "code": "AUTH_SESSION_ID_REQUIRED", "message": "session id is required"})
+		return
+	}
+	if !requireResellerSessionRevocationProof(c, sid) {
 		return
 	}
 	revoked, err := model.RevokeUserSession(identity.UserID, sid, "user_revoked")
@@ -126,6 +136,7 @@ func DeleteLoginSession(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "code": "AUTH_SESSION_NOT_FOUND", "message": "session not found"})
 		return
 	}
+	succeeded = true
 	if rawRefreshToken, cookieErr := c.Cookie(service.RefreshCookieName); cookieErr == nil {
 		cookieSID, ok := service.RefreshTokenSID(rawRefreshToken)
 		if ok && cookieSID == sid {
@@ -140,11 +151,21 @@ func RevokeOtherLoginSessions(c *gin.Context) {
 	if !ok {
 		return
 	}
+	succeeded := false
+	if middleware.IsResellerSelfAccount(c) {
+		defer func() {
+			recordUserSecurityAudit(c, identity.UserID, "user.session_revoke", map[string]any{"success": succeeded, "all_others": true})
+		}()
+	}
+	if !requireResellerSessionRevocationProof(c, "") {
+		return
+	}
 	count, err := model.RevokeOtherUserSessions(identity.UserID, identity.SessionID, "user_revoked_others")
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return
 	}
+	succeeded = true
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{"revoked_count": count}})
 }
 
@@ -162,6 +183,10 @@ func requireBrowserSession(c *gin.Context) (service.AuthIdentity, bool) {
 }
 
 func writeAuthSessionError(c *gin.Context, err error) {
+	if errors.Is(err, model.ErrResellerForbidden) {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "code": "RESELLER_ACCOUNT_RESTRICTED", "message": i18n.T(c, i18n.MsgAuthUserBanned)})
+		return
+	}
 	status, code := service.AuthSessionErrorCode(err)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		status, code = http.StatusUnauthorized, "AUTH_UNAUTHORIZED"

@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-08-14
+last-reviewed: 2026-11-12
 ---
 
 # 客户 API 接入指南
@@ -12,13 +12,12 @@ last-reviewed: 2026-08-14
 
 | 用途 | 地址 |
 | --- | --- |
-| 平台入口 | [http://lightingtheword.com/](http://lightingtheword.com/) |
 | 平台安全入口 | [https://lightingtheword.com/](https://lightingtheword.com/) |
 | OpenAI 兼容 API Base URL | `https://lightingtheword.com/v1` |
 | Anthropic 兼容 API 根地址 | `https://lightingtheword.com` |
 | Gemini 兼容 API 根地址 | `https://lightingtheword.com` |
 
-`http://lightingtheword.com/` 当前会重定向到 HTTPS。浏览器可以直接打开 HTTP 入口，但 SDK、命令行和生产代码应直接使用上表中的 HTTPS 地址，不要把携带 API Key 的请求发送到明文 HTTP 地址。
+`http://lightingtheword.com/` 当前会重定向到 HTTPS。SDK、命令行和生产代码应使用上表中的 HTTPS 地址；携带 API Key 的请求不可发送到明文 HTTP 地址。
 
 > 注意：OpenAI SDK 的 `base_url` / `baseURL` 要以 `/v1` 结尾。不要配置成单个具体接口，例如 `/v1/chat/completions` 或 `/v1/responses`。
 
@@ -30,7 +29,7 @@ last-reviewed: 2026-08-14
 
 ### 2.2 确认余额和模型
 
-1. 在“钱包”页面确认账户有可用余额。
+1. 在“钱包”或账户用量页面确认有可用额度；代理客户由所属代理分配额度。
 2. 在“模型定价”页面查看可用模型、计费方式和支持的接口。
 3. 记录要调用的完整模型 ID。请按页面展示原样填写，注意大小写、连字符和版本后缀。
 
@@ -39,7 +38,7 @@ last-reviewed: 2026-08-14
 1. 进入“API Keys”页面：[https://lightingtheword.com/keys](https://lightingtheword.com/keys)。
 2. 点击“创建 API Key”。
 3. 填写一个容易识别的名称，例如 `production-order-service`。
-4. 根据需要设置额度、到期时间、可用模型和允许访问的 IP。首次测试可保持管理员提供的默认分组。
+4. 根据需要设置额度、到期时间、可用模型和允许访问的 IP。首次测试可保持管理员提供的默认分组。Key 的模型限制仍需与账户授权同时满足。
 5. 创建后立即复制 API Key，并存入密钥管理工具或安全的环境变量。
 
 API Key 是调用模型的凭据，不是网页登录密码。请不要将它写入前端代码、Git 仓库、截图、日志或客服工单。

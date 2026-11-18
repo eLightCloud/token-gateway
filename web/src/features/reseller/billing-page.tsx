@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { StaticDataTable } from '@/components/data-table'
@@ -44,10 +45,8 @@ import {
 import { ResellerUsageFacts } from './usage-facts'
 
 export function ResellerBillingTable({
-  customerID,
   procurement = false,
 }: {
-  customerID?: number
   procurement?: boolean
 }) {
   const { t, i18n } = useTranslation()
@@ -72,7 +71,7 @@ export function ResellerBillingTable({
     Math.floor(Date.now() / 1000) + 1
   )
   const params = new URLSearchParams({
-    customer_id: String(customerID ?? (Number(customer) || 0)),
+    customer_id: String(Number(customer) || 0),
     posting,
     from: String(
       startDay ? (beijingDateBoundaryToUnix(startDay, false) ?? 0) : 0
@@ -132,26 +131,24 @@ export function ResellerBillingTable({
   })
   return (
     <div className='space-y-4'>
-      {!customerID && query.data && (
+      {procurement && query.data && (
         <ProcurementSummary account={query.data.account} />
       )}
       <div className='flex flex-wrap items-end gap-3'>
-        {!customerID && (
-          <div className='space-y-2'>
-            <Label htmlFor='billing-customer'>{t('Customer ID')}</Label>
-            <Input
-              id='billing-customer'
-              type='number'
-              min='1'
-              value={customer}
-              onChange={(event) => {
-                setCustomer(event.target.value)
-                setAfter(0)
-                setProjectionRevision(undefined)
-              }}
-            />
-          </div>
-        )}
+        <div className='space-y-2'>
+          <Label htmlFor='billing-customer'>{t('Customer ID')}</Label>
+          <Input
+            id='billing-customer'
+            type='number'
+            min='1'
+            value={customer}
+            onChange={(event) => {
+              setCustomer(event.target.value)
+              setAfter(0)
+              setProjectionRevision(undefined)
+            }}
+          />
+        </div>
         <div className='space-y-2'>
           <Label>{t('Start date (Beijing)')}</Label>
           <DatePicker
@@ -268,7 +265,18 @@ export function ResellerBillingTable({
             {
               id: 'customer',
               header: t('Customer'),
-              cell: (row) => String(row.customer_id),
+              cell: (row) =>
+                procurement ? (
+                  String(row.customer_id)
+                ) : (
+                  <Link
+                    className='text-primary underline-offset-4 hover:underline'
+                    to='/reseller/customers/$id'
+                    params={{ id: String(row.customer_id) }}
+                  >
+                    {row.customer_id}
+                  </Link>
+                ),
             },
             {
               id: 'model',

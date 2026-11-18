@@ -239,13 +239,35 @@ export async function getLoginSessions(): Promise<ApiResponse<LoginSession[]>> {
   return res.data
 }
 
-export async function revokeLoginSession(sid: string): Promise<ApiResponse> {
-  const res = await api.delete(`/api/user/sessions/${encodeURIComponent(sid)}`)
+export async function revokeLoginSession(
+  sid: string,
+  verification?: { proof: string; signal: AbortSignal }
+): Promise<ApiResponse> {
+  const path = `/api/user/sessions/${encodeURIComponent(sid)}`
+  const res = verification
+    ? await api.delete(path, {
+        ...authRequestOptions,
+        headers: { 'X-Security-Proof': verification.proof },
+        singleUseAuthorization: true,
+        signal: verification.signal,
+      })
+    : await api.delete(path)
   return res.data
 }
 
-export async function revokeOtherLoginSessions(): Promise<ApiResponse> {
-  const res = await api.post('/api/user/sessions/revoke-others')
+export async function revokeOtherLoginSessions(verification?: {
+  proof: string
+  signal: AbortSignal
+}): Promise<ApiResponse> {
+  const path = '/api/user/sessions/revoke-others'
+  const res = verification
+    ? await api.post(path, undefined, {
+        ...authRequestOptions,
+        headers: { 'X-Security-Proof': verification.proof },
+        singleUseAuthorization: true,
+        signal: verification.signal,
+      })
+    : await api.post(path)
   return res.data
 }
 

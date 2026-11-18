@@ -67,7 +67,7 @@ export function useSidebarView(): ResolvedSidebarView {
 
   const view = resolveSidebarView(pathname)
 
-  if (view && !resellerKind) {
+  if (view && resellerKind !== 'agent') {
     return {
       key: view.id,
       view,

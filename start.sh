@@ -5,6 +5,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 BACKEND_PORT="${BACKEND_PORT:-3200}"
+BACKEND_READY_TIMEOUT_SECONDS="${BACKEND_READY_TIMEOUT_SECONDS:-120}"
 FRONTEND_PORT="${FRONTEND_PORT:-3201}"
 FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
 PORT_KILL_GRACE_SECONDS="${PORT_KILL_GRACE_SECONDS:-10}"
@@ -27,6 +28,7 @@ Usage:
 
 Environment:
   BACKEND_PORT=3200              Backend port.
+  BACKEND_READY_TIMEOUT_SECONDS=120  Seconds to wait for backend /api/status to return HTTP 200.
   FRONTEND_PORT=3201             Frontend dev-server port.
   PORT_KILL_GRACE_SECONDS=10     Seconds to wait before force-killing port listeners.
   LOG_ROOT=./logs/dev            Combined dev log directory.
@@ -172,6 +174,8 @@ start_deps_once() {
 start_backend() {
   : >"${BACKEND_LOG}"
   log "backend log: ${BACKEND_LOG}"
+  # Give go run and its child server their own process group for cleanup.
+  set -m
   (
     cd "${ROOT_DIR}"
     local_postgres_dsn="$(bun run "${ROOT_DIR}/scripts/local-postgres-dsn.ts")"
@@ -184,10 +188,34 @@ start_backend() {
     exec go run . --port "${BACKEND_PORT}" --log-dir "${BACKEND_APP_LOG_DIR}"
   ) >"${BACKEND_LOG}" 2>&1 &
   BACKEND_PID="$!"
+  set +m
+}
+
+wait_for_backend() {
+  local url="http://127.0.0.1:${BACKEND_PORT}/api/status"
+  local deadline=$((SECONDS + BACKEND_READY_TIMEOUT_SECONDS))
+  local status exit_code=0
+
+  log "waiting up to ${BACKEND_READY_TIMEOUT_SECONDS}s for ${url}"
+  while kill -0 "${BACKEND_PID}" 2>/dev/null; do
+    if (( SECONDS >= deadline )); then
+      fail "timed out waiting for HTTP 200 from ${url}. See ${BACKEND_LOG}"
+    fi
+    if status="$(curl --disable --noproxy '*' --silent --max-time 1 --output /dev/null --write-out '%{http_code}' "${url}")" &&
+      [[ "${status}" == "200" ]] && kill -0 "${BACKEND_PID}" 2>/dev/null; then
+      log "backend is ready"
+      return 0
+    fi
+    if (( SECONDS < deadline )); then
+      sleep 1
+    fi
+  done
+
+  wait "${BACKEND_PID}" || exit_code=$?
+  fail "backend exited before becoming ready (exit code ${exit_code}). See ${BACKEND_LOG}"
 }
 
 start_frontend() {
-  : >"${FRONTEND_LOG}"
   log "frontend log: ${FRONTEND_LOG}"
   (
     cd "${ROOT_DIR}/web"
@@ -210,7 +238,7 @@ cleanup() {
     kill "${TAIL_PID}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${BACKEND_PID}" ]]; then
-    kill "${BACKEND_PID}" >/dev/null 2>&1 || true
+    kill -TERM -- "-${BACKEND_PID}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${FRONTEND_PID}" ]]; then
     kill "${FRONTEND_PID}" >/dev/null 2>&1 || true
@@ -252,6 +280,9 @@ main() {
   require_command go
   require_command bun
   require_command lsof
+  require_command curl
+  [[ "${BACKEND_READY_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] ||
+    fail "BACKEND_READY_TIMEOUT_SECONDS must be a positive integer"
 
   stop_port_listener "${BACKEND_PORT}" "backend"
   stop_port_listener "${FRONTEND_PORT}" "frontend"
@@ -269,8 +300,10 @@ main() {
   trap 'exit 143' TERM
 
   start_backend
-  start_frontend
+  : >"${FRONTEND_LOG}"
   start_log_monitor
+  wait_for_backend
+  start_frontend
 
   log "frontend UI: http://localhost:${FRONTEND_PORT}"
   log "backend API: http://localhost:${BACKEND_PORT}"

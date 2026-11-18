@@ -15,9 +15,13 @@ import (
 
 const ResellerRatioScale int64 = 1_000_000
 
-var resellerRatioPattern = regexp.MustCompile(`^(0|1|2)(\.[0-9]{1,6})?$`)
+var resellerRatioPattern = regexp.MustCompile(`^[0-9](\.[0-9]{1,6})?$`)
 
 func ParseResellerRatio(value string) (int64, error) {
+	return parseResellerRatio(value, maxResellerConsumptionRatio)
+}
+
+func parseResellerRatio(value string, maxRatio int64) (int64, error) {
 	if !resellerRatioPattern.MatchString(value) {
 		return 0, ErrResellerInvalid
 	}
@@ -26,7 +30,7 @@ func ParseResellerRatio(value string) (int64, error) {
 	fraction += strings.Repeat("0", 6-len(fraction))
 	part, _ := strconv.ParseInt(fraction, 10, 64)
 	ratio := integer*ResellerRatioScale + part
-	if ratio < 1 || ratio > 2*ResellerRatioScale {
+	if ratio < 1 || ratio > maxRatio {
 		return 0, ErrResellerInvalid
 	}
 	return ratio, nil
@@ -98,6 +102,14 @@ func ResellerManageTarget(tx *gorm.DB, operatorID, targetID int, admin bool) err
 }
 
 func ReadResellerConfig(tx *gorm.DB, userID int) (*ResellerConfigView, error) {
+	maxRatio, err := resellerConfigMaxRatio(tx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return readResellerConfig(tx, userID, maxRatio)
+}
+
+func readResellerConfig(tx *gorm.DB, userID int, maxRatio int64) (*ResellerConfigView, error) {
 	var head ResellerConfigHead
 	err := tx.First(&head, "user_id = ?", userID).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -109,7 +121,7 @@ func ReadResellerConfig(tx *gorm.DB, userID int) (*ResellerConfigView, error) {
 	}
 	view := &ResellerConfigView{Revision: head.Revision, Items: make([]ResellerConfigItem, 0, len(rows))}
 	for _, row := range rows {
-		if row.ModelKey != fmt.Sprintf("%x", sha256.Sum256([]byte(row.Model))) || row.Ratio < 1 || row.Ratio > 2*ResellerRatioScale {
+		if row.ModelKey != fmt.Sprintf("%x", sha256.Sum256([]byte(row.Model))) || row.Ratio < 1 || row.Ratio > maxRatio {
 			return nil, ErrResellerDataCorrupt
 		}
 		view.Items = append(view.Items, ResellerConfigItem{Model: row.Model, ChannelID: row.ChannelID, Authorized: row.Authorized, Ratio: formatPersonalRatio(row.Ratio)})
@@ -128,6 +140,10 @@ func SaveResellerConfig(operatorID, userID int, admin bool, input ResellerConfig
 			return err
 		}
 		if err := ResellerManageTarget(tx, operatorID, userID, admin); err != nil {
+			return err
+		}
+		maxRatio, err := resellerConfigMaxRatio(tx, userID)
+		if err != nil {
 			return err
 		}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ResellerConfigHead{UserID: userID}).Error; err != nil {
@@ -169,7 +185,7 @@ func SaveResellerConfig(operatorID, userID int, admin bool, input ResellerConfig
 			if item.Ratio == "" {
 				item.Ratio = "1"
 			}
-			ratio, err := ParseResellerRatio(item.Ratio)
+			ratio, err := parseResellerRatio(item.Ratio, maxRatio)
 			if err != nil || item.Model == "" || len(item.Model) > 512 || item.ChannelID <= 0 {
 				return ErrResellerInvalid
 			}

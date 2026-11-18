@@ -33,12 +33,15 @@ import {
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { handleServerError } from '@/lib/handle-server-error'
+import {
+  handleServerError,
+  markServerErrorHandled,
+} from '@/lib/handle-server-error'
+import { getServerErrorSources } from '@/lib/server-error-message'
 
 import { resellerPath, resellerRequest } from './api'
 import {
-  resellerAgentCreateSchema,
-  resellerCustomerCreateSchema,
+  resellerCreateSchema,
   type ResellerCreateValues,
 } from './lib/create-account-schema'
 
@@ -53,9 +56,7 @@ export function ResellerCreateDialog(props: ResellerCreateDialogProps) {
   const { t } = useTranslation()
   const id = useId()
   const form = useForm<ResellerCreateValues>({
-    resolver: zodResolver(
-      props.admin ? resellerAgentCreateSchema : resellerCustomerCreateSchema
-    ),
+    resolver: zodResolver(resellerCreateSchema),
     defaultValues: {
       username: '',
       display_name: '',
@@ -72,7 +73,32 @@ export function ResellerCreateDialog(props: ResellerCreateDialogProps) {
         'post',
         values
       ),
-    onError: (error) => handleServerError(error, t('Failed to create account')),
+    onError: (error, values) => {
+      if (
+        !props.admin &&
+        getServerErrorSources(error).some(
+          (source) => source.code === 'RESELLER_EMAIL_CONFLICT'
+        )
+      ) {
+        markServerErrorHandled(error)
+        if (
+          form.getValues('email').trim().toLowerCase() ===
+          values.email.toLowerCase()
+        ) {
+          form.setError(
+            'email',
+            {
+              type: 'server',
+              message:
+                'This email address is already in use. Please use a different email address.',
+            },
+            { shouldFocus: true }
+          )
+        }
+        return
+      }
+      handleServerError(error, t('Failed to create account'))
+    },
     onSuccess: (result) => {
       form.reset()
       props.onOpenChange(false)
@@ -118,7 +144,7 @@ export function ResellerCreateDialog(props: ResellerCreateDialogProps) {
               'The account email includes the username and a password setup link. An administrator activates the account separately.'
             )
           : t(
-              'An activation email lets the account holder set a password and configure MFA.'
+              'The account email includes the username and a password setup link. Enable the customer account separately.'
             )
       }
     >
@@ -128,7 +154,6 @@ export function ResellerCreateDialog(props: ResellerCreateDialogProps) {
       >
         <FieldGroup className='gap-4'>
           {fields.map((field) => {
-            if (field.name === 'phone' && !props.admin) return null
             const fieldID = `${id}-${field.name}`
             const error = errors[field.name]?.message
             return (
@@ -155,31 +180,31 @@ export function ResellerCreateDialog(props: ResellerCreateDialogProps) {
               </Field>
             )
           })}
-          {props.admin && (
-            <Field data-invalid={!!errors.remark}>
-              <FieldLabel htmlFor={remarkID}>{t('Remark')}</FieldLabel>
-              <Textarea
-                {...form.register('remark')}
-                id={remarkID}
-                rows={3}
-                maxLength={255}
-                aria-invalid={!!errors.remark}
-                aria-describedby={
-                  errors.remark
-                    ? `${remarkID}-description ${remarkID}-error`
-                    : `${remarkID}-description`
-                }
-              />
-              <FieldDescription id={`${remarkID}-description`}>
-                {t('Admin notes (only visible to admins)')}
-              </FieldDescription>
-              {errors.remark?.message && (
-                <FieldError id={`${remarkID}-error`}>
-                  {t(errors.remark.message)}
-                </FieldError>
-              )}
-            </Field>
-          )}
+          <Field data-invalid={!!errors.remark}>
+            <FieldLabel htmlFor={remarkID}>{t('Remark')}</FieldLabel>
+            <Textarea
+              {...form.register('remark')}
+              id={remarkID}
+              rows={3}
+              maxLength={255}
+              aria-invalid={!!errors.remark}
+              aria-describedby={
+                errors.remark
+                  ? `${remarkID}-description ${remarkID}-error`
+                  : `${remarkID}-description`
+              }
+            />
+            <FieldDescription id={`${remarkID}-description`}>
+              {props.admin
+                ? t('Admin notes (only visible to admins)')
+                : t('Internal notes (hidden from the customer)')}
+            </FieldDescription>
+            {errors.remark?.message && (
+              <FieldError id={`${remarkID}-error`}>
+                {t(errors.remark.message)}
+              </FieldError>
+            )}
+          </Field>
           <div>
             <Button type='submit' disabled={mutation.isPending}>
               {t('Create')}

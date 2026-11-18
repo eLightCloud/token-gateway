@@ -41,6 +41,9 @@ func ResellerDashboardAllowed(userID int, path string) error {
 	if err != nil {
 		return err
 	}
+	if kind != "agent" && strings.HasPrefix(path, "/api/reseller/self/") {
+		return ErrResellerForbidden
+	}
 	if kind == "" {
 		return nil
 	}
@@ -75,7 +78,7 @@ func ResellerDashboardAllowed(userID int, path string) error {
 			return nil
 		}
 	}
-	if kind == "agent_customer" && !identity.AgentDisabled && ResellerCustomerDashboardPath(path) {
+	if kind == "agent_customer" && !identity.AgentDisabled {
 		return nil
 	}
 	return ErrResellerForbidden
@@ -86,12 +89,16 @@ func ResellerLoginAllowed(userID int) error {
 	if err != nil {
 		return err
 	}
+	return resellerLoginAllowed(DB, userID, kind)
+}
+
+func resellerLoginAllowed(tx *gorm.DB, userID int, kind string) error {
 	if kind == "agent_customer" {
-		identity, err := GetResellerIdentity(DB, userID)
+		identity, err := GetResellerIdentity(tx, userID)
 		if err != nil {
 			return err
 		}
-		if identity == nil || identity.AgentDisabled {
+		if identity == nil || identity.AgentDisabled || identity.Activation == "pending" {
 			return ErrResellerForbidden
 		}
 		return nil
@@ -100,7 +107,7 @@ func ResellerLoginAllowed(userID int) error {
 		return nil
 	}
 	var account ResellerAccount
-	if err := DB.First(&account, "user_id = ?", userID).Error; err != nil {
+	if err := tx.First(&account, "user_id = ?", userID).Error; err != nil {
 		return err
 	}
 	if !account.Enabled {

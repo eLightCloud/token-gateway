@@ -470,6 +470,7 @@ export function AccountBindings({ profile, onUpdate }: AccountBindingsProps) {
           open ? dialogs.open('email') : dialogs.close('email')
         }
         currentEmail={profile.email}
+        requirePassword={profile.reseller_kind === 'agent'}
         onSuccess={onUpdate}
       />
 

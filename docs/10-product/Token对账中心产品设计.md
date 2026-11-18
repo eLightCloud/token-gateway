@@ -1,12 +1,12 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-08-09
+last-reviewed: 2026-11-12
 ---
 
 # Token 账单与人工对账中心产品设计
 
-## 1. 文档目标
+## 1. 用户与场景
 
 本文定义仅 `root` 最高管理员可见的 Token 账单与人工对账工作台。系统只读查询当前业务已经写入数据库的计费事实，生成可查看、筛选和导出的账单；`root` 根据这些账单在系统外与上游人工核对。
 
@@ -108,7 +108,7 @@ Token 字段只展示当前账单事实中已经保存的数值。系统不在�
 - 现有日志没有保存请求发生时的 API 地址快照，因此该视角明确展示“按渠道当前配置重算的历史用量”。渠道地址后来变更时，历史记录会随当前配置重新归组，不能把该视角解释为历史发送地址证据；
 - 额度仍是客户已计费 `quota`，不是 Provider 成本或上游账单金额，也不补算 retry。
 
-## 6. 已选页面方案（方案 2：Audit Worksheet）
+## 6. 对账工作台
 
 更新后的对账主体视觉基准：[`../90-ui-ux/uis/token-bill-reconciliation-subjects.png`](../90-ui-ux/uis/token-bill-reconciliation-subjects.png)。
 

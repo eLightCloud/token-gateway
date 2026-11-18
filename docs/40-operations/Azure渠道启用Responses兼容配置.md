@@ -1,16 +1,14 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-07-19
+last-reviewed: 2026-11-12
 ---
 
 # Azure 渠道启用 Responses 兼容配置
 
-## 1. 发布版本
+## 1. 适用范围
 
-- 部署版本必须包含提交：`1086038f`
-- 更新代码后重新构建服务或镜像
-- 重启所有网关实例
+本指南用于客户继续调用 `/v1/chat/completions`、网关根据配置转换后调用 Azure Responses 的场景。原生 `/v1/responses` 请求不需要依赖该转换策略。部署前确认目标实例包含 Azure Responses 路由和 Chat Completions 转换实现，见[Azure URL 适配](../../relay/channel/openai/adaptor.go)。
 
 ## 2. 客户端配置
 
@@ -42,8 +40,8 @@ https://lightingtheword.com/v1/responses
 | API 地址 | Azure 资源根地址 |
 | API 密钥 | Azure API Key |
 | 默认 API 版本 | `2025-04-01-preview`，或资源实际支持版本 |
-| 响应 API 版本 | 默认留空；资源有明确要求时填写其支持版本 |
-| 模型 | 包含 `gpt-5.4`、`gpt-5.5` |
+| 响应 API 版本 | 默认留空：适配器对 `cognitiveservices.azure.com` 使用默认 API 版本，其他地址使用 `preview`；可按目标资源覆盖 |
+| 模型 | 包含目标渠道授权的模型；示例使用 `gpt-5.4`、`gpt-5.5` |
 | 模型映射 | 映射到 Azure 中实际存在的 Deployment |
 | 请求 Body 透传 | 关闭 |
 
@@ -96,13 +94,13 @@ API 地址中禁止追加：
 }
 ```
 
-如只对指定 Azure 渠道启用，改用：
+如只对指定 Azure 渠道启用，改用以下策略，并将示例 ID `123` 换为目标环境中的实际渠道 ID：
 
 ```json
 {
   "enabled": true,
   "all_channels": false,
-  "channel_ids": [实际Azure渠道ID],
+  "channel_ids": [123],
   "model_patterns": [
     "(?i)^gpt-5\\.(4|5)($|-.*)"
   ]

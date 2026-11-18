@@ -9,6 +9,7 @@ import (
 
 func registerResellerRoutes(api *gin.RouterGroup) {
 	registerRealtimePricingRoutes(api)
+	registerResellerObservationRoutes(api)
 	admin := api.Group("/reseller/admin/agents", middleware.AdminAuth(), middleware.DisableCache(), middleware.ResellerWriteRateLimit())
 	admin.Use(func(c *gin.Context) { c.Set("reseller_admin", true); c.Next() })
 	admin.GET("", middleware.RequirePermission(authz.ResellerCreate), controller.ListResellerUsers)
@@ -33,6 +34,7 @@ func registerResellerRoutes(api *gin.RouterGroup) {
 	self.GET("/:id/quota-adjustments", controller.GetResellerAdjustments)
 	self.POST("", controller.CreateResellerCustomer)
 	self.POST("/:id/activation", controller.ResendAccountActivation)
+	self.POST("/:id/password-reset", controller.SendResellerCustomerPasswordReset)
 	self.POST("/:id/quota-adjustments", controller.AdjustResellerQuota)
 	account := api.Group("/reseller/self/account", middleware.UserAuth(), middleware.DisableCache(), middleware.ResellerWriteRateLimit())
 	account.GET("", controller.GetResellerOwnAccount)

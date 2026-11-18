@@ -27,6 +27,7 @@ import type { ConfigItem } from './api'
 export function ResellerRatioField(props: {
   item: ConfigItem
   invalid: boolean
+  maxRatio: number
   disabled: boolean
   onChange: (value: string) => void
 }) {
@@ -52,7 +53,8 @@ export function ResellerRatioField(props: {
       {invalid && (
         <FieldError id={errorID} className='max-w-56 text-xs'>
           {t(
-            'Enter a ratio greater than 0 and at most 2, with up to six decimal places.'
+            'Enter a ratio greater than 0 and at most {{max}}, with up to six decimal places.',
+            { max: props.maxRatio }
           )}
         </FieldError>
       )}

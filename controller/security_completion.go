@@ -87,9 +87,9 @@ func FinishAccountActivation(c *gin.Context) {
 		writeSecurityCompletionError(c, err)
 		return
 	}
-	action, event := "security.account.activated", "Your account password was set. Complete authenticator setup when you sign in."
+	action, event := "security.account.activated", "Your account password was set."
 	if purpose == model.SecurityPasswordPurpose {
-		action, event = "security.password.recovered", "Your password was reset; your authenticator remains required"
+		action, event = "security.password.recovered", "Your account password was reset."
 	}
 	recordUserSecurityAudit(c, input.UserID, action, nil)
 	data := map[string]any{}
@@ -208,7 +208,11 @@ func ReplaceOwnSecurityFactor(c *gin.Context) {
 		writeSecurityCompletionError(c, err)
 		return
 	}
-	if user.Email == "" || service.NotifyAccountSecurityChange(user.Email, "Your authenticator is being replaced. Complete setup before using the dashboard.") != nil {
+	event := "Your authenticator is being replaced."
+	if model.SecurityMFARequired(user.ResellerKind) {
+		event += " Complete setup before using the dashboard."
+	}
+	if user.Email == "" || service.NotifyAccountSecurityChange(user.Email, event) != nil {
 		writeSecurityCompletionError(c, service.ErrEmailBindingDelivery)
 		return
 	}

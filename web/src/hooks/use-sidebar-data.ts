@@ -64,7 +64,7 @@ export function useSidebarData(): SidebarData {
   const organizationQuery = useQuery({
     queryKey: organizationKeys.self,
     queryFn: getOrganizationSelf,
-    enabled: Boolean(auth.user) && !auth.user?.reseller_kind,
+    enabled: Boolean(auth.user) && auth.user?.reseller_kind !== 'agent',
     staleTime: 60_000,
   })
   const organizationSelf = organizationQuery.data?.data

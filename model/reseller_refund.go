@@ -50,7 +50,7 @@ func ApplyPersonalRefundToBase(requestID, operationID string, remainingBase int)
 		}
 		agent := 0
 		if fact.AgentUserID > 0 {
-			value, clamp, err := PersonalQuota(remainingBase, fact.AgentRatio)
+			value, clamp, err := ResellerProcurementQuota(remainingBase, fact.AgentRatio)
 			if err != nil {
 				return err
 			}

@@ -15,15 +15,19 @@ func PreviewResellerConfig(operatorID, userID int, input ResellerConfigInput) (*
 	if input.ExpectedRevision < 0 || len(input.Items) > 10000 {
 		return nil, ErrResellerInvalid
 	}
+	maxRatio, err := resellerConfigMaxRatio(DB, userID)
+	if err != nil {
+		return nil, err
+	}
 	for _, item := range input.Items {
 		if item.Ratio == "" {
 			continue
 		}
-		if _, err := ParseResellerRatio(item.Ratio); err != nil {
+		if _, err := parseResellerRatio(item.Ratio, maxRatio); err != nil {
 			return nil, err
 		}
 	}
-	current, err := ReadResellerConfig(DB, userID)
+	current, err := readResellerConfig(DB, userID, maxRatio)
 	if err != nil {
 		return nil, err
 	}

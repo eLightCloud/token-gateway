@@ -168,6 +168,9 @@ type RelayInfo struct {
 	ParamOverrideAudit                    []string
 
 	PriceData hosttypes.PriceData
+	// LegacyPreConsumeTokens freezes the estimated input after applying the
+	// pre-consume multiplier, before model and group pricing.
+	LegacyPreConsumeTokens float64
 
 	// QuotaClamp is set (non-nil) when a quota conversion saturated at the
 	// supported single-request bound (or NaN fallback) while computing this request's charge.

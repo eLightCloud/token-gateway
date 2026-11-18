@@ -29,6 +29,13 @@ export function isResellerAgentActivated(user: ResellerUser): boolean {
   )
 }
 
+export function resellerCustomerStatus(user: ResellerUser) {
+  if (user.platform_disabled) return 'Platform disabled'
+  if (user.awaiting_enablement) return 'Awaiting enablement'
+  if (user.agent_disabled) return 'Agent disabled'
+  return 'Enabled'
+}
+
 export const resellerAgentSearchSchema = resellerSearchSchema.transform(
   (search) => {
     const activation = hasResellerAgentPassword(search.activation ?? '')

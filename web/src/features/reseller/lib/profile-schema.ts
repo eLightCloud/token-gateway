@@ -1,9 +1,6 @@
 import { z } from 'zod'
 
-import {
-  resellerAgentCreateSchema,
-  resellerCustomerCreateSchema,
-} from './create-account-schema'
+import { resellerCreateSchema } from './create-account-schema'
 
 export const resellerProfileSchema = z.object({
   display_name: z
@@ -14,7 +11,7 @@ export const resellerProfileSchema = z.object({
     .string()
     .trim()
     .pipe(
-      z.union([resellerAgentCreateSchema.shape.phone, z.literal('')], {
+      z.union([resellerCreateSchema.shape.phone, z.literal('')], {
         error: 'Enter 7–15 digits with an optional leading +',
       })
     ),
@@ -27,7 +24,7 @@ export const pendingResellerEmailSchema = z.object({
     .string()
     .trim()
     .pipe(
-      z.union([resellerCustomerCreateSchema.shape.email, z.literal('')], {
+      z.union([resellerCreateSchema.shape.email, z.literal('')], {
         error: 'Enter a valid email address',
       })
     ),

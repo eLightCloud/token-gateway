@@ -42,6 +42,7 @@ import {
 } from '@/components/ui/empty'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+import { SecureVerificationDialog } from '@/features/auth/secure-verification'
 import {
   getLoginSessions,
   revokeLoginSession,
@@ -52,17 +53,49 @@ import { handleServerError } from '@/lib/handle-server-error'
 import { createServerError } from '@/lib/server-error-message'
 import type { LoginSession } from '@/stores/auth-store'
 
+import { useAccountSecurity } from '../hooks/use-account-security'
 import { LoginSessionDialogs } from './login-session-dialogs'
 import { LoginSessionItem } from './login-session-item'
 
 const sessionQueryKey = ['profile', 'login-sessions'] as const
 
-export function LoginSessionsCard() {
+export function LoginSessionsCard({
+  requireVerification = false,
+}: {
+  requireVerification?: boolean
+} = {}) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const security = useAccountSecurity()
   const [revokeTarget, setRevokeTarget] = useState<LoginSession | null>(null)
   const [confirmOthers, setConfirmOthers] = useState(false)
+
+  async function revoke(sid: string) {
+    const fallback = sid
+      ? t('Failed to sign out session')
+      : t('Failed to sign out other sessions')
+    if (requireVerification) {
+      return Boolean(
+        await security.run(async (signal) => {
+          const proof = await security.verify(
+            { scope: 'account.sessions.revoke', context: { session_id: sid } },
+            signal
+          )
+          const response = sid
+            ? await revokeLoginSession(sid, { proof, signal })
+            : await revokeOtherLoginSessions({ proof, signal })
+          if (!response.success) throw createServerError(response, fallback)
+          return {}
+        })
+      )
+    }
+    const response = sid
+      ? await revokeLoginSession(sid)
+      : await revokeOtherLoginSessions()
+    if (!response.success) throw createServerError(response, fallback)
+    return true
+  }
 
   const sessionsQuery = useQuery({
     queryKey: sessionQueryKey,
@@ -76,14 +109,9 @@ export function LoginSessionsCard() {
   })
 
   const revokeMutation = useMutation({
-    mutationFn: async (sid: string) => {
-      const response = await revokeLoginSession(sid)
-      if (!response.success) {
-        throw createServerError(response, t('Failed to sign out session'))
-      }
-      return sid
-    },
+    mutationFn: async (sid: string) => ((await revoke(sid)) ? sid : null),
     onSuccess: async (sid) => {
+      if (!sid) return
       const revokedCurrent = sessionsQuery.data?.some(
         (session) => session.sid === sid && session.current
       )
@@ -100,16 +128,9 @@ export function LoginSessionsCard() {
   })
 
   const revokeOthersMutation = useMutation({
-    mutationFn: async () => {
-      const response = await revokeOtherLoginSessions()
-      if (!response.success) {
-        throw createServerError(
-          response,
-          t('Failed to sign out other sessions')
-        )
-      }
-    },
-    onSuccess: async () => {
+    mutationFn: () => revoke(''),
+    onSuccess: async (revoked) => {
+      if (!revoked) return
       setConfirmOthers(false)
       toast.success(t('Other sessions signed out'))
       await queryClient.invalidateQueries({ queryKey: sessionQueryKey })
@@ -208,10 +229,18 @@ export function LoginSessionsCard() {
         onRevokeTargetChange={setRevokeTarget}
         onConfirmOthersChange={setConfirmOthers}
         onRevoke={() => {
-          if (revokeTarget) revokeMutation.mutate(revokeTarget.sid)
+          if (!revokeTarget) return
+          if (requireVerification) setRevokeTarget(null)
+          revokeMutation.mutate(revokeTarget.sid)
         }}
-        onRevokeOthers={() => revokeOthersMutation.mutate()}
+        onRevokeOthers={() => {
+          if (requireVerification) setConfirmOthers(false)
+          revokeOthersMutation.mutate()
+        }}
       />
+      {security.showVerification && (
+        <SecureVerificationDialog {...security.verificationDialogProps} />
+      )}
     </>
   )
 }

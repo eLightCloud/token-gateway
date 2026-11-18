@@ -165,7 +165,7 @@ function parseDiscountMap(data: unknown): Record<number, number> {
   )
 }
 
-export function useTopupInfo() {
+export function useTopupInfo(enabled = true) {
   const [topupInfo, setTopupInfo] = useState<TopupInfo | null>(null)
   const [presetAmounts, setPresetAmounts] = useState<PresetAmount[]>([])
   const [loading, setLoading] = useState(true)
@@ -216,6 +216,8 @@ export function useTopupInfo() {
   }, [])
 
   useEffect(() => {
+    if (!enabled) return
+
     let cancelled = false
 
     queueMicrotask(() => {
@@ -225,7 +227,7 @@ export function useTopupInfo() {
     return () => {
       cancelled = true
     }
-  }, [fetchTopupInfo])
+  }, [enabled, fetchTopupInfo])
 
   return {
     topupInfo,

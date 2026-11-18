@@ -21,6 +21,7 @@ import {
   CardStaggerContainer,
   CardStaggerItem,
 } from '@/components/page-transition'
+import { ResellerOwnProfile } from '@/features/reseller/agent-account-page'
 import { useStatus } from '@/hooks/use-status'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -35,21 +36,36 @@ export function Profile() {
   const { profile, loading, refreshProfile } = useProfile()
   const { status } = useStatus()
   const permissions = useAuthStore((s) => s.auth.user?.permissions)
+  const isAgent = useAuthStore((s) => s.auth.user?.reseller_kind === 'agent')
 
-  const checkinEnabled = status?.checkin_enabled === true
+  const managedFunding = useAuthStore(
+    (s) => s.auth.user?.reseller_kind === 'agent_customer'
+  )
+  const checkinEnabled =
+    !isAgent && !managedFunding && status?.checkin_enabled === true
   const turnstileEnabled = !!(
     status?.turnstile_check && status?.turnstile_site_key
   )
   const turnstileSiteKey = status?.turnstile_site_key || ''
-  const canConfigureSidebar = permissions?.sidebar_settings !== false
+  const canConfigureSidebar =
+    !isAgent && permissions?.sidebar_settings !== false
 
   return (
     <Main>
       <div className='min-h-0 flex-1 overflow-auto px-3 py-3 sm:px-4 sm:py-6'>
         <CardStaggerContainer className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-6'>
           <CardStaggerItem>
-            <ProfileHeader profile={profile} loading={loading} />
+            <ProfileHeader
+              profile={profile}
+              loading={loading}
+              showUsage={!isAgent}
+            />
           </CardStaggerItem>
+          {isAgent && (
+            <CardStaggerItem>
+              <ResellerOwnProfile onSaved={refreshProfile} />
+            </CardStaggerItem>
+          )}
 
           <CardStaggerItem>
             <div className='grid gap-4 sm:gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.46fr)] xl:items-start'>

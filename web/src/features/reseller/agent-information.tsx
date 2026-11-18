@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation } from '@tanstack/react-query'
-import { useId, useState } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -40,10 +40,8 @@ import {
   FieldLabel,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { EmailBindDialog } from '@/features/security/components/dialogs/email-bind-dialog'
 import { handleServerError } from '@/lib/handle-server-error'
 
-import { ResellerAgentPasswordReset } from './agent-password-reset'
 import {
   hasResellerAgentPassword,
   isResellerAgentActivated,
@@ -61,32 +59,37 @@ import {
 export function ResellerAgentInformation(props: {
   user: ResellerUser
   onSaved?: () => void
+  customer?: boolean
 }) {
   const { t } = useTranslation()
   const [editing, setEditing] = useState(false)
-  const [changingEmail, setChangingEmail] = useState(false)
   const user = props.user
+  const customer = props.customer
   const enabled = isResellerAgentActivated(user)
-  const fields = [
+  const fields: { label: string; value: ReactNode }[] = [
     { label: t('Username'), value: user.username },
     { label: t('Display name'), value: user.display_name },
     { label: t('Email'), value: user.email },
     { label: t('Mobile number'), value: user.phone },
-    {
-      label: t('Password'),
-      value: hasResellerAgentPassword(user.activation)
-        ? t('Configured')
-        : t('Password not set'),
-    },
-    {
-      label: t('Service status'),
-      value: (
-        <Badge variant={enabled ? 'secondary' : 'outline'}>
-          {enabled ? t('Activated') : t('Disabled')}
-        </Badge>
-      ),
-    },
   ]
+  if (!customer) {
+    fields.push(
+      {
+        label: t('Password'),
+        value: hasResellerAgentPassword(user.activation)
+          ? t('Configured')
+          : t('Password not set'),
+      },
+      {
+        label: t('Service status'),
+        value: (
+          <Badge variant={enabled ? 'secondary' : 'outline'}>
+            {t(enabled ? 'Activated' : 'Disabled')}
+          </Badge>
+        ),
+      }
+    )
+  }
   return (
     <Card className='mt-2'>
       <CardHeader>
@@ -100,14 +103,6 @@ export function ResellerAgentInformation(props: {
             >
               {t('Edit profile')}
             </Button>
-            <Button
-              variant='outline'
-              size='sm'
-              onClick={() => setChangingEmail(true)}
-            >
-              {t('Change Email')}
-            </Button>
-            <ResellerAgentPasswordReset accountPath={resellerOwnAccountPath} />
           </CardAction>
         )}
       </CardHeader>
@@ -137,15 +132,6 @@ export function ResellerAgentInformation(props: {
             setEditing(false)
             props.onSaved?.()
           }}
-        />
-      )}
-      {props.onSaved && changingEmail && (
-        <EmailBindDialog
-          open={changingEmail}
-          onOpenChange={setChangingEmail}
-          currentEmail={user.email}
-          requirePassword
-          onSuccess={props.onSaved}
         />
       )}
     </Card>

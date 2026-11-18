@@ -18,7 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
-import { ResellerOwnAccountPage } from '@/features/reseller/agent-account-page'
 import { getSecurityCompletion } from '@/features/security-completion/api'
 
 export const Route = createFileRoute('/_authenticated/reseller/account')({
@@ -26,6 +25,6 @@ export const Route = createFileRoute('/_authenticated/reseller/account')({
     if ((await getSecurityCompletion()).kind !== 'agent') {
       throw redirect({ to: '/403' })
     }
+    throw redirect({ to: '/profile', replace: true })
   },
-  component: ResellerOwnAccountPage,
 })
