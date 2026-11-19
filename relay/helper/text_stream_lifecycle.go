@@ -2,6 +2,8 @@ package helper
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -147,6 +149,7 @@ func (s *textStreamSession) run() {
 	if s.options.writeEventStreamHeaders {
 		copyCodexSSEHeaders(s.c, s.resp)
 		SetEventStreamHeaders(s.c)
+		s.c.Writer = &streamResponseWriter{ResponseWriter: s.c.Writer}
 	}
 
 	scanEvents := make(chan textStreamScanEvent)
@@ -178,9 +181,14 @@ func (s *textStreamSession) run() {
 		s.logResult()
 	}()
 
-	beginDrain := func() {
+	beginDrain := func() bool {
+		if errors.Is(context.Cause(s.c.Request.Context()), relaycommon.ErrRequestPluginReplyStopped) {
+			s.status.SetEndReason(relaycommon.StreamEndReasonHandlerStop, nil)
+			s.info.PerformanceBusinessRejection = true
+			return true
+		}
 		if draining {
-			return
+			return false
 		}
 		draining = true
 		clientDone = nil
@@ -190,19 +198,22 @@ func (s *textStreamSession) run() {
 		absoluteTimer = time.NewTimer(s.timeout)
 		idleC = idleTimer.C
 		absoluteC = absoluteTimer.C
+		return false
 	}
 
 	for {
-		if !draining && s.c.Request.Context().Err() != nil {
-			beginDrain()
+		if !draining && s.c.Request.Context().Err() != nil && beginDrain() {
+			return
 		}
 
 		select {
 		case <-clientDone:
-			beginDrain()
+			if beginDrain() {
+				return
+			}
 		case event := <-scanEvents:
-			if !draining && s.c.Request.Context().Err() != nil {
-				beginDrain()
+			if !draining && s.c.Request.Context().Err() != nil && beginDrain() {
+				return
 			}
 			if !draining {
 				resetTimer(normalTimer, s.timeout)
@@ -234,8 +245,8 @@ func (s *textStreamSession) run() {
 				resetTimer(idleTimer, s.timeout)
 			}
 		case result := <-scanEnd:
-			if !draining && s.c.Request.Context().Err() != nil {
-				beginDrain()
+			if !draining && s.c.Request.Context().Err() != nil && beginDrain() {
+				return
 			}
 			if result.err != nil && result.err != io.EOF {
 				s.status.SetEndReason(relaycommon.StreamEndReasonScannerErr, result.err)
@@ -247,7 +258,9 @@ func (s *textStreamSession) run() {
 			return
 		case err := <-pingErr:
 			if s.c.Request.Context().Err() != nil {
-				beginDrain()
+				if beginDrain() {
+					return
+				}
 				continue
 			}
 			s.status.SetEndReason(relaycommon.StreamEndReasonPingFail, err)
@@ -255,7 +268,9 @@ func (s *textStreamSession) run() {
 			return
 		case <-normalTimer.C:
 			if s.c.Request.Context().Err() != nil {
-				beginDrain()
+				if beginDrain() {
+					return
+				}
 				continue
 			}
 			s.status.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
@@ -314,7 +329,6 @@ func (s *textStreamSession) startPing(pingErr chan<- error) {
 			select {
 			case <-ticker.C:
 				s.writeMu.Lock()
-				ExtendWriteDeadline(s.c)
 				err := PingData(s.c)
 				s.writeMu.Unlock()
 				if err != nil {
@@ -345,9 +359,6 @@ func (s *textStreamSession) handleData(data string, result *StreamResult) (panic
 	}()
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if s.c.Request.Context().Err() == nil {
-		ExtendWriteDeadline(s.c)
-	}
 	s.dataHandler(data, result)
 	return false
 }

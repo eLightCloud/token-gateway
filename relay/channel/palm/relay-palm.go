@@ -83,7 +83,7 @@ func palmStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		info.StreamStatus.SetUpstreamResult(relaycommon.StreamUpstreamResultTerminalSuccess, nil)
 	}
 	if err := helper.ObjectData(c, fullTextResponse); err != nil {
-		common.SysLog("error writing stream response: " + err.Error())
+		common.SysLog(common.LogText("error writing stream response: %s", err.Error()))
 	}
 	helper.Done(c)
 	return nil, responseText

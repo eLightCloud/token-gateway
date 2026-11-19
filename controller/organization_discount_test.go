@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -32,6 +33,7 @@ func setupOrganizationDiscountAPI(t *testing.T) (*gin.Engine, int, int) {
 	model.DB = db
 	require.NoError(t, db.AutoMigrate(
 		&model.User{},
+		&model.UserSession{},
 		&model.Organization{},
 		&model.OrganizationMember{},
 		&model.OrganizationDiscountSnapshot{},
@@ -97,11 +99,9 @@ func performDiscountRequest(t *testing.T, router *gin.Engine, userId int, method
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	token := "discount-root-token"
-	if userId == 3002 {
-		token = "discount-admin-token"
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
+	session, err := service.CreateLoginSession(userId, "password", "127.0.0.1", "test")
+	require.NoError(t, err)
+	request.Header.Set("Authorization", "Bearer "+session.AccessToken)
 	request.Header.Set("New-Api-User", strconv.Itoa(userId))
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)

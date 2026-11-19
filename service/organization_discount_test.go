@@ -193,6 +193,6 @@ func TestAppendOrganizationDiscountBillingInfoShape(t *testing.T) {
 }
 
 func TestPreWssConsumeQuotaRequiresResolvedDiscountSnapshot(t *testing.T) {
-	err := PreWssConsumeQuota(nil, &relaycommon.RelayInfo{}, nil)
+	_, err := PreWssConsumeQuota(nil, &relaycommon.RelayInfo{}, nil)
 	require.ErrorIs(t, err, ErrOrganizationDiscountLoadFailed)
 }

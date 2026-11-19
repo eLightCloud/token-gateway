@@ -1,11 +1,27 @@
 package relay
 
 import (
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestBuildAlphaSearchRequestBodyPreservesUnknownFields(t *testing.T) {
@@ -44,4 +60,142 @@ func TestBuildAlphaSearchRequestBodyNoMappingKeepsRawBytes(t *testing.T) {
 	out, err := buildAlphaSearchRequestBody(raw, "gpt-5.1", "gpt-5.1")
 	require.NoError(t, err)
 	assert.Equal(t, raw, out)
+}
+
+// A single model is rewritten where it stands. Routing reads the first
+// "model" and most upstreams read the last, so a repeated model comes out as
+// one member carrying the mapped value.
+func TestBuildAlphaSearchRequestBodyRewritesModel(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"single model keeps its place", `{"model":"gpt-5.1","input":[]}`, `{"model":"gpt-5.1-mapped","input":[]}`},
+		{"repeated model collapses", `{"model":"gpt-5.1","input":[],"model":"gpt-5.5-pro"}`, `{"input":[],"model":"gpt-5.1-mapped"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := buildAlphaSearchRequestBody([]byte(tt.raw), "gpt-5.1", "gpt-5.1-mapped")
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(out))
+		})
+	}
+}
+
+// /v1/tools/search and /v1/tools/fetch follow /v1/alpha/search: the raw body
+// reaches /v1/tools/* unchanged and the response returns unchanged. With only
+// the built-in prices, a response DeepSeek bills (results, page content)
+// settles one call at the routing name's request price and no tokens, an
+// empty one releases the reservation, an upstream error keeps its status, and
+// a channel that cannot relay the endpoint fails retryably without sending
+// anything.
+func TestDeepSeekToolsHelper(t *testing.T) {
+	service.InitHttpClient()
+	gin.SetMode(gin.TestMode)
+	require.NoError(t, i18n.Init())
+	previousDB, previousLogs := model.DB, model.LOG_DB
+	batch, logConsume, redis := common.BatchUpdateEnabled, common.LogConsumeEnabled, common.RedisEnabled
+	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/deepseek.db"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.TaskSettlementJournal{}, &model.Log{}))
+	model.DB, model.LOG_DB = db, db
+	common.BatchUpdateEnabled, common.LogConsumeEnabled, common.RedisEnabled = false, false, false
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogs
+		common.BatchUpdateEnabled, common.LogConsumeEnabled, common.RedisEnabled = batch, logConsume, redis
+		raw, err := db.DB()
+		require.NoError(t, err)
+		require.NoError(t, raw.Close())
+	})
+
+	const search, fetch = "/v1/tools/search", "/v1/tools/fetch"
+	const results = `{"results":[{"title":"DeepSeek","url":"https://deepseek.com/","rerank_score":2.1}]}`
+	tests := []struct {
+		name, path, body, response string
+		channelType, status        int
+		settled                    int
+		refunded                   bool
+	}{
+		{name: "search with results", path: search, body: `{"query":"deepseek","count":2,"future_field":{"nested":true}}`,
+			response: results, channelType: constant.ChannelTypeDeepSeek, status: http.StatusOK, settled: 375},
+		{name: "search without results", path: search, body: `{"query":"site:none.invalid deepseek"}`,
+			response: `{"results":[]}`, channelType: constant.ChannelTypeDeepSeek, status: http.StatusOK, refunded: true},
+		{name: "fetch with page content", path: fetch, body: `{"url":"https://example.com/"}`,
+			response: `{"title":"Example Domain","content":"# Example Domain"}`, channelType: constant.ChannelTypeDeepSeek, status: http.StatusOK, settled: 375},
+		{name: "fetch failure keeps its status", path: fetch, body: `{"url":"https://example.com/missing"}`,
+			response:    `{"error":{"message":"failed to fetch URL","type":"not_found_error","param":null,"code":"invalid_request_error"}}`,
+			channelType: constant.ChannelTypeDeepSeek, status: http.StatusNotFound},
+		{name: "search through a New API channel", path: search, body: `{"query":"deepseek"}`,
+			response: results, channelType: constant.ChannelTypeNewAPI, status: http.StatusOK, settled: 375},
+		{name: "channel without the endpoint", path: search, body: `{"query":"deepseek"}`, channelType: constant.ChannelTypeOpenAI},
+	}
+	for index, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			user := model.User{Id: index + 1, Username: fmt.Sprintf("search-%d", index), AffCode: fmt.Sprintf("test-%d", index), Quota: 1000}
+			channel := model.Channel{Id: index + 1, Type: tc.channelType, Name: "deepseek-test"}
+			require.NoError(t, db.Create(&user).Error)
+			require.NoError(t, db.Create(&channel).Error)
+			var gotPath string
+			var gotBody []byte
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				gotBody, _ = io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.response)
+			}))
+			t.Cleanup(upstream.Close)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Set("id", user.Id)
+			c.Set(common.RequestIdKey, common.NewRequestId())
+			common.SetContextKey(c, constant.ContextKeyChannelId, channel.Id)
+			routingName := map[string]string{search: constant.DeepSeekSearchModel, fetch: constant.DeepSeekFetchModel}[tc.path]
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, routingName)
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyChannelType, tc.channelType)
+			common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, upstream.URL)
+			common.SetContextKey(c, constant.ContextKeyChannelKey, "sk-test")
+
+			request, err := helper.GetAndValidateRequest(c, types.RelayFormatDeepSeekTools)
+			require.NoError(t, err)
+			info, err := relaycommon.GenRelayInfo(c, types.RelayFormatDeepSeekTools, request, nil)
+			require.NoError(t, err)
+			info.BillingRequestInput = &billingexpr.RequestInput{Body: []byte(tc.body)}
+			_, err = helper.ModelPriceHelper(c, info, 0, request.GetTokenCountMeta())
+			require.NoError(t, err, "the routing name is priced out of the box")
+			info.UserSetting.BillingPreference = "wallet_only"
+			info.IsPlayground = true
+			info.ForcePreConsume = true
+			require.Nil(t, service.PreConsumeBilling(c, 375, info))
+
+			apiErr := DeepSeekToolsHelper(c, info)
+			if tc.status == 0 {
+				require.NotNil(t, apiErr)
+				assert.False(t, types.IsSkipRetryError(apiErr))
+				assert.Empty(t, gotPath)
+				return
+			}
+			assert.Equal(t, tc.path, gotPath)
+			assert.Equal(t, tc.body, string(gotBody))
+			if tc.status == http.StatusOK {
+				require.NoError(t, db.First(&user, user.Id).Error)
+				assert.EqualValues(t, tc.settled, user.UsedQuota)
+				assert.EqualValues(t, 1000-tc.settled, user.Quota)
+				assert.Equal(t, tc.refunded, tc.settled == 0 && !info.Billing.NeedsRefund())
+			}
+			if tc.status != http.StatusOK {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, tc.status, apiErr.StatusCode)
+				return
+			}
+			require.Nil(t, apiErr)
+			assert.Equal(t, tc.status, recorder.Code)
+			assert.Equal(t, tc.response, recorder.Body.String())
+		})
+	}
 }

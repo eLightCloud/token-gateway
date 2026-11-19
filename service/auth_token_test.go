@@ -175,7 +175,7 @@ func TestSensitiveIntegrationProofUsesExistingIdentityScopeAndExpiryRules(t *tes
 			require.NoError(t, err)
 			_, err = verifySecurityProof(proof, identity, binding)
 			require.NoError(t, err)
-			otherBinding, err := BindVerificationOperation(VerificationOperation{Scope: VerificationScopeAccessTokenGenerate})
+			otherBinding, err := BindVerificationOperation(VerificationOperation{Scope: VerificationScopeAccessTokenGenerate, Context: []byte(`{"scopes":["profile:read"],"expires_at":0}`)})
 			require.NoError(t, err)
 			_, err = verifySecurityProof(proof, identity, otherBinding)
 			assert.ErrorIs(t, err, ErrProofScope)
@@ -222,5 +222,26 @@ func TestSensitiveIntegrationProofUsesExistingIdentityScopeAndExpiryRules(t *tes
 			_, err = GetVerificationRequirements(liveIdentity, operation.Scope)
 			assert.ErrorIs(t, err, ErrVerificationForbidden)
 		})
+	}
+}
+
+func TestSecurityProofBindsAccessTokenSession(t *testing.T) {
+	setupAuthSessionTestDB(t)
+	useTestSessionSecret(t)
+	identity := AuthIdentity{UserID: 42, SessionID: model.AccessTokenSessionID(7), UserAuthVersion: 3, SessionVersion: model.AccessTokenSessionVersion}
+	binding, err := BindVerificationOperation(VerificationOperation{Scope: VerificationScopeTwoFADisable})
+	require.NoError(t, err)
+	proof, _, err := IssueSecurityProof(identity, "password", binding)
+	require.NoError(t, err)
+
+	claims, err := verifySecurityProof(proof, identity, binding)
+	require.NoError(t, err)
+	assert.Equal(t, identity.SessionID, claims.SessionID)
+
+	for _, sessionID := range []string{model.AccessTokenSessionID(8), "session-1"} {
+		other := identity
+		other.SessionID = sessionID
+		_, err = verifySecurityProof(proof, other, binding)
+		assert.ErrorIs(t, err, ErrAuthTokenInvalid, sessionID)
 	}
 }

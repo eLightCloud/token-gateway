@@ -70,7 +70,7 @@ func (a *TaskAdaptor) SeedanceVideoSource(task *model.Task, body []byte) (string
 	snapshot := *task
 	snapshot.Data = body
 	snapshot.Status = model.TaskStatusSuccess
-	descriptor, err := a.BuildContentRequest(&snapshot, "video", channel.TaskArtifactClientRequest{Method: http.MethodGet})
+	descriptor, err := a.BuildContentRequest(context.Background(), &snapshot, "video", channel.TaskArtifactClientRequest{Method: http.MethodGet})
 	if err != nil {
 		return "", nil, err
 	}

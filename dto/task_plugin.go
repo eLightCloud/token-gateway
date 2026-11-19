@@ -9,20 +9,23 @@ type TaskPluginError struct {
 
 // TaskView is the only persisted-task shape exposed to JavaScript plugins.
 // It deliberately excludes ownership, channel, quota, properties, and private
-// upstream identifiers. State and ProducerVersion are the read-only protocol
+// upstream identifiers. Fields are sorted by JSON name so the encoded view
+// orders its keys as an encoded map does; hooks receive it parsed from that
+// text.
+// State and ProducerVersion are the read-only protocol
 // context a plugin needs to interpret its own persisted tasks (for example a
 // southbound video protocol pinned at submission).
 type TaskView struct {
-	Model           string `json:"model,omitempty"`
-	TaskID          string `json:"task_id"`
-	Platform        string `json:"platform"`
-	Status          string `json:"status"`
-	Progress        string `json:"progress"`
-	FailReason      string `json:"fail_reason"`
 	CreatedAt       int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at,omitempty"`
-	FinishedAt      int64  `json:"finished_at,omitempty"`
 	Data            any    `json:"data,omitempty"`
-	State           any    `json:"state,omitempty"`
+	FailReason      string `json:"fail_reason"`
+	FinishedAt      int64  `json:"finished_at,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Platform        string `json:"platform"`
 	ProducerVersion string `json:"producer_version,omitempty"`
+	Progress        string `json:"progress"`
+	State           any    `json:"state,omitempty"`
+	Status          string `json:"status"`
+	TaskID          string `json:"task_id"`
+	UpdatedAt       int64  `json:"updated_at,omitempty"`
 }

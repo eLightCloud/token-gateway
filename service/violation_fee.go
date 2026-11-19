@@ -124,7 +124,7 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	tokenName := ctx.GetString("token_name")
-	oai := apiErr.ToOpenAIError()
+	oai := apiErr.ToOpenAIError(common.UpstreamAddresses(ctx)...)
 
 	other := model.NewLogOther()
 	other.MergePublic(map[string]any{
@@ -144,7 +144,7 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		ModelName:      relayInfo.OriginModelName,
 		TokenName:      tokenName,
 		Quota:          feeQuota,
-		Content:        "Violation fee charged",
+		Content:        []*common.Message{common.NewMessage("Violation fee charged")},
 		TokenId:        relayInfo.TokenId,
 		UseTimeSeconds: int(useTimeSeconds),
 		IsStream:       relayInfo.IsStream,

@@ -45,12 +45,14 @@ func TestOptionReloadSkipsDedicatedVantageConfig(t *testing.T) {
 	}).Error)
 
 	for range 2 {
-		loadOptionsFromDatabase()
+		require.NoError(t, LoadOptionsFromDatabase())
 	}
 	assert.NotContains(t, logs.String(), "ignored invalid option")
 	assert.NotContains(t, logs.String(), secret)
 	assert.NotContains(t, logs.String(), "private-marker")
-	assert.Equal(t, map[string]string{"OptionReloadMarker": "loaded"}, common.OptionMap)
+	assert.Equal(t, "loaded", common.OptionMap["OptionReloadMarker"])
+	assert.NotContains(t, common.OptionMap, VantageIntegrationOptionKey)
+	assert.NotContains(t, common.OptionMap, strings.ToUpper(VantageIntegrationOptionKey)+" ")
 	config, err := GetVantageIntegrationConfig()
 	require.NoError(t, err)
 	assert.True(t, config.Enabled)

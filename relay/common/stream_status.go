@@ -1,11 +1,14 @@
 package common
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 )
+
+var ErrRequestPluginReplyStopped = errors.New("response stopped by request plugin")
 
 type StreamEndReason string
 

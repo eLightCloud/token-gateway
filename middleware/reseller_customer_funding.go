@@ -18,10 +18,7 @@ func RequirePlatformFunding(c *gin.Context) {
 		return
 	}
 	if errors.Is(err, model.ErrResellerForbidden) {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-			"success": false, "code": "RESELLER_ACCOUNT_RESTRICTED",
-			"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
-		})
+		abortWithWebMessage(c, http.StatusForbidden, "RESELLER_ACCOUNT_RESTRICTED", common.NewMessage("Unauthorized, insufficient privileges"))
 		return
 	}
 	c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{

@@ -2,7 +2,6 @@ package model
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/shopspring/decimal"
@@ -93,7 +92,7 @@ func AdjustUserQuota(userID, operatorRole int, mode string, value int64, operato
 	delta := int64(adjustment.After) - int64(adjustment.Before)
 	if delta != 0 {
 		if err := cacheIncrUserQuota(userID, delta); err != nil {
-			common.SysError(fmt.Sprintf("failed to sync manual quota adjustment for user %d: %s", userID, err))
+			common.SysError(common.LogText("failed to sync manual quota adjustment for user %d: %s", userID, err))
 		}
 	}
 	return &adjustment, nil

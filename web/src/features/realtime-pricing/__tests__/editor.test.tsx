@@ -81,6 +81,9 @@ function mountWorkspace(
   })
   if (action) {
     get.mockImplementation(async (path) => {
+      if (path === '/api/group/') {
+        return { data: { success: true, data: ['default'] } }
+      }
       if (path === '/api/user/') {
         return {
           data: {

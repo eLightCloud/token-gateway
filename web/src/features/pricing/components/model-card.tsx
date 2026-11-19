@@ -20,10 +20,10 @@ import { ChevronRight } from 'lucide-react'
 import { memo, useMemo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { PersonalRatioBadge } from '@/features/reseller/personal'
 import { CopyButton } from '@/components/copy-button'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
+import { PersonalRatioBadge } from '@/features/reseller/personal'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 import { useSystemConfigStore } from '@/stores/system-config-store'
@@ -39,6 +39,7 @@ import {
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
+import { withBasePricing } from '../lib/plugin-pricing'
 import { formatPrice, formatRequestPrice } from '../lib/price'
 import { taskPriceLabel, taskUsageUnitLabel } from '../lib/task-price-display'
 import type { PricingModel, PriceType, TokenUnit } from '../types'
@@ -62,7 +63,9 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const priceRate = props.priceRate ?? 1
   const usdExchangeRate = props.usdExchangeRate ?? 1
   const showRechargePrice = props.showRechargePrice ?? false
-  const isTokenBased = isTokenBasedModel(props.model)
+  // Prices summarise the model-level price when ordinary requests pay it.
+  const model = useMemo(() => withBasePricing(props.model), [props.model])
+  const isTokenBased = isTokenBasedModel(model)
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
   const tags = parseTags(props.model.tags)
   const groups = props.model.enable_groups || []
@@ -70,8 +73,8 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const modelIconKey = props.model.icon || props.model.vendor_icon
   const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 28) : null
   const initial = props.model.model_name?.charAt(0).toUpperCase() || '?'
-  const isUnconfiguredTaskUsage = isUnconfiguredTaskUsageModel(props.model)
-  const billingTime = useBillingTime(props.model.billing_expr)
+  const isUnconfiguredTaskUsage = isUnconfiguredTaskUsageModel(model)
+  const billingTime = useBillingTime(model.billing_expr)
   const currency = useSystemConfigStore((state) => state.config.currency)
   const dynamicPriceOptions = useMemo(
     () => ({
@@ -81,12 +84,12 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
       priceRate,
       usdExchangeRate,
       groupRatioMultiplier: getDynamicDisplayGroupRatio(
-        props.model,
+        model,
         props.selectedGroup
       ),
     }),
     [
-      props.model,
+      model,
       props.selectedGroup,
       billingTime,
       tokenUnit,
@@ -96,19 +99,22 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     ]
   )
   const dynamicSummary = useMemo(
-    () => getDynamicPricingSummary(props.model, dynamicPriceOptions),
+    () => getDynamicPricingSummary(model, dynamicPriceOptions),
     // Currency is read indirectly by the price formatter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [props.model, dynamicPriceOptions, currency]
+    [model, dynamicPriceOptions, currency]
   )
   const cardExamplePrice = useMemo(
-    () => getCardExamplePrice(props.model, dynamicPriceOptions),
+    () => getCardExamplePrice(model, dynamicPriceOptions),
     // Currency is read indirectly by the price formatter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [props.model, dynamicPriceOptions, currency]
+    [model, dynamicPriceOptions, currency]
   )
   let priceSummary: ReactNode
   if (dynamicSummary) {
+    const cacheReadEntries = dynamicSummary.secondaryEntries.filter(
+      (entry) => entry.field === 'cacheReadPrice' && entry.unit === 'token'
+    )
     if (dynamicSummary.isSpecialExpression) {
       priceSummary = (
         <div className='col-span-full min-w-0'>
@@ -120,11 +126,20 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           </code>
         </div>
       )
-    } else if (dynamicSummary.primaryEntries.length > 0) {
+    } else if (
+      dynamicSummary.primaryEntries.length > 0 ||
+      cacheReadEntries.length > 0
+    ) {
       priceSummary = (
         <>
-          {dynamicSummary.primaryEntries
-            .slice(0, dynamicSummary.providerCount ? 2 : undefined)
+          {[
+            dynamicSummary.primaryEntries.slice(
+              0,
+              dynamicSummary.providerCount ? 2 : undefined
+            ),
+            cacheReadEntries,
+          ]
+            .flat()
             .map((entry) => {
               const unitLabelKey = getDynamicPriceUnitLabelKey(entry)
               const unitLabel = taskUsageUnitLabel(
@@ -181,6 +196,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             </span>
           )}
           {dynamicSummary.isTaskUsage &&
+            dynamicSummary.tierCount > 1 &&
             dynamicSummary.tier?.label &&
             !dynamicSummary.primaryEntries.some(
               (entry) => entry.formattedRange
@@ -210,7 +226,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     const prices: { type: PriceType; label: string }[] = [
       { type: 'input', label: t('Input') },
       { type: 'output', label: t('Output') },
-      ...(props.model.cache_ratio != null
+      ...(model.cache_ratio != null
         ? [{ type: 'cache' as const, label: t('Cached') }]
         : []),
     ]
@@ -219,7 +235,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         <span className='text-muted-foreground text-xs'>{price.label}</span>
         <span className='font-mono text-sm font-semibold tabular-nums'>
           {formatPrice(
-            props.model,
+            model,
             price.type,
             tokenUnit,
             showRechargePrice,
@@ -239,7 +255,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
       <div className='col-span-full flex min-w-0 flex-col gap-1'>
         <span className='font-mono text-sm font-semibold tabular-nums'>
           {formatRequestPrice(
-            props.model,
+            model,
             showRechargePrice,
             priceRate,
             usdExchangeRate,

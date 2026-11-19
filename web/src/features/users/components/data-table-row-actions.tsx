@@ -46,10 +46,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import type { AdminUserManageAction } from '@/features/auth/secure-verification'
 import { SecurityRecoveryDialog } from '@/features/security-completion/recovery-dialog'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
 import { hasPermission } from '@/lib/admin-permissions'
 import { handleServerError } from '@/lib/handle-server-error'
+import { AuthOperationError } from '@/lib/secure-verification'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { manageUser } from '../api'
@@ -60,9 +62,16 @@ import {
   isUserDeleted,
 } from '../constants'
 import { getUserActionMessage } from '../lib'
-import type { User, ManageUserAction } from '../types'
+import type { User } from '../types'
 import { UserBindingDialog } from './dialogs/user-binding-dialog'
 import { useUsers } from './users-provider'
+
+const MANAGE_ACTION_TITLES: Record<AdminUserManageAction, string> = {
+  disable: 'Verify to disable user',
+  enable: 'Verify to enable user',
+  promote: 'Verify to promote user',
+  demote: 'Verify to demote user',
+}
 
 interface DataTableRowActionsProps {
   row: Row<User>
@@ -76,7 +85,8 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     hasPermission(operator, 'account_security', 'recover') &&
     operator?.id !== user.id &&
     (operator?.role === USER_ROLE.ROOT || (operator?.role ?? 0) > user.role)
-  const { setOpen, setCurrentRow, triggerRefresh } = useUsers()
+  const { setOpen, setCurrentRow, triggerRefresh, requestVerification } =
+    useUsers()
   const [resetPasskeyOpen, setResetPasskeyOpen] = useState(false)
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [emailChangeOpen, setEmailChangeOpen] = useState(false)
@@ -94,9 +104,19 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     setOpen('delete')
   }
 
-  const handleManage = async (action: Exclude<ManageUserAction, 'delete'>) => {
+  const handleManage = async (action: AdminUserManageAction) => {
     try {
-      const result = await manageUser(user.id, action)
+      const proof = await requestVerification({
+        scope: 'admin.user.manage',
+        context: { user_id: user.id, action },
+        title: t(MANAGE_ACTION_TITLES[action]),
+        description: t(
+          'Confirm your identity before changing the account {{username}}.',
+          { username: user.username }
+        ),
+      })
+      if (!proof) return
+      const result = await manageUser(user.id, action, proof.proof_token)
       if (result.success) {
         toast.success(t(getUserActionMessage(action)))
         triggerRefresh()
@@ -104,7 +124,10 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         handleServerError(result, t('Failed to {{action}} user', { action }))
       }
     } catch (error) {
-      handleServerError(error, t(ERROR_MESSAGES.UNEXPECTED))
+      handleServerError(
+        AuthOperationError.from(error),
+        t(ERROR_MESSAGES.UNEXPECTED)
+      )
     }
   }
 

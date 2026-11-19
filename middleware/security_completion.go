@@ -2,12 +2,22 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 )
 
-func allowSecurityCompletion(c *gin.Context, userID int, pat bool) bool {
+func allowSecurityCompletion(c *gin.Context, user *model.UserBase, pat bool) bool {
+	if !model.SecurityCompletionRequired(user.ResellerKind) {
+		if strings.HasPrefix(c.Request.URL.Path, "/api/reseller/self/") {
+			abortWithWebMessage(c, http.StatusForbidden, "RESELLER_ACCOUNT_RESTRICTED", common.NewMessage("Unauthorized, insufficient privileges"))
+			return false
+		}
+		return true
+	}
+	userID := user.Id
 	state, err := model.GetSecurityCompletion(userID)
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "SECURITY_STATE_UNAVAILABLE", "message": "Security status is unavailable"})

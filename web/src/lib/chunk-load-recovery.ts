@@ -25,6 +25,7 @@ export function recoverFromChunkLoadError(error: unknown): void {
   if (!(error instanceof Error)) return
   const isChunkError =
     error.name === 'ChunkLoadError' ||
+    ('code' in error && error.code === 'CSS_CHUNK_LOAD_FAILED') ||
     (error instanceof TypeError &&
       /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(
         error.message

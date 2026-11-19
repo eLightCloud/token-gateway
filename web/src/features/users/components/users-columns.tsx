@@ -32,6 +32,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { ResellerIdentityLabel } from '@/features/reseller/identity-label'
 import { getCurrencyDisplay } from '@/lib/currency'
 import { formatQuota } from '@/lib/format'
 import { useSystemConfigStore } from '@/stores/system-config-store'
@@ -44,8 +45,6 @@ import {
 } from '../constants'
 import type { User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
-import { ResellerIdentityLabel } from '@/features/reseller/identity-label'
-
 import { UserQuotaCell } from './user-quota-cell'
 
 export function useUsersColumns(): ColumnDef<User>[] {
@@ -127,7 +126,10 @@ export function useUsersColumns(): ColumnDef<User>[] {
                   </Tooltip>
                 )}
               </div>
-              <ResellerIdentityLabel kind={row.original.reseller_kind} agentID={row.original.agent_user_id} />
+              <ResellerIdentityLabel
+                kind={row.original.reseller_kind}
+                agentID={row.original.agent_user_id}
+              />
               {displayName && displayName !== username && (
                 <div
                   data-table-text='secondary'
@@ -267,7 +269,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
               )}
               {inviterId > 0 && (
                 <LongText className='text-muted-foreground'>
-                  {t('Inviter')} ID: {inviterId}
+                  {t('Inviter ID: {{id}}', { id: inviterId })}
                 </LongText>
               )}
             </div>

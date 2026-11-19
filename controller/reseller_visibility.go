@@ -17,9 +17,13 @@ func resellerVisibleLogs(userID int, logs []*model.Log) (any, error) {
 	}
 	rows := make([]map[string]any, 0, len(logs))
 	for _, entry := range logs {
-		rows = append(rows, map[string]any{"id": entry.Id, "user_id": entry.UserId, "created_at": entry.CreatedAt, "type": entry.Type, "content": entry.Content, "username": entry.Username, "token_name": entry.TokenName, "model_name": entry.ModelName, "quota": entry.Quota, "prompt_tokens": entry.PromptTokens, "completion_tokens": entry.CompletionTokens, "use_time": entry.UseTime, "is_stream": entry.IsStream, "token_id": entry.TokenId, "group": entry.Group, "ip": entry.Ip, "request_id": entry.RequestId, "other": entry.Other})
+		rows = append(rows, resellerCustomerLog(entry))
 	}
 	return rows, nil
+}
+
+func resellerCustomerLog(entry *model.Log) map[string]any {
+	return map[string]any{"id": entry.Id, "user_id": entry.UserId, "created_at": entry.CreatedAt, "type": entry.Type, "content": entry.Content, "username": entry.Username, "token_name": entry.TokenName, "model_name": entry.ModelName, "quota": entry.Quota, "prompt_tokens": entry.PromptTokens, "completion_tokens": entry.CompletionTokens, "use_time": entry.UseTime, "is_stream": entry.IsStream, "token_id": entry.TokenId, "group": entry.Group, "ip": entry.Ip, "request_id": entry.RequestId, "other": entry.Other}
 }
 
 func resellerVisibleTasks(userID int, tasks []*dto.TaskDto) (any, error) {

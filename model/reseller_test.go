@@ -347,7 +347,7 @@ func TestResellerS1(t *testing.T) {
 		// reintroduce a customer balance into the cached reservation path.
 		require.NoError(t, client.HSet(context.Background(), getUserCacheKey(cacheCustomer.UserID), "CacheSchema", userCacheSchemaVersion-1, "Quota", 999).Err())
 		require.NoError(t, client.HDel(context.Background(), getUserCacheKey(cacheCustomer.UserID), "ResellerKind").Err())
-		require.NoError(t, updateUserCacheFieldAtVersion(cacheCustomer.UserID, "Email", "delayed@example.invalid", 1))
+		require.NoError(t, client.HSet(t.Context(), getUserCacheKey(cacheCustomer.UserID), "Email", "delayed@example.invalid").Err())
 		require.NoError(t, db.Model(&User{}).Where("id = ?", cacheCustomer.UserID).Update("group", "customer-refreshed").Error)
 		require.NoError(t, RefreshUserGroupCache(cacheCustomer.UserID))
 		cached, err = GetUserCache(cacheCustomer.UserID)
@@ -459,8 +459,10 @@ func TestResellerS1(t *testing.T) {
 	require.ErrorIs(t, customer.TransferAffQuotaToQuota(1), ErrResellerForbidden)
 	require.ErrorIs(t, inviteUser(b.UserID), ErrResellerForbidden)
 	require.ErrorIs(t, DisableTwoFAWithAuthVersion(b.UserID), ErrResellerForbidden)
-	require.ErrorIs(t, customer.Delete(), ErrResellerForbidden)
-	require.ErrorIs(t, customer.HardDelete(), ErrResellerForbidden)
+	_, err = customer.Delete()
+	require.ErrorIs(t, err, ErrResellerForbidden)
+	_, err = customer.HardDelete()
+	require.ErrorIs(t, err, ErrResellerForbidden)
 	customer.Role = common.RoleAdminUser
 	require.ErrorIs(t, customer.Update(false), ErrResellerForbidden)
 	customer.Role = common.RoleCommonUser

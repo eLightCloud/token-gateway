@@ -4,19 +4,22 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func emailDeliveryTestUpdate() common.EmailDeliveryUpdate {
@@ -307,4 +310,231 @@ func TestEmailDeliveryEncryptionFailureHasSafeRecoveryCode(t *testing.T) {
 			assert.ErrorIs(t, common.SendEmail("Test", "receiver@example.com", "body"), common.ErrEmailDeliveryUnavailable)
 		})
 	}
+}
+
+type emailHTTPTransport func(*http.Request) (*http.Response, error)
+
+func (transport emailHTTPTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport(request)
+}
+
+func configureEmailDelivery(t *testing.T, options map[string]string) {
+	t.Helper()
+	common.OptionMapRWMutex.Lock()
+	original := common.OptionMap
+	common.OptionMap = options
+	common.OptionMapRWMutex.Unlock()
+	originalTransport := http.DefaultTransport
+	originalFrom, originalAccount, originalServer := common.SMTPFrom, common.SMTPAccount, common.SMTPServer
+	common.SMTPFrom, common.SMTPAccount, common.SMTPServer = "", "", ""
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = original
+		common.OptionMapRWMutex.Unlock()
+		http.DefaultTransport = originalTransport
+		common.SMTPFrom, common.SMTPAccount, common.SMTPServer = originalFrom, originalAccount, originalServer
+	})
+}
+
+func TestResendDeliversThroughSelectedProvider(t *testing.T) {
+	configureEmailDelivery(t, map[string]string{"EmailProvider": "resend", "ResendApiKey": "test-key", "ResendFrom": "New API <sender@example.com>"})
+	calls := 0
+	http.DefaultTransport = emailHTTPTransport(func(request *http.Request) (*http.Response, error) {
+		calls++
+		assert.Equal(t, "https://api.resend.com/emails", request.URL.String())
+		assert.Equal(t, http.MethodPost, request.Method)
+		assert.Equal(t, "Bearer test-key", request.Header.Get("Authorization"))
+		assert.Equal(t, "application/json", request.Header.Get("Content-Type"))
+		_, hasDeadline := request.Context().Deadline()
+		assert.True(t, hasDeadline, "email delivery must have a bounded wait")
+		var body struct {
+			From    string   `json:"from"`
+			To      []string `json:"to"`
+			Subject string   `json:"subject"`
+			HTML    string   `json:"html"`
+		}
+		require.NoError(t, common.DecodeJson(request.Body, &body))
+		assert.Equal(t, `"New API" <sender@example.com>`, body.From)
+		assert.Equal(t, []string{"one@example.com", "two@example.com"}, body.To)
+		assert.Equal(t, "验证码", body.Subject)
+		assert.Contains(t, body.HTML, "<p>123456</p>")
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"email-test-id"}`)), Header: make(http.Header)}, nil
+	})
+	require.NoError(t, common.SendEmail("验证码", "one@example.com; two@example.com", "<p>123456</p>"))
+	assert.Equal(t, 1, calls, "no SMTP configuration is needed and no duplicate request is made")
+}
+
+func TestResendFailuresDoNotRetryFallbackOrExposeSensitiveContent(t *testing.T) {
+	for _, status := range []int{302, 400, 401, 403, 429, 500} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			configureEmailDelivery(t, map[string]string{"EmailProvider": "resend", "ResendApiKey": "test-key", "ResendFrom": "sender@example.com"})
+			calls := 0
+			http.DefaultTransport = emailHTTPTransport(func(request *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: status, Header: http.Header{"Location": []string{"https://untrusted.example/emails"}}, Body: io.NopCloser(strings.NewReader(`{"message":"test-key 123456 reset-token"}`))}, nil
+			})
+			err := common.SendEmail("verification", "one@example.com", "123456 reset-token")
+			require.EqualError(t, err, "Resend email delivery failed (HTTP "+strconv.Itoa(status)+")")
+			assert.Equal(t, 1, calls, "do not retry or follow redirects")
+		})
+	}
+}
+
+func TestResendRejectsIncompleteOrInvalidConfigurationBeforeSending(t *testing.T) {
+	tests := []struct{ name, key, from, receiver string }{
+		{"missing key", "", "sender@example.com", "one@example.com"},
+		{"header injection", "key\r\nInjected: value", "sender@example.com", "one@example.com"},
+		{"missing sender", "test-key", "", "one@example.com"},
+		{"invalid sender", "test-key", "bad-address", "one@example.com"},
+		{"invalid recipient", "test-key", "sender@example.com", "bad-address"},
+		{"empty recipient", "test-key", "sender@example.com", ""},
+		{"too many recipients", "test-key", "sender@example.com", strings.Repeat("one@example.com;", 50) + "two@example.com"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configureEmailDelivery(t, map[string]string{"EmailProvider": "resend", "ResendApiKey": test.key, "ResendFrom": test.from})
+			http.DefaultTransport = emailHTTPTransport(func(*http.Request) (*http.Response, error) {
+				t.Fatal("invalid settings must not make a request")
+				return nil, errors.New("unexpected request")
+			})
+			err := common.SendEmail("verification", test.receiver, "123456")
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "123456")
+			assert.NotContains(t, err.Error(), "test-key")
+		})
+	}
+}
+
+func TestResendRejectsMalformedSuccessAndSanitizesTransportErrors(t *testing.T) {
+	for _, body := range []string{`{}`, `not json`, `{"id":false}`, `{"id":""}`} {
+		t.Run(body, func(t *testing.T) {
+			configureEmailDelivery(t, map[string]string{"EmailProvider": "resend", "ResendApiKey": "test-key", "ResendFrom": "sender@example.com"})
+			http.DefaultTransport = emailHTTPTransport(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			})
+			require.EqualError(t, common.SendEmail("verification", "one@example.com", "123456"), "Invalid Resend delivery response")
+		})
+	}
+	configureEmailDelivery(t, map[string]string{"EmailProvider": "resend", "ResendApiKey": "test-key", "ResendFrom": "sender@example.com"})
+	http.DefaultTransport = emailHTTPTransport(func(*http.Request) (*http.Response, error) { return nil, errors.New("test-key 123456 reset-token") })
+	require.EqualError(t, common.SendEmail("verification", "one@example.com", "123456"), "Resend request failed")
+}
+
+func TestSMTPAndLegacyConfigurationNeverUseResend(t *testing.T) {
+	for _, provider := range []string{"", "smtp", "invalid"} {
+		t.Run("provider="+provider, func(t *testing.T) {
+			configureEmailDelivery(t, map[string]string{"EmailProvider": provider, "ResendApiKey": "test-key", "ResendFrom": "sender@example.com"})
+			http.DefaultTransport = emailHTTPTransport(func(*http.Request) (*http.Response, error) {
+				t.Fatal("SMTP and unknown providers must not invoke Resend")
+				return nil, errors.New("unexpected request")
+			})
+			require.Error(t, common.SendEmail("verification", "one@example.com", "123456"))
+		})
+	}
+}
+
+func TestEmailOptionsNeverReturnResendCredentials(t *testing.T) {
+	configureEmailDelivery(t, map[string]string{"EmailProvider": "resend", "ResendApiKey": "private-email-credential", "ResendFrom": "sender@example.com"})
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/option/", nil)
+	GetOptions(context)
+	require.Equal(t, http.StatusOK, response.Code)
+	assert.NotContains(t, response.Body.String(), "private-email-credential")
+	assert.NotContains(t, response.Body.String(), "ResendApiKey")
+	assert.Contains(t, response.Body.String(), "ResendFrom")
+	assert.Contains(t, response.Body.String(), `"key":"ResendKeyConfigured","value":"true"`)
+}
+
+func TestResendDeliverySettingsRequireBoundProof(t *testing.T) {
+	user, identity := setupSecurityEnrollmentTest(t)
+	configureEmailDelivery(t, map[string]string{"EmailProvider": "smtp"})
+	t.Setenv("EMAIL_DELIVERY_STORAGE_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+	const path = "/api/option/email_delivery/resend"
+	const body = `{"intent":{"provider":"resend","from":"mail@example.com","replace_key":true},"api_key":"test-key"}`
+	context := []byte(`{"provider":"resend","from":"mail@example.com","replace_key":true}`)
+	operation := service.VerificationOperation{Scope: service.VerificationScopeResendDeliverySettings, Context: context}
+	_, err := service.GetVerificationRequirements(identity, operation.Scope)
+	require.ErrorIs(t, err, service.ErrVerificationForbidden)
+	require.NoError(t, model.DB.Model(user).Update("role", common.RoleRootUser).Error)
+	require.NoError(t, model.PublishUserAuthCache(user.Id))
+
+	response := securityEnrollmentRequest(http.MethodPut, "/api/option/", `{"key":"EmailProvider","value":"resend"}`, "", identity, UpdateOption)
+	assert.Equal(t, http.StatusBadRequest, response.Code)
+	response = securityEnrollmentRequest(http.MethodPut, path, body, "", identity, UpdateResendDeliverySettings)
+	assert.Equal(t, http.StatusForbidden, response.Code)
+	assert.Equal(t, "smtp", common.OptionMap["EmailProvider"])
+
+	proof := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodPassword)
+	altered := strings.Replace(body, "mail@example.com", "other@example.com", 1)
+	response = securityEnrollmentRequest(http.MethodPut, path, altered, proof, identity, UpdateResendDeliverySettings)
+	assert.Equal(t, http.StatusForbidden, response.Code)
+	assert.Equal(t, "smtp", common.OptionMap["EmailProvider"])
+
+	proof = issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodPassword)
+	response = securityEnrollmentRequest(http.MethodPut, path, body, proof, identity, UpdateResendDeliverySettings)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.NotContains(t, response.Body.String(), "test-key")
+	assert.Equal(t, "resend", common.OptionMap["EmailProvider"])
+	var stored model.Option
+	require.NoError(t, model.DB.Where(&model.Option{Key: "ResendApiKey"}).First(&stored).Error)
+	assert.NotContains(t, stored.Value, "test-key")
+	assert.True(t, strings.HasPrefix(stored.Value, "v1:"))
+	response = securityEnrollmentRequest(http.MethodPut, path, body, proof, identity, UpdateResendDeliverySettings)
+	assert.Equal(t, http.StatusForbidden, response.Code)
+	assert.Contains(t, response.Body.String(), "SECURITY_PROOF_CONSUMED")
+}
+
+func TestResendSettingsChangesKeepActiveDeliveryWorking(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			if dialect != "sqlite" && os.Getenv("TEST_"+strings.ToUpper(dialect)+"_DSN") == "" {
+				t.Skip("isolated database DSN is not configured")
+			}
+			t.Setenv("TEST_SECURITY_DIALECT", dialect)
+			_, _ = setupSecurityEnrollmentTest(t)
+			configureEmailDelivery(t, map[string]string{"EmailProvider": "smtp"})
+			t.Setenv("EMAIL_DELIVERY_STORAGE_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+			const from = "sender@example.com"
+			for _, provider := range []string{"", "both", "SMTP", "smtp,resend"} {
+				require.Error(t, model.SaveResendDeliveryOptions(provider, "", ""))
+			}
+			require.Error(t, model.SaveResendDeliveryOptions("resend", from, ""))
+			require.Error(t, model.SaveResendDeliveryOptions("resend", from, "key\r\nInjected: value"))
+			assert.Equal(t, "smtp", common.OptionMap["EmailProvider"])
+
+			// A legacy upstream credential remains usable after a restart.
+			require.NoError(t, model.DB.Create(&model.Option{Key: "ResendApiKey", Value: "legacy-key"}).Error)
+			require.NoError(t, model.SaveResendDeliveryOptions("resend", from, ""))
+			require.NoError(t, model.LoadOptionsFromDatabase())
+			assert.Equal(t, "legacy-key", common.OptionMap["ResendApiKey"])
+			require.Error(t, model.SaveResendDeliveryOptions("resend", "notify..team@example.com", "rotated-key"))
+			assert.Equal(t, "legacy-key", common.OptionMap["ResendApiKey"])
+			assert.Equal(t, from, common.OptionMap["ResendFrom"])
+			require.NoError(t, model.SaveResendDeliveryOptions("resend", from, "rotated-key"))
+			require.NoError(t, model.LoadOptionsFromDatabase())
+			assert.Equal(t, "rotated-key", common.OptionMap["ResendApiKey"])
+			require.NoError(t, model.SaveResendDeliveryOptions("smtp", "", ""))
+			assert.Equal(t, "smtp", common.OptionMap["EmailProvider"])
+			assert.Equal(t, from, common.OptionMap["ResendFrom"])
+			assert.Equal(t, "rotated-key", common.OptionMap["ResendApiKey"])
+		})
+	}
+}
+
+func TestEmailKeyStatusIsDerivedAndReadOnly(t *testing.T) {
+	configureEmailDelivery(t, map[string]string{"EmailProvider": "smtp", "ResendKeyConfigured": "true"})
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/option/", nil)
+	GetOptions(context)
+	assert.Contains(t, response.Body.String(), `"key":"ResendKeyConfigured","value":"false"`)
+	assert.NotContains(t, response.Body.String(), `"value":"true"`)
+
+	response = httptest.NewRecorder()
+	context, _ = gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(`{"key":"ResendKeyConfigured","value":true}`))
+	UpdateOption(context)
+	assert.Contains(t, response.Body.String(), `"success":false`)
+	assert.Contains(t, response.Body.String(), "read-only")
 }

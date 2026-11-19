@@ -51,7 +51,7 @@ func (a *TaskAdaptor) buildSeedanceEnhanceSubmit(c *gin.Context, info *relaycomm
 		return nil, errors.New("MediaKit and OSS video enhancement settings are not ready")
 	}
 	// Reject missing or token-priced contracts before any generation work.
-	expr, exists := billing_setting.ResolveTaskBillingExpr("doubao", info.OriginModelName, info.OriginModelName)
+	expr, _, exists := billing_setting.ResolveTaskBillingExpr("doubao", info.OriginModelName, info.OriginModelName)
 	schema, _ := a.plugin.Meta.UsageForModel(info.OriginModelName)
 	if !exists || seedanceenhance.ValidatePriceExpression(expr) != nil || !billing_setting.TaskExprCompatible(expr, schema) {
 		return nil, errors.New("enhanced video requires its own complete per-second price expression")
@@ -69,6 +69,10 @@ func (a *TaskAdaptor) buildSeedanceEnhanceSubmit(c *gin.Context, info *relaycomm
 		return nil, err
 	}
 	metadata, _ := request["metadata"].(map[string]any)
+	vendorBody, native := request["vendorBody"].(map[string]any)
+	if native {
+		metadata = vendorBody
+	}
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
@@ -100,7 +104,7 @@ func (a *TaskAdaptor) buildSeedanceEnhanceSubmit(c *gin.Context, info *relaycomm
 		duration = metadata["duration"]
 	}
 	if duration != nil {
-		value, valid := usageNumber(duration, true)
+		value, valid := usageNumber(duration)
 		if !valid || value <= 0 || value > float64(relaycommon.MaxTaskDurationSeconds) || value != float64(int64(value)) {
 			return nil, errors.New("enhanced video duration must be a positive whole number within the task limit")
 		}
@@ -123,6 +127,9 @@ func (a *TaskAdaptor) buildSeedanceEnhanceSubmit(c *gin.Context, info *relaycomm
 	request["seconds"] = seconds
 	delete(request, "resolution")
 	metadata["resolution"] = "720p"
+	if native {
+		metadata["duration"] = seconds
+	}
 	request["metadata"] = metadata
 	ctx["requestBody"] = request
 	ctx["model"] = base
@@ -208,11 +215,11 @@ func (a *TaskAdaptor) fetchSeedanceEnhancement(baseURL, key string, task *model.
 		if err != nil {
 			return nil, err
 		}
-		value, err := a.plugin.Engine.Call(ctx, "buildQueryRequest", hookContext)
+		descriptor, err := a.requestDescriptor(ctx, "buildQueryRequest", hookContext)
 		if err != nil {
 			return nil, err
 		}
-		response, err := a.doFetchDescriptor(ctx, baseURL, proxy, value)
+		response, err := a.doFetchDescriptor(ctx, baseURL, key, proxy, descriptor)
 		if err != nil {
 			return nil, err
 		}

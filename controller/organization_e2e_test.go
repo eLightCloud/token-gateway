@@ -132,6 +132,7 @@ func setupOrganizationE2E(t *testing.T) (organizationE2EFixture, *gin.Engine) {
 	require.NoError(t, db.AutoMigrate(
 		&model.Task{}, &model.Midjourney{},
 		&model.User{},
+		&model.UserSession{},
 		&model.Organization{},
 		&model.OrganizationMember{},
 		&model.OrganizationBillingSettlementRule{},
@@ -211,6 +212,14 @@ func seedOrganizationE2EFixture(t *testing.T, db *gorm.DB, fixture organizationE
 		})
 	}
 	require.NoError(t, db.Create(&users).Error)
+	for index := range fixture.Users {
+		user := &fixture.Users[index]
+		if user.Status == common.UserStatusEnabled {
+			session, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "test")
+			require.NoError(t, err)
+			user.AccessToken = session.AccessToken
+		}
+	}
 
 	require.NoError(t, db.Create(&model.Organization{
 		Id:     fixture.Organization.Id,

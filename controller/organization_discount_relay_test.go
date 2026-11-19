@@ -197,7 +197,7 @@ func TestPersonalBillingHTTPRelay(t *testing.T) {
 	require.NoError(t, model.DB.First(&account, "user_id = ?", agentID).Error)
 	assert.EqualValues(t, 9200, account.Balance)
 	assert.Zero(t, account.Reserved)
-	logs, _, err := model.GetUserLogs(fixture.user.Id, model.LogTypeConsume, 0, 0, "", "", 0, 20, "", "", "")
+	logs, _, err := model.GetUserLogs(fixture.user.Id, model.LogFilter{Type: model.LogTypeConsume}, 0, 20)
 	require.NoError(t, err)
 	require.Len(t, logs, 1)
 	assert.Zero(t, logs[0].ChannelId)

@@ -27,10 +27,14 @@ export function getLogDateTimeRangeError(
   if (
     (startTime &&
       (!Number.isFinite(startTime.getTime()) ||
-        dayjs(startTime).format('YYYY-MM-DDTHH:mm') !== start)) ||
+        dayjs(startTime).format(
+          start.length === 19 ? 'YYYY-MM-DDTHH:mm:ss' : 'YYYY-MM-DDTHH:mm'
+        ) !== start)) ||
     (endTime &&
       (!Number.isFinite(endTime.getTime()) ||
-        dayjs(endTime).format('YYYY-MM-DDTHH:mm') !== end))
+        dayjs(endTime).format(
+          end.length === 19 ? 'YYYY-MM-DDTHH:mm:ss' : 'YYYY-MM-DDTHH:mm'
+        ) !== end))
   ) {
     return 'invalid'
   }

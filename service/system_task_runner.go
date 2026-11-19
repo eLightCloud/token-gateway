@@ -36,6 +36,7 @@ func RunSystemTaskRunner(ctx context.Context) {
 			runSystemTaskScheduler()
 		}
 		runSystemTaskClaimPass(ctx, runnerID, &workers)
+		finishAppliedSyncTasks()
 		select {
 		case <-ctx.Done():
 			return

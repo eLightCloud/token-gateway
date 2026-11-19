@@ -37,7 +37,7 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 		var response dto.ChatCompletionsStreamResponse
 		err := common.UnmarshalJsonStr(data, &response)
 		if err != nil {
-			logger.LogError(c, "error_unmarshalling_stream_response: "+err.Error())
+			logger.LogError(c, common.LogText("error_unmarshalling_stream_response: %s", err.Error()))
 			sr.Error(err)
 			return
 		}
@@ -58,7 +58,7 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 			info.FirstResponseTime = time.Now()
 		}
 		if err != nil {
-			logger.LogError(c, "error_rendering_stream_response: "+err.Error())
+			logger.LogError(c, common.LogText("error_rendering_stream_response: %s", err.Error()))
 		}
 	})
 	usage := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
@@ -66,7 +66,7 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 		response := helper.GenerateFinalUsageResponse(id, info.StartTime.Unix(), info.UpstreamModelName, *usage)
 		err := helper.ObjectData(c, response)
 		if err != nil {
-			logger.LogError(c, "error_rendering_final_usage_response: "+err.Error())
+			logger.LogError(c, common.LogText("error_rendering_final_usage_response: %s", err.Error()))
 		}
 	}
 	helper.Done(c)

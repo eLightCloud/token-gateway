@@ -15,10 +15,10 @@ func allowResellerDashboard(c *gin.Context, userID int) bool {
 	if err == nil {
 		return true
 	}
-	status, code, message := http.StatusServiceUnavailable, "RESELLER_PERSISTENCE_UNAVAILABLE", i18n.MsgDatabaseError
 	if errors.Is(err, model.ErrResellerForbidden) {
-		status, code, message = http.StatusForbidden, "RESELLER_ACCOUNT_RESTRICTED", i18n.MsgAuthInsufficientPrivilege
+		abortWithWebMessage(c, http.StatusForbidden, "RESELLER_ACCOUNT_RESTRICTED", common.NewMessage("Unauthorized, insufficient privileges"))
+		return false
 	}
-	c.AbortWithStatusJSON(status, gin.H{"success": false, "code": code, "message": common.TranslateMessage(c, message)})
+	c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"success": false, "code": "RESELLER_PERSISTENCE_UNAVAILABLE", "message": common.TranslateMessage(c, i18n.MsgDatabaseError)})
 	return false
 }

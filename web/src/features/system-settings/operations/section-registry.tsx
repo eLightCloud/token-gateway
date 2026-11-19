@@ -54,11 +54,10 @@ const OPERATIONS_SECTIONS = [
   },
   {
     id: 'alerts',
-    titleKey: 'Monitoring & Alerts',
+    titleKey: 'Model performance metrics',
     build: (settings: OperationsSettings) => (
       <MonitoringSettingsSection
         defaultValues={{
-          QuotaRemindThreshold: settings.QuotaRemindThreshold,
           'perf_metrics_setting.enabled':
             settings['perf_metrics_setting.enabled'] ?? true,
           'perf_metrics_setting.flush_interval':
@@ -73,8 +72,19 @@ const OPERATIONS_SECTIONS = [
   },
   {
     id: 'email',
-    titleKey: 'Email',
-    build: () => <EmailSettingsSection />,
+    titleKey: 'Email & Notifications',
+    build: (settings: OperationsSettings) => (
+      <EmailSettingsSection
+        defaultValues={{
+          QuotaRemindEnabled: settings.QuotaRemindEnabled,
+          QuotaRemindThreshold: settings.QuotaRemindThreshold,
+          EmailProvider: settings.EmailProvider,
+          ResendApiKey: settings.ResendApiKey,
+          ResendKeyConfigured: settings.ResendKeyConfigured,
+          ResendFrom: settings.ResendFrom,
+        }}
+      />
+    ),
   },
   {
     id: 'worker',
@@ -95,7 +105,15 @@ const OPERATIONS_SECTIONS = [
     titleKey: 'Log Maintenance',
     build: (settings: OperationsSettings) => (
       <LogSettingsSection
-        defaultEnabled={Boolean(settings.LogConsumeEnabled)}
+        defaultValues={{
+          LogConsumeEnabled: Boolean(settings.LogConsumeEnabled),
+          'log_setting.user_export_enabled':
+            settings['log_setting.user_export_enabled'] ?? true,
+          'log_setting.max_range_days':
+            settings['log_setting.max_range_days'] ?? 365,
+          'system_task_setting.retention_days':
+            settings['system_task_setting.retention_days'] ?? 30,
+        }}
       />
     ),
   },

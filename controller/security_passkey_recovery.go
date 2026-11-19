@@ -48,7 +48,7 @@ func AdminRecoverPasskey(c *gin.Context) {
 		return
 	}
 	// Notify before removing a factor. Delivery failure leaves the account intact.
-	if target.Email == "" || service.NotifyAccountSecurityChange(target.Email, "An administrator approved Passkey recovery. Contact support immediately if unexpected.") != nil {
+	if target.Email == "" || service.NotifyAccountSecurityChange(service.AccountMailLanguage(c, target.Id), target.Email, "An administrator approved Passkey recovery. Contact support immediately if unexpected.") != nil {
 		writeSecurityCompletionError(c, service.ErrEmailBindingDelivery)
 		return
 	}

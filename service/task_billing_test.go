@@ -16,6 +16,7 @@ import (
 	"errors"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -61,6 +62,9 @@ func TestMain(m *testing.M) {
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
+	if err := i18n.Init(); err != nil {
+		panic("failed to load locales: " + err.Error())
+	}
 
 	if err := db.AutoMigrate(
 		&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.ResellerProjection{}, &model.ResellerConfigRevision{}, &model.ResellerFundingSnapshot{}, &model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.ResellerBillingReceipt{}, &model.ResellerRequest{}, &model.ResellerEvent{},
@@ -430,8 +434,13 @@ func TestTaskSubmissionLogWithoutSnapshotKeepsRatioMode(t *testing.T) {
 	assert.NotContains(t, other, "expr_b64")
 	assert.NotContains(t, other, "matched_tier")
 	assert.NotContains(t, other, "usage_facts")
-	assert.Contains(t, log.Content, "计算参数：")
-	assert.Contains(t, log.Content, "size: 2.00")
+	assert.Equal(t, "Action GENERATE, Billing parameters: size: 2.00", log.Content)
+	// The web console renders content_parts in the viewer's language; content
+	// keeps the English text.
+	assert.Equal(t, []any{
+		map[string]any{"key": "Action {{action}}", "params": map[string]any{"action": "GENERATE"}},
+		map[string]any{"key": "Billing parameters: {{params}}", "params": map[string]any{"params": "size: 2.00"}},
+	}, other["content_parts"])
 }
 
 // Task logs distinguish jobs the client polls from requests whose HTTP call
@@ -808,7 +817,7 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 	task.PrivateData.BillingContext.Discount = &model.TaskBillingDiscount{SnapshotID: 8, ChannelId: 15, Ratio: 0.4}
 	require.NoError(t, model.DB.Create(task).Error)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
+	RecalculateTaskQuota(ctx, task, actualQuota, common.NewMessage("adaptor adjustment"))
 
 	// User quota should decrease by the delta (1000 additional charge)
 	assert.EqualValues(t, initQuota-(actualQuota-preConsumed), getUserQuota(t, userID))
@@ -845,7 +854,7 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 	task.PrivateData.BillingContext.Discount = &model.TaskBillingDiscount{SnapshotID: 9, ChannelId: 15, Ratio: 0.4}
 	require.NoError(t, model.DB.Create(task).Error)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
+	RecalculateTaskQuota(ctx, task, actualQuota, common.NewMessage("adaptor adjustment"))
 
 	// User quota should increase by abs(delta) = 2000 (refund overpayment)
 	assert.EqualValues(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
@@ -907,7 +916,7 @@ func TestRecalculate_ZeroDelta(t *testing.T) {
 
 	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
 	require.NoError(t, model.DB.Create(task).Error)
-	require.True(t, RecalculateTaskQuota(ctx, task, preConsumed, "exact match"))
+	require.True(t, RecalculateTaskQuota(ctx, task, preConsumed, common.NewMessage("exact match")))
 	var confirmed model.Task
 	require.NoError(t, model.DB.First(&confirmed, task.ID).Error)
 	require.NotNil(t, confirmed.InvoiceExpenseQuota)
@@ -932,7 +941,7 @@ func TestRecalculate_ActualQuotaZero(t *testing.T) {
 
 	task := makeTask(userID, 0, 5000, 0, BillingSourceWallet, 0)
 	require.NoError(t, model.DB.Create(task).Error)
-	require.True(t, RecalculateTaskQuota(ctx, task, 0, "zero actual"))
+	require.True(t, RecalculateTaskQuota(ctx, task, 0, common.NewMessage("zero actual")))
 	assert.EqualValues(t, initQuota+5000, getUserQuota(t, userID))
 	var confirmed model.Task
 	require.NoError(t, model.DB.First(&confirmed, task.ID).Error)
@@ -960,7 +969,7 @@ func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
 	require.NoError(t, model.DB.Create(task).Error)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "subscription over-charge")
+	RecalculateTaskQuota(ctx, task, actualQuota, common.NewMessage("subscription over-charge"))
 
 	// Subscription used should decrease by delta (refund 3000)
 	assert.EqualValues(t, subUsed-int64(preConsumed-actualQuota), getSubscriptionUsed(t, subID))
@@ -1024,7 +1033,7 @@ func simulatePollBilling(ctx context.Context, task *model.Task, newStatus model.
 	}
 
 	if shouldSettle && actualQuota > 0 {
-		RecalculateTaskQuota(ctx, task, actualQuota, "test settle")
+		RecalculateTaskQuota(ctx, task, actualQuota, common.NewMessage("test settle"))
 	}
 	if shouldRefund {
 		RefundTaskQuota(ctx, task, task.FailReason)
@@ -1594,7 +1603,7 @@ func TestRecalculate_RejectsNegativeActualQuota(t *testing.T) {
 	seedUser(t, userID, initQuota)
 	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, -1, "invalid negative actual")
+	RecalculateTaskQuota(ctx, task, -1, common.NewMessage("invalid negative actual"))
 
 	assert.EqualValues(t, initQuota, getUserQuota(t, userID))
 	assert.EqualValues(t, preConsumed, task.Quota)
@@ -2108,7 +2117,7 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 				if tc.refund {
 					assert.False(t, RefundTaskQuota(ctx, task, "synthetic failure"))
 				} else {
-					assert.False(t, RecalculateTaskQuota(ctx, task, tc.finalBase, "completion"))
+					assert.False(t, RecalculateTaskQuota(ctx, task, tc.finalBase, common.NewMessage("completion")))
 				}
 				model.LOG_DB = originalLogDB
 				connection, err := unavailable.DB()
@@ -2127,7 +2136,7 @@ func TestPersonalTaskLifecycle(t *testing.T) {
 				} else if tc.name == "rounded zero fixed" {
 					require.NoError(t, model.ConfirmTaskInvoiceExpense(model.TaskSettlementEntityTask, task.ID, task.Quota, "synthetic-fixed-zero"))
 				} else {
-					require.True(t, RecalculateTaskQuota(ctx, task, tc.finalBase, "completion"))
+					require.True(t, RecalculateTaskQuota(ctx, task, tc.finalBase, common.NewMessage("completion")))
 				}
 			}
 			for range 2 {
@@ -2526,7 +2535,7 @@ func TestPersonalFundingCorrectness(t *testing.T) {
 		require.NoError(t, model.DB.Create(&task).Error)
 		// Keep this funding/log-id fixture independent of the frozen MySQL
 		// baseline's latin1 log column and the existing Chinese log template.
-		require.NoError(t, SettlePersonalTaskSubmission(ctx, info, &task, 100, false, model.RecordConsumeLogParams{Content: "task submitted", Other: model.NewLogOther()}))
+		require.NoError(t, SettlePersonalTaskSubmission(ctx, info, &task, 100, false, model.RecordConsumeLogParams{Content: []*common.Message{common.NewMessage("task submitted")}, Other: model.NewLogOther()}))
 		require.True(t, RefundTaskQuota(ctx, &task, "task refund"))
 		next := *info
 		next.RequestId = "funding-mj-request"

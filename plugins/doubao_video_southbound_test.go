@@ -599,7 +599,7 @@ func TestSeedanceEnhanceUsesIndependentSecondsContractAcrossChannelTypes(t *test
 				require.Nil(t, taskErr)
 				assert.NotContains(t, string(parsed.TaskData), "source.example")
 				assert.Equal(t, "source-private", parsed.UpstreamTaskID)
-				_, err = adaptor.BuildContentRequest(&model.Task{Platform: "doubao", Properties: model.Properties{OriginModelName: enhanced}}, "video", channel.TaskArtifactClientRequest{})
+				_, err = adaptor.BuildContentRequest(t.Context(), &model.Task{Platform: "doubao", Properties: model.Properties{OriginModelName: enhanced}}, "video", channel.TaskArtifactClientRequest{})
 				require.Error(t, err, "an unavailable OSS object must never fall back to a source or recursive host fetch")
 				_, found := registry.Generation().LookupEndpoint("POST", "/v1/videos", enhanced)
 				assert.True(t, found)

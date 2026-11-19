@@ -67,3 +67,8 @@ export type EmailReport = {
     status: 'passed' | 'failed' | 'skipped' | 'unknown'
   }[]
 }
+export type ResendDeliveryIntent = {
+  provider: 'smtp' | 'resend'
+  from: string
+  replace_key: boolean
+}

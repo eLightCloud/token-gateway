@@ -94,3 +94,36 @@ func TestEmailDeliverySettings(c *gin.Context) {
 	// A completed diagnostic returns its safe report even when the provider rejected it.
 	common.ApiSuccess(c, report)
 }
+
+func UpdateResendDeliverySettings(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	var update struct {
+		Intent service.ResendDeliveryIntent `json:"intent"`
+		APIKey string                       `json:"api_key"`
+	}
+	raw, err := c.GetRawData()
+	if err != nil || common.DecodeEmailDeliveryJSON(raw, &update) != nil ||
+		update.Intent.ReplaceKey != (update.APIKey != "") {
+		emailDeliveryError(c, model.ErrEmailDeliveryInvalid)
+		return
+	}
+	intent, err := common.Marshal(update.Intent)
+	if err != nil {
+		emailDeliveryError(c, err)
+		return
+	}
+	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeResendDeliverySettings, Context: intent}) == nil {
+		return
+	}
+	if err := model.SaveResendDeliveryOptions(update.Intent.Provider, update.Intent.From, update.APIKey); err != nil {
+		var message *common.Message
+		if errors.As(err, &message) {
+			common.ApiError(c, message)
+		} else {
+			emailDeliveryError(c, err)
+		}
+		return
+	}
+	recordManageAudit(c, "email.delivery.settings.updated", map[string]any{"provider": update.Intent.Provider, "replace_key": update.Intent.ReplaceKey})
+	common.ApiSuccess(c, nil)
+}

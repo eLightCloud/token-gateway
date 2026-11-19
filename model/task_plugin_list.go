@@ -110,7 +110,8 @@ func TaskPageForPlatforms(userID int, platforms []constant.TaskPlatform, query T
 			status := "failed"
 			if task.FailReason == "cancelled" {
 				status = "cancelled"
-			} else if task.FailReason == "expired" || strings.HasPrefix(task.FailReason, "任务超时") || data.Status == "expired" {
+			} else if task.FailReason == "expired" || strings.HasPrefix(task.FailReason, "任务超时") ||
+				strings.HasPrefix(task.FailReason, "Task timed out") || data.Status == "expired" {
 				status = "expired"
 			}
 			if task.Status == TaskStatusFailure && query.VendorStatus != "" && query.VendorStatus != status {

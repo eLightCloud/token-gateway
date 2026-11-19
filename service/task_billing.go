@@ -25,10 +25,10 @@ import (
 // usage counters are committed by the same durable settlement as the task.
 func BuildTaskConsumptionLog(c *gin.Context, info *relaycommon.RelayInfo) model.RecordConsumeLogParams {
 	tokenName := c.GetString("token_name")
-	logContent := fmt.Sprintf("操作 %s", info.Action)
+	logContent := []*common.Message{common.NewMessage("Action {{action}}", map[string]any{"action": info.Action})}
 	// 支持任务仅按次计费
 	if common.StringsContains(constant.TaskPricePatches, info.OriginModelName) {
-		logContent = fmt.Sprintf("%s，按次计费", logContent)
+		logContent = append(logContent, common.NewMessage("Billed per request"))
 	} else {
 		if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
 			var contents []string
@@ -38,7 +38,7 @@ func BuildTaskConsumptionLog(c *gin.Context, info *relaycommon.RelayInfo) model.
 				}
 			}
 			if len(contents) > 0 {
-				logContent = fmt.Sprintf("%s, 计算参数：%s", logContent, strings.Join(contents, ", "))
+				logContent = append(logContent, common.NewMessage("Billing parameters: {{params}}", map[string]any{"params": strings.Join(contents, ", ")}))
 			}
 		}
 	}
@@ -59,6 +59,10 @@ func BuildTaskConsumptionLog(c *gin.Context, info *relaycommon.RelayInfo) model.
 	}
 	AppendOrganizationDiscountBillingInfo(info, other)
 	attachQuotaSaturation(c, info, other)
+	if len(info.RequestPluginSteps) > 0 {
+		other.SetAdmin("request_plugins", info.RequestPluginSteps)
+	}
+	appendRequestPluginRecord(info, other)
 	return model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
 		ModelName: info.OriginModelName,
@@ -258,7 +262,8 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 // actualQuota 是任务完成后的实际应扣额度，与预扣额度 (task.Quota) 做差额结算。
 // reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
 // clamps 可选：若计算 actualQuota 时发生额度饱和，将其记入日志 admin_info（仅管理员可见）。
-func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamps ...*common.QuotaClamp) bool {
+func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, message *common.Message, clamps ...*common.QuotaClamp) bool {
+	reason := message.Error()
 	if TaskHasPersonalPricing(task) {
 		return settlePersonalTask(ctx, task, actualQuota, false, reason, model.TaskSettlementEntityTask)
 	}
@@ -407,7 +412,7 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier * discountRatio)
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f, discountRatio=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier, discountRatio)
-	return RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
+	return RecalculateTaskQuota(ctx, task, actualQuota, common.NewMessage(reason), clamp)
 }
 
 // RefundMidjourneyQuota refunds a failed legacy Midjourney task using the
@@ -418,7 +423,7 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 func resolveTokenKey(ctx context.Context, tokenId int, taskID string) string {
 	token, err := model.GetTokenById(tokenId)
 	if err != nil {
-		logger.LogWarn(ctx, fmt.Sprintf("获取令牌 key 失败 (tokenId=%d, task=%s): %s", tokenId, taskID, err.Error()))
+		logger.LogWarn(ctx, common.LogText("failed to get token key (tokenId=%d, task=%s): %s", tokenId, taskID, err.Error()))
 		return ""
 	}
 	return token.Key

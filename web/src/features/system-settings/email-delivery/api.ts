@@ -24,6 +24,7 @@ import type {
   EmailSettings,
   EmailTestIntent,
   EmailUpdate,
+  ResendDeliveryIntent,
 } from './types'
 
 type Response<T> = {
@@ -33,6 +34,19 @@ type Response<T> = {
   message?: string
 }
 export const emailSettingsQueryKey = ['email-delivery-settings']
+
+export async function saveResendSettings(
+  intent: ResendDeliveryIntent,
+  apiKey: string,
+  proof: string
+) {
+  const response = await api.put<Response<null>>(
+    '/api/option/email_delivery/resend',
+    { intent, api_key: apiKey },
+    { headers: { 'X-Security-Proof': proof } }
+  )
+  return requireServerSuccess(response.data)
+}
 export async function getEmailSettings() {
   const response = await api.get<Response<EmailSettings>>(
     '/api/option/email_delivery'

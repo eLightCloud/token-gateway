@@ -14,6 +14,7 @@ type StreamResult struct {
 	status   *relaycommon.StreamStatus
 	stopped  bool
 	accepted bool
+	done     bool
 }
 
 func newStreamResult(status *relaycommon.StreamStatus) *StreamResult {
@@ -60,6 +61,7 @@ func (r *StreamResult) Done() {
 	r.status.SetUpstreamResult(relaycommon.StreamUpstreamResultTerminalSuccess, nil)
 	r.Accept()
 	r.stopped = true
+	r.done = true
 }
 
 // TerminalSuccess records a protocol success terminal and whether that

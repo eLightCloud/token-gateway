@@ -550,9 +550,14 @@ func TestVantageCredentialCacheRecovery(t *testing.T) {
 			}
 			old := vantageTokenByKey(t, member.TokenKey)
 			require.NoError(t, db.Model(&model.Token{}).Where("id = ?", old.Id).Update("remain_quota", 100).Error)
-			old.RemainQuota = 100
+			// Read an actual cache entry after the provisioning fence expires.
+			server.FastForward(time.Minute)
 			_, err = model.ValidateUserToken(old.Key)
 			require.NoError(t, err)
+			cacheKey := "token:" + common.GenerateHMAC(old.Key)
+			cached, err := client.HGetAll(t.Context(), cacheKey).Result()
+			require.NoError(t, err)
+			require.NotEmpty(t, cached["CacheMAC"])
 			// 缓存不可写时不得提交新的轮换或撤销，也不得给出成功响应。
 			server.SetError("ERR cache unavailable")
 			switch operation {
@@ -580,7 +585,11 @@ func TestVantageCredentialCacheRecovery(t *testing.T) {
 			}
 			require.NoError(t, err)
 			// 模拟提交后响应丢失、旧快照残留：数据库已停用，但缓存仍是原启用状态。
-			require.NoError(t, common.RedisHSetObj("token:"+common.GenerateHMAC(old.Key), old, time.Minute))
+			fields := make([]any, 0, len(cached)*2)
+			for key, value := range cached {
+				fields = append(fields, key, value)
+			}
+			require.NoError(t, client.HSet(t.Context(), cacheKey, fields...).Err())
 			_, err = model.ValidateUserToken(old.Key)
 			require.NoError(t, err, "fixture must actually reproduce a stale enabled token")
 			server.SetError("ERR cache unavailable")

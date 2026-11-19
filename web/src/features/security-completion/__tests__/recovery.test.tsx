@@ -33,24 +33,61 @@ afterEach(() => {
 
 it('requires incident, two identity checks and explicit confirmation before requesting recovery', async () => {
   const post = vi.spyOn(api, 'post')
-  useAuthStore.getState().auth.setUser({ id: 1, username: 'operator', role: 100 })
-  render(<SecurityRecoveryDialog open userID={42} onOpenChange={() => undefined} onSuccess={() => undefined} />)
-  expect(screen.getByRole('checkbox', { name: 'Confirmed key compromise: revoke consumption keys' })).not.toBeChecked()
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'operator', role: 100 })
+  render(
+    <SecurityRecoveryDialog
+      open
+      userID={42}
+      onOpenChange={() => undefined}
+      onSuccess={() => undefined}
+    />
+  )
+  expect(
+    screen.getByRole('checkbox', {
+      name: 'Confirmed key compromise: revoke consumption keys',
+    })
+  ).not.toBeChecked()
   await userEvent.click(screen.getByRole('button', { name: 'Reset 2FA' }))
   expect(await screen.findByText('Enter an incident reference.')).toBeVisible()
-  expect(screen.getByText('Record two independent identity checks.')).toBeVisible()
-  expect(screen.getByText('Confirm the identity checks before recovery.')).toBeVisible()
-  expect(screen.getByRole('textbox', { name: 'Incident reference' })).toHaveFocus()
+  expect(
+    screen.getByText('Record two independent identity checks.')
+  ).toBeVisible()
+  expect(
+    screen.getByText('Confirm the identity checks before recovery.')
+  ).toBeVisible()
+  expect(
+    screen.getByRole('textbox', { name: 'Incident reference' })
+  ).toHaveFocus()
   expect(post).not.toHaveBeenCalled()
 })
 
 it('keeps email change separate from key compromise and explains pending verification', () => {
   const post = vi.spyOn(api, 'post')
-  useAuthStore.getState().auth.setUser({ id: 1, username: 'operator', role: 100 })
-  render(<SecurityRecoveryDialog open emailChange userID={42} onOpenChange={() => undefined} onSuccess={() => undefined} />)
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'operator', role: 100 })
+  render(
+    <SecurityRecoveryDialog
+      open
+      emailChange
+      userID={42}
+      onOpenChange={() => undefined}
+      onSuccess={() => undefined}
+    />
+  )
   expect(screen.getByRole('textbox', { name: 'New Email' })).toBeVisible()
-  expect(screen.queryByRole('checkbox', { name: 'Confirmed key compromise: revoke consumption keys' })).not.toBeInTheDocument()
-  expect(screen.getByText('The current email remains unchanged until the new address is verified.')).toBeVisible()
+  expect(
+    screen.queryByRole('checkbox', {
+      name: 'Confirmed key compromise: revoke consumption keys',
+    })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.getByText(
+      'The current email remains unchanged until the new address is verified.'
+    )
+  ).toBeVisible()
   expect(post).not.toHaveBeenCalled()
 })
 

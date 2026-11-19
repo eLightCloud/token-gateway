@@ -10,5 +10,5 @@ func securityMailLanguage(c *gin.Context) string {
 	if lang := c.GetHeader("Accept-Language"); lang != "" {
 		return i18n.ParseAcceptLanguage(lang)
 	}
-	return i18n.GetLangFromContext(c)
+	return i18n.StatedLang(c)
 }

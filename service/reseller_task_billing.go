@@ -138,7 +138,7 @@ func settlePersonalTask(ctx context.Context, task *model.Task, base int, refund 
 // the customer's discounted reservation and must never become a new base.
 func confirmFixedTaskUsage(ctx context.Context, task *model.Task, reserved int) bool {
 	if task.PrivateData.BillingContext.PersonalPricing == nil {
-		return RecalculateTaskQuota(ctx, task, reserved, "任务按次费用确认")
+		return RecalculateTaskQuota(ctx, task, reserved, common.NewMessage("任务按次费用确认"))
 	}
 	if err := model.ConfirmTaskInvoiceExpense(model.TaskSettlementEntityTask, task.ID, reserved, fmt.Sprintf("task-fixed:%d", task.ID)); err != nil {
 		logger.LogWarn(ctx, "personal fixed task confirmation pending: "+err.Error())

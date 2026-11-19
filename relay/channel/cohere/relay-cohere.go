@@ -123,7 +123,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			responseText += cohereResp.Text
 		}
 		if err := helper.ObjectData(c, &openaiResp); err != nil {
-			common.SysLog("error writing stream response: " + err.Error())
+			common.SysLog(common.LogText("error writing stream response: %s", err.Error()))
 		}
 		if cohereResp.IsFinished {
 			sr.TerminalSuccess(hasUpstreamUsage)

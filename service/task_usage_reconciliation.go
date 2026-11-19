@@ -66,7 +66,7 @@ func settleReconciledTaskUsage(ctx context.Context, task *model.Task) bool {
 	// queue acknowledgement. Every retry must use the same expected/final quota.
 	task.Quota = state.ReservedQuota
 	if state.ActualQuota != nil {
-		if !RecalculateTaskQuota(ctx, task, *state.ActualQuota, "adaptor计费调整") {
+		if !RecalculateTaskQuota(ctx, task, *state.ActualQuota, common.NewMessage("adaptor计费调整")) {
 			_ = model.PersistTaskUsage(task, false)
 			return false
 		}
@@ -84,7 +84,7 @@ func settleReconciledTaskUsage(ctx context.Context, task *model.Task) bool {
 		if bc.Discount != nil {
 			actual, discountClamp = common.QuotaFromDecimalChecked(decimal.NewFromInt(int64(actual)).Mul(decimal.NewFromFloat(bc.Discount.Ratio)))
 		}
-		if !RecalculateTaskQuota(ctx, task, actual, "任务用量表达式结算", result.Clamp, discountClamp) {
+		if !RecalculateTaskQuota(ctx, task, actual, common.NewMessage("任务用量表达式结算"), result.Clamp, discountClamp) {
 			_ = model.PersistTaskUsage(task, false)
 			return false
 		}

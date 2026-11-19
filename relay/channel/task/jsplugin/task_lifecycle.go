@@ -20,9 +20,9 @@ func (a *TaskAdaptor) FetchTaskDelete(baseURL, key string, task *model.Task, pro
 	if err != nil {
 		return nil, err
 	}
-	value, err := a.plugin.Engine.Call(context.Background(), "buildDeleteRequest", ctx)
+	descriptor, err := a.requestDescriptor(context.Background(), "buildDeleteRequest", ctx)
 	if err != nil {
 		return nil, err
 	}
-	return a.doFetchDescriptor(context.Background(), baseURL, proxy, value)
+	return a.doFetchDescriptor(context.Background(), baseURL, key, proxy, descriptor)
 }

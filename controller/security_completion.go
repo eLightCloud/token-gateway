@@ -93,7 +93,7 @@ func FinishAccountActivation(c *gin.Context) {
 	}
 	recordUserSecurityAudit(c, input.UserID, action, nil)
 	data := map[string]any{}
-	notifyCompletedSecurityChange(input.UserID, event, data)
+	notifyCompletedSecurityChange(c, input.UserID, event, data)
 	// Email possession never grants a full or MFA-assured session.
 	common.ApiSuccess(c, data)
 }
@@ -181,7 +181,7 @@ func AdminRecoverSecurity(c *gin.Context) {
 		return
 	}
 	// Notify before removing a factor. Delivery failure leaves the account intact.
-	if target.Email == "" || service.NotifyAccountSecurityChange(target.Email, "An administrator approved MFA recovery. Contact support immediately if unexpected.") != nil {
+	if target.Email == "" || service.NotifyAccountSecurityChange(service.AccountMailLanguage(c, target.Id), target.Email, "An administrator approved MFA recovery. Contact support immediately if unexpected.") != nil {
 		writeSecurityCompletionError(c, service.ErrEmailBindingDelivery)
 		return
 	}
@@ -212,7 +212,7 @@ func ReplaceOwnSecurityFactor(c *gin.Context) {
 	if model.SecurityMFARequired(user.ResellerKind) {
 		event += " Complete setup before using the dashboard."
 	}
-	if user.Email == "" || service.NotifyAccountSecurityChange(user.Email, event) != nil {
+	if user.Email == "" || service.NotifyAccountSecurityChange(service.AccountMailLanguage(c, user.Id), user.Email, event) != nil {
 		writeSecurityCompletionError(c, service.ErrEmailBindingDelivery)
 		return
 	}
@@ -287,7 +287,7 @@ func AdminRequestEmailChange(c *gin.Context) {
 		resellerResponse(c, nil, model.ErrResellerForbidden)
 		return
 	}
-	if user.Email != "" && service.NotifyAccountSecurityChange(user.Email, "An administrator requested an email address change after identity verification. Contact support if unexpected.") != nil {
+	if user.Email != "" && service.NotifyAccountSecurityChange(service.AccountMailLanguage(c, user.Id), user.Email, "An administrator requested an email address change after identity verification. Contact support if unexpected.") != nil {
 		writeSecurityCompletionError(c, service.ErrEmailBindingDelivery)
 		return
 	}
@@ -320,21 +320,21 @@ func FinishAdminEmailChange(c *gin.Context) {
 	}
 	recordUserSecurityAudit(c, input.UserID, "security.email_change.complete", nil)
 	data := map[string]any{}
-	notifyCompletedSecurityChange(input.UserID, "Your new email address was verified and applied", data)
-	if state.CurrentEmail != "" && service.NotifyAccountSecurityChange(state.CurrentEmail, "Your account email address was changed after administrative identity verification") != nil {
+	notifyCompletedSecurityChange(c, input.UserID, "Your new email address was verified and applied", data)
+	if state.CurrentEmail != "" && service.NotifyAccountSecurityChange(service.AccountMailLanguage(c, input.UserID), state.CurrentEmail, "Your account email address was changed after administrative identity verification") != nil {
 		data["notification_warning"] = true
 	}
 	common.ApiSuccess(c, data)
 }
 
-func notifyCompletedSecurityChange(userID int, event string, data map[string]any) {
+func notifyCompletedSecurityChange(c *gin.Context, userID int, event string, data map[string]any) {
 	user, err := model.GetUserById(userID, false)
 	if err != nil {
 		data["notification_warning"] = true
 		return
 	}
 	if user.Email != "" {
-		data["notification_warning"] = service.NotifyAccountSecurityChange(user.Email, event) != nil
+		data["notification_warning"] = service.NotifyAccountSecurityChange(service.AccountMailLanguage(c, user.Id), user.Email, event) != nil
 	}
 }
 

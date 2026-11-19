@@ -25,7 +25,7 @@ func SeedanceEnhanceModelAvailable(name string) bool {
 		return false
 	}
 	schema, _ := plugin.Meta.UsageForModel(name)
-	expression, exists := billing_setting.ResolveTaskBillingExpr("doubao", name, name)
+	expression, _, exists := billing_setting.ResolveTaskBillingExpr("doubao", name, name)
 	return exists && seedanceenhance.ValidatePriceExpression(expression) == nil && billing_setting.TaskExprCompatible(expression, schema)
 }
 

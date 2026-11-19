@@ -132,6 +132,8 @@ func subscriptionPlanCacheKey(id int) string {
 	return strconv.Itoa(id)
 }
 
+// InvalidateSubscriptionPlanCache drops a plan written on this node from the
+// cache and tells the other nodes to drop their copies.
 func InvalidateSubscriptionPlanCache(planId int) {
 	if planId <= 0 {
 		return
@@ -140,6 +142,16 @@ func InvalidateSubscriptionPlanCache(planId int) {
 	_, _ = cache.DeleteMany([]string{subscriptionPlanCacheKey(planId)})
 	infoCache := getSubscriptionPlanInfoCache()
 	_ = infoCache.Purge()
+	BumpSyncTopic(SyncTopicSubscriptionPlans)
+}
+
+// PurgeSubscriptionPlanCache drops every cached plan, so the next reads load
+// them from the database.
+func PurgeSubscriptionPlanCache() error {
+	if err := getSubscriptionPlanCache().Purge(); err != nil {
+		return err
+	}
+	return getSubscriptionPlanInfoCache().Purge()
 }
 
 // Subscription plan
@@ -564,7 +576,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 
 func refreshSubscriptionUserGroupCache(userId int, operation string) {
 	if err := RefreshUserGroupCache(userId); err != nil {
-		common.SysError(fmt.Sprintf("failed to refresh user group cache after %s for user %d: %v", operation, userId, err))
+		common.SysError(common.LogText("failed to refresh user group cache after %s for user %d: %v", operation, userId, err))
 	}
 }
 
@@ -642,11 +654,14 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		return err
 	}
 	if upgradeGroup != "" && logUserId > 0 {
-		refreshSubscriptionUserGroupCache(logUserId, "subscription payment completion")
+		refreshSubscriptionUserGroupCache(logUserId, common.LogText("subscription payment completion"))
 	}
 	if logUserId > 0 {
-		msg := fmt.Sprintf("订阅购买成功，套餐: %s，支付金额: %.2f，支付方式: %s", logPlanTitle, logMoney, logPaymentMethod)
-		RecordLog(logUserId, LogTypeTopup, msg)
+		RecordLog(logUserId, LogTypeTopup, common.NewMessage("Subscription purchased, plan: {{plan}}, payment amount: {{amount}}, payment method: {{method}}", map[string]any{
+			"plan":   logPlanTitle,
+			"amount": fmt.Sprintf("%.2f", logMoney),
+			"method": logPaymentMethod,
+		}))
 	}
 	return nil
 }
@@ -713,13 +728,13 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 }
 
 // Admin bind (no payment). Creates a UserSubscription from a plan.
-func AdminBindSubscription(userId int, planId int, sourceNote string) (string, error) {
+func AdminBindSubscription(userId int, planId int, sourceNote string) (*common.Message, error) {
 	if userId <= 0 || planId <= 0 {
-		return "", errors.New("invalid userId or planId")
+		return nil, errors.New("invalid userId or planId")
 	}
 	plan, err := GetSubscriptionPlanById(planId)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	groupChanged := false
 	err = DB.Transaction(func(tx *gorm.DB) error {
@@ -735,13 +750,13 @@ func AdminBindSubscription(userId int, planId int, sourceNote string) (string, e
 		return err
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if groupChanged {
-		refreshSubscriptionUserGroupCache(userId, "admin subscription creation")
-		return fmt.Sprintf("用户分组将升级到 %s", plan.UpgradeGroup), nil
+		refreshSubscriptionUserGroupCache(userId, common.LogText("admin subscription creation"))
+		return common.NewMessage("User group will be upgraded to {{group}}", map[string]any{"group": plan.UpgradeGroup}), nil
 	}
-	return "", nil
+	return nil, nil
 }
 
 func calcSubscriptionBalanceQuota(priceAmount float64) (int64, error) {
@@ -749,7 +764,7 @@ func calcSubscriptionBalanceQuota(priceAmount float64) (int64, error) {
 		return 0, nil
 	}
 	if common.QuotaPerUnit <= 0 {
-		return 0, errors.New("额度单位配置错误")
+		return 0, common.NewMessage("Quota unit is misconfigured")
 	}
 	quota := decimal.NewFromFloat(priceAmount).
 		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
@@ -787,9 +802,13 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 	}
 	invalidateBillingBalanceCaches(userId, 0, "wallet", false)
 	if subscription.PrevUserGroup != "" {
-		refreshSubscriptionUserGroupCache(userId, "subscription balance purchase")
+		refreshSubscriptionUserGroupCache(userId, common.LogText("subscription balance purchase"))
 	}
-	RecordLog(userId, LogTypeTopup, fmt.Sprintf("使用余额购买订阅成功，套餐: %s，支付金额: %.2f，扣除额度: %d", logPlanTitle, order.Money, order.ChargedQuota))
+	RecordLog(userId, LogTypeTopup, common.NewMessage("Subscription purchased with balance, plan: {{plan}}, payment amount: {{amount}}, quota deducted: {{quota}}", map[string]any{
+		"plan":   logPlanTitle,
+		"amount": fmt.Sprintf("%.2f", order.Money),
+		"quota":  order.ChargedQuota,
+	}))
 	return nil
 }
 
@@ -873,9 +892,9 @@ func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
 }
 
 // AdminInvalidateUserSubscription marks a user subscription as cancelled and ends it immediately.
-func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
+func AdminInvalidateUserSubscription(userSubscriptionId int) (*common.Message, error) {
 	if userSubscriptionId <= 0 {
-		return "", errors.New("invalid userSubscriptionId")
+		return nil, errors.New("invalid userSubscriptionId")
 	}
 	now := common.GetTimestamp()
 	cacheGroup := ""
@@ -906,21 +925,21 @@ func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if cacheGroup != "" && userId > 0 {
-		refreshSubscriptionUserGroupCache(userId, "admin subscription update")
+		refreshSubscriptionUserGroupCache(userId, common.LogText("admin subscription update"))
 	}
 	if downgradeGroup != "" {
-		return fmt.Sprintf("用户分组将回退到 %s", downgradeGroup), nil
+		return common.NewMessage("User group will be reverted to {{group}}", map[string]any{"group": downgradeGroup}), nil
 	}
-	return "", nil
+	return nil, nil
 }
 
 // AdminDeleteUserSubscription hard-deletes a user subscription.
-func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
+func AdminDeleteUserSubscription(userSubscriptionId int) (*common.Message, error) {
 	if userSubscriptionId <= 0 {
-		return "", errors.New("invalid userSubscriptionId")
+		return nil, errors.New("invalid userSubscriptionId")
 	}
 	now := common.GetTimestamp()
 	cacheGroup := ""
@@ -947,15 +966,15 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if cacheGroup != "" && userId > 0 {
-		refreshSubscriptionUserGroupCache(userId, "admin subscription deletion")
+		refreshSubscriptionUserGroupCache(userId, common.LogText("admin subscription deletion"))
 	}
 	if downgradeGroup != "" {
-		return fmt.Sprintf("用户分组将回退到 %s", downgradeGroup), nil
+		return common.NewMessage("User group will be reverted to {{group}}", map[string]any{"group": downgradeGroup}), nil
 	}
-	return "", nil
+	return nil, nil
 }
 
 func resetUserSubscriptionTx(tx *gorm.DB, sub *UserSubscription, plan *SubscriptionPlan, now int64, advanceResetTime bool) error {
@@ -1008,7 +1027,7 @@ func adminResetUserSubscriptionsByPlanTx(tx *gorm.DB, userId int, plan *Subscrip
 		return nil, err
 	}
 	if len(subs) == 0 {
-		return nil, errors.New("该用户没有有效的此套餐订阅")
+		return nil, common.NewMessage("This user has no active subscription to this plan")
 	}
 	for i := range subs {
 		if err := resetUserSubscriptionTx(tx, &subs[i], plan, now, advanceResetTime); err != nil {
@@ -1177,7 +1196,7 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 			return expiredCount, err
 		}
 		if cacheGroup != "" {
-			refreshSubscriptionUserGroupCache(userId, "subscription expiration")
+			refreshSubscriptionUserGroupCache(userId, common.LogText("subscription expiration"))
 		}
 	}
 	return expiredCount, nil

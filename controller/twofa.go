@@ -21,7 +21,7 @@ func Setup2FA(c *gin.Context) {
 	if authorization == nil {
 		return
 	}
-	identity, _ := middleware.GetSessionAuthIdentity(c)
+	identity, _ := middleware.GetStepUpIdentity(c)
 	setup, err := service.StartTwoFASetup(identity, authorization)
 	if err != nil {
 		writeSecurityOperationError(c, err)
@@ -32,14 +32,14 @@ func Setup2FA(c *gin.Context) {
 }
 
 func Enable2FA(c *gin.Context) {
-	identity, ok := middleware.GetSessionAuthIdentity(c)
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
 		writeSecurityOperationError(c, service.ErrAuthTokenInvalid)
 		return
 	}
 	var req Verify2FARequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
-		common.ApiErrorMsg(c, "参数错误")
+		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
 	if err := service.FinishTwoFASetup(identity, req.FlowToken, req.Code); err != nil {
@@ -53,7 +53,7 @@ func Enable2FA(c *gin.Context) {
 	}
 	recordUserSecurityAudit(c, identity.UserID, "user.2fa_enable", nil)
 	data := authRotationData(bundle)
-	notifyCompletedSecurityChange(identity.UserID, "Two-factor authentication was enabled", data)
+	notifyCompletedSecurityChange(c, identity.UserID, "Two-factor authentication was enabled", data)
 	common.ApiSuccess(c, data)
 }
 
@@ -62,7 +62,7 @@ func Disable2FA(c *gin.Context) {
 	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeTwoFADisable}) == nil {
 		return
 	}
-	identity, _ := middleware.GetSessionAuthIdentity(c)
+	identity, _ := middleware.GetStepUpIdentity(c)
 	userId := identity.UserID
 	if err := model.DisableTwoFAForSession(identity); err != nil {
 		writeSecurityOperationError(c, err)
@@ -80,14 +80,10 @@ func Disable2FA(c *gin.Context) {
 	if err != nil {
 		data["notification_warning"] = true
 	} else if kind == "agent_customer" {
-		notifyCompletedSecurityChange(userId, "Two-factor authentication was disabled", data)
+		notifyCompletedSecurityChange(c, userId, "Two-factor authentication was disabled", data)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "两步验证已禁用",
-		"data":    data,
-	})
+	common.ApiSuccessT(c, "Two-factor authentication disabled", data)
 }
 
 // Get2FAStatus 获取用户2FA状态
@@ -112,7 +108,7 @@ func Get2FAStatus(c *gin.Context) {
 			// 获取剩余备用码数量
 			backupCount, err := model.GetUnusedBackupCodeCount(userId)
 			if err != nil {
-				common.SysLog("获取备用码数量失败: " + err.Error())
+				common.SysLog(common.LogText("failed to count backup codes: %s", err.Error()))
 			} else {
 				status["backup_codes_remaining"] = backupCount
 			}
@@ -131,26 +127,20 @@ func RegenerateBackupCodes(c *gin.Context) {
 	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeTwoFABackupCodes}) == nil {
 		return
 	}
-	identity, _ := middleware.GetSessionAuthIdentity(c)
+	identity, _ := middleware.GetStepUpIdentity(c)
 	userId := identity.UserID
 	// 生成新的备用码
 	backupCodes, err := common.GenerateBackupCodes()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "生成备用码失败",
-		})
-		common.SysLog("生成备用码失败: " + err.Error())
+		common.ApiErrorT(c, "Failed to regenerate backup codes")
+		common.SysLog(common.LogText("failed to generate backup codes: %s", err.Error()))
 		return
 	}
 
 	// 保存新的备用码并原子推进用户鉴权版本
 	if err := model.ReplaceBackupCodesForSession(identity, backupCodes); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "保存备用码失败",
-		})
-		common.SysLog("保存备用码失败: " + err.Error())
+		common.ApiErrorT(c, "Failed to save backup codes")
+		common.SysLog(common.LogText("failed to save backup codes: %s", err.Error()))
 		return
 	}
 	bundle, err := service.AdvanceCurrentSessionToUserVersion(identity, "twofa_backup_codes_regenerated")
@@ -164,11 +154,7 @@ func RegenerateBackupCodes(c *gin.Context) {
 
 	data := authRotationData(bundle)
 	data["backup_codes"] = backupCodes
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "备用码重新生成成功",
-		"data":    data,
-	})
+	common.ApiSuccessT(c, "Backup codes regenerated successfully", data)
 }
 
 // Verify2FALogin 登录时验证2FA

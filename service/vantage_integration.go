@@ -250,7 +250,7 @@ func VantageProvisionPersonalAccount(subject, displayName string) (*VantageProvi
 		// 低敏关联事件：只记录主体引用与赠送额度，不含口令或 Token 明文。
 		// 日志库写入失败不影响已提交的赠送事实，也不会导致重新赠送。
 		model.RecordLog(acct.UserId, model.LogTypeSystem,
-			fmt.Sprintf("Vantage 个人开户（主体 %s），一次性赠送 quota %d", subject, grant.Quota))
+			common.NewMessage(fmt.Sprintf("Vantage 个人开户（主体 %s），一次性赠送 quota %d", subject, grant.Quota)))
 	}
 	return &VantageProvisionResult{
 		Created:    created,
@@ -275,7 +275,7 @@ func VantageProvisionEnterpriseAccount(tenant, displayName string) (*VantageProv
 	}
 	if created {
 		model.RecordLog(acct.UserId, model.LogTypeSystem,
-			fmt.Sprintf("Vantage 企业开户（租户 %s），初始额度 0", tenant))
+			common.NewMessage(fmt.Sprintf("Vantage 企业开户（租户 %s），初始额度 0", tenant)))
 	}
 	return &VantageProvisionResult{
 		Created: created,
@@ -301,7 +301,7 @@ func VantageProvisionMemberCredential(tenant, subject, membershipRef string, ini
 	}
 	if created {
 		model.RecordLog(acct.UserId, model.LogTypeSystem,
-			fmt.Sprintf("Vantage 员工凭据创建（租户 %s，主体 %s，成员关系 %s）", tenant, subject, membershipRef))
+			common.NewMessage(fmt.Sprintf("Vantage 员工凭据创建（租户 %s，主体 %s，成员关系 %s）", tenant, subject, membershipRef)))
 	}
 	return &VantageProvisionResult{
 		Created:    created,
@@ -338,7 +338,7 @@ func VantageRotateCredential(credentialRef, opId string, expectedGeneration int)
 	}
 	if outcome.Created {
 		model.RecordLog(account.UserId, model.LogTypeSystem,
-			fmt.Sprintf("Vantage 凭据轮换（凭据 %s，第 %d 代）", credentialRef, outcome.NewCredential.Generation))
+			common.NewMessage(fmt.Sprintf("Vantage 凭据轮换（凭据 %s，第 %d 代）", credentialRef, outcome.NewCredential.Generation)))
 	}
 	return &VantageProvisionResult{
 		Created:    outcome.Created,
@@ -363,7 +363,7 @@ func VantageRevokeCredential(credentialRef string) (*VantageCredentialView, erro
 	}
 	if changed {
 		model.RecordLog(account.UserId, model.LogTypeSystem,
-			fmt.Sprintf("Vantage 凭据撤销（凭据 %s）", credentialRef))
+			common.NewMessage(fmt.Sprintf("Vantage 凭据撤销（凭据 %s）", credentialRef)))
 	}
 	return newVantageCredentialView(cred, account), nil
 }
@@ -390,7 +390,7 @@ func VantageRevokeMembership(tenant, subject, membershipRef string) (*VantageCre
 	}
 	if changed {
 		model.RecordLog(account.UserId, model.LogTypeSystem,
-			fmt.Sprintf("Vantage 成员关系撤销（租户 %s，主体 %s，成员关系 %s）", tenant, subject, membershipRef))
+			common.NewMessage(fmt.Sprintf("Vantage 成员关系撤销（租户 %s，主体 %s，成员关系 %s）", tenant, subject, membershipRef)))
 	}
 	return newVantageCredentialView(cred, account), nil
 }

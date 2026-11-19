@@ -40,7 +40,7 @@ func getZhipuToken(apikey string) string {
 
 	split := strings.Split(apikey, ".")
 	if len(split) != 2 {
-		common.SysLog("invalid zhipu key: " + apikey)
+		common.SysLog(common.LogText("invalid zhipu key: %s", apikey))
 		return ""
 	}
 
@@ -175,7 +175,7 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		metaData := line[5:]
 		var zhipuResponse ZhipuStreamMetaResponse
 		if err := common.UnmarshalJsonStr(metaData, &zhipuResponse); err != nil {
-			common.SysLog("error unmarshalling stream response: " + err.Error())
+			common.SysLog(common.LogText("error unmarshalling stream response: %s", err.Error()))
 			sr.Error(err)
 			return
 		}

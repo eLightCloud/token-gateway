@@ -229,16 +229,18 @@ func TestVantageIntegrationHTTPContract(t *testing.T) {
 	})
 	t.Run("Root settings update the registered API immediately without exposing credentials", func(t *testing.T) {
 		require.NoError(t, db.AutoMigrate(&model.AuditLog{}, &model.UserSession{}, &model.AuthFlow{}, &model.TwoFA{}, &model.PasskeyCredential{}))
-		rootToken, adminToken := strings.Repeat("r", 32), strings.Repeat("a", 32)
 		users := []model.User{
-			{Username: "settings-root", Password: "fixture-password", AuthVersion: 1, AffCode: "settings-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AccessToken: &rootToken},
-			{Username: "settings-admin", AffCode: "settings-admin", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, AccessToken: &adminToken},
+			{Username: "settings-root", Password: "fixture-password", AuthVersion: 1, AffCode: "settings-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled},
+			{Username: "settings-admin", AffCode: "settings-admin", Role: common.RoleAdminUser, Status: common.UserStatusEnabled},
 		}
 		require.NoError(t, db.Create(&users).Error)
 		identity := service.AuthIdentity{UserID: users[0].Id, SessionID: "vantage-settings-session", UserAuthVersion: 1, SessionVersion: 1}
 		require.NoError(t, model.CreateUserSession(&model.UserSession{SID: identity.SessionID, UserID: identity.UserID, Version: 1, UserAuthVersion: 1, Status: model.UserSessionStatusActive, RefreshHash: "vantage-settings-refresh", ExpiresAt: time.Now().Unix() + 3600}))
-		rootToken, _, err = service.IssueAccessToken(identity)
+		rootToken, _, err := service.IssueAccessToken(identity)
 		require.NoError(t, err)
+		admin, err := service.CreateLoginSession(users[1].Id, "password", "127.0.0.1", "test")
+		require.NoError(t, err)
+		adminToken := admin.AccessToken
 		binding, err := service.BindVerificationOperation(service.VerificationOperation{Scope: service.VerificationScopeVantageIntegrationSettings})
 		require.NoError(t, err)
 		settingsRoutes := engine.Group("/api/option", middleware.RootAuth())

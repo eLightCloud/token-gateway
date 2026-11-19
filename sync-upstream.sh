@@ -2,164 +2,88 @@
 
 set -Eeuo pipefail
 
-upstream_remote="upstream"
-origin_remote="origin"
-upstream_branch="main"
-sync_mode="merge"
-push_after_sync=true
-
 usage() {
-  cat <<'EOF'
-用法：./sync-upstream.sh [选项]
+  cat <<'HELP'
+用法：./sync-upstream.sh [vX.Y.Z-rc.N]
 
-将上游分支同步到当前本地分支，并可将当前分支推送到自己的远端。
-
-选项：
-  --merge             使用 merge 同步（默认）
-  --rebase            使用 rebase 同步
-  --branch <分支>     指定上游分支（默认：main）
-  --upstream <远端>   指定上游远端名（默认：upstream）
-  --origin <远端>     指定个人远端名（默认：origin）
-  --no-push           同步后不推送当前分支到个人远端
-  -h, --help          显示帮助
-
-示例：
-  ./sync-upstream.sh
-  ./sync-upstream.sh --no-push
-  ./sync-upstream.sh --rebase --no-push
-  ./sync-upstream.sh --branch dev --no-push
-EOF
+将指定的官方 New API RC 合并到本地 main。不指定时取上游最新 RC 标签。
+合并会创建备份分支，并停在提交前。请解决冲突并按仓库指南验证后提交。
+HELP
 }
 
-while (($# > 0)); do
-  case "$1" in
-    --merge)
-      sync_mode="merge"
-      shift
-      ;;
-    --rebase)
-      sync_mode="rebase"
-      shift
-      ;;
-    --branch | --upstream | --origin)
-      if (($# < 2)); then
-        echo "错误：$1 缺少参数。" >&2
-        usage >&2
-        exit 2
-      fi
-      case "$1" in
-        --branch) upstream_branch="$2" ;;
-        --upstream) upstream_remote="$2" ;;
-        --origin) origin_remote="$2" ;;
-      esac
-      shift 2
-      ;;
-    --no-push)
-      push_after_sync=false
-      shift
-      ;;
-    -h | --help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "错误：未知参数 $1" >&2
-      usage >&2
-      exit 2
-      ;;
-  esac
+fail() {
+  echo "错误：$*" >&2
+  exit 1
+}
+
+is_rc_tag() {
+  [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+if (( $# > 1 )); then
+  usage >&2
+  exit 2
+fi
+
+target_tag="${1:-}"
+if [[ -n "$target_tag" ]] && ! is_rc_tag "$target_tag"; then
+  fail "目标必须是 RC 标签，例如 v1.0.0-rc.51。"
+fi
+
+repo_root="$(git rev-parse --show-toplevel)" || fail "当前目录不在 Git 仓库中。"
+cd "$repo_root"
+[[ "$(git branch --show-current)" == main ]] || fail "请从本地 main 执行同步。"
+[[ -z "$(git status --porcelain)" ]] || fail "请先保存未提交改动，再执行同步。"
+for operation in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply sequencer; do
+  [[ ! -e "$(git rev-parse --git-path "$operation")" ]] || fail "请先完成当前 Git 操作。"
 done
 
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-  echo "错误：当前目录不在 Git 仓库中。" >&2
-  exit 1
-}
-cd "$repo_root"
+upstream_url="$(git config --get remote.upstream.url)" || fail "请先配置 upstream 远端。"
+case "${upstream_url%.git}" in
+  https://github.com/QuantumNous/new-api | git@github.com:QuantumNous/new-api | ssh://git@github.com/QuantumNous/new-api) ;;
+  *) fail "upstream 必须指向官方 QuantumNous/new-api 仓库。" ;;
+esac
 
-current_branch="$(git branch --show-current)"
-if [[ -z "$current_branch" ]]; then
-  echo "错误：当前处于 detached HEAD，请先切换到需要接取上游代码的本地分支。" >&2
-  exit 1
-fi
-
-if ! git remote get-url "$upstream_remote" >/dev/null 2>&1; then
-  echo "错误：远端 ${upstream_remote} 不存在。" >&2
-  echo "首次使用请执行：" >&2
-  echo "  git remote add ${upstream_remote} https://github.com/QuantumNous/new-api.git" >&2
-  exit 1
-fi
-if [[ "$push_after_sync" == true ]] && ! git remote get-url "$origin_remote" >/dev/null 2>&1; then
-  echo "错误：远端 ${origin_remote} 不存在。" >&2
-  exit 1
-fi
-
-stash_commit=""
-stash_ref=""
-if [[ -n "$(git status --porcelain)" ]]; then
-  echo "检测到未提交修改，正在临时保存（包含未跟踪文件）……"
-  stash_before="$(git rev-parse -q --verify refs/stash 2>/dev/null || true)"
-  if [[ -n "$(git ls-files --others --exclude-standard -- sync-upstream.sh)" ]]; then
-    git stash push -u -m "sync-upstream: $(date '+%Y-%m-%d %H:%M:%S')" -- . ":(top,exclude)sync-upstream.sh"
-  else
-    git stash push -u -m "sync-upstream: $(date '+%Y-%m-%d %H:%M:%S')"
-  fi
-  stash_after="$(git rev-parse -q --verify refs/stash 2>/dev/null || true)"
-  if [[ -n "$stash_after" && "$stash_after" != "$stash_before" ]]; then
-    stash_ref="stash@{0}"
-    stash_commit="$stash_after"
-    echo "本次修改已保存到 stash：${stash_commit}"
-  fi
-fi
-
-echo "正在获取 ${upstream_remote}/${upstream_branch}……"
-if ! git fetch "$upstream_remote" "$upstream_branch"; then
-  echo "错误：获取上游代码失败。" >&2
-  if [[ -n "$stash_commit" ]]; then
-    echo "原有修改仍保存在 stash：${stash_commit}" >&2
-  fi
-  exit 1
-fi
-
-echo "正在使用 ${sync_mode} 将 ${upstream_remote}/${upstream_branch} 同步到本地 ${current_branch}……"
-if [[ "$sync_mode" == "rebase" ]]; then
-  if ! git rebase "${upstream_remote}/${upstream_branch}"; then
-    echo "错误：rebase 发生冲突。解决后执行 git rebase --continue，或执行 git rebase --abort。" >&2
-    if [[ -n "$stash_commit" ]]; then
-      echo "原有修改仍保存在 stash：${stash_commit}" >&2
+if [[ -z "$target_tag" ]]; then
+  remote_tags="$(git ls-remote --tags --refs --sort=-version:refname upstream 'refs/tags/v*-rc.*')" ||
+    fail "无法查询上游 RC 标签。"
+  while read -r _ remote_ref; do
+    candidate="${remote_ref#refs/tags/}"
+    if is_rc_tag "$candidate"; then
+      target_tag="$candidate"
+      break
     fi
-    exit 1
-  fi
-else
-  if ! git merge --no-edit "${upstream_remote}/${upstream_branch}"; then
-    echo "错误：merge 发生冲突。解决后提交，或执行 git merge --abort。" >&2
-    if [[ -n "$stash_commit" ]]; then
-      echo "原有修改仍保存在 stash：${stash_commit}" >&2
-    fi
-    exit 1
-  fi
+  done <<< "$remote_tags"
+  [[ -n "$target_tag" ]] || fail "上游没有可用的 RC 标签。"
 fi
 
-if [[ "$push_after_sync" == true ]]; then
-  echo "正在推送到 ${origin_remote}/${current_branch}……"
-  if ! git push "$origin_remote" "$current_branch"; then
-    echo "错误：上游代码已同步到本地，但推送失败。" >&2
-    if [[ -n "$stash_commit" ]]; then
-      echo "原有修改仍保存在 stash：${stash_commit}" >&2
-    fi
-    exit 1
+target_ref="refs/tags/$target_tag"
+git fetch --no-tags upstream "$target_ref:$target_ref"
+target_commit="$(git rev-parse --verify "$target_ref^{commit}")"
+local_commit="$(git rev-parse --verify HEAD)"
+printf '上游：%s\n本地起点：%s\n目标：%s (%s)\n' "$upstream_url" "$local_commit" "$target_tag" "$target_commit"
+
+if git merge-base --is-ancestor "$target_commit" "$local_commit"; then
+  echo "本地 main 已包含 $target_tag。"
+  exit 0
+fi
+git merge-base "$local_commit" "$target_commit" >/dev/null ||
+  fail "找不到共同基线。若仓库是浅克隆，请先补齐必要的提交历史。"
+
+backup_branch="backup/main-before-sync-$(date +%Y%m%d-%H%M%S)"
+git branch "$backup_branch" "$local_commit"
+echo "恢复点：$backup_branch"
+
+if ! git merge --no-commit --no-ff "$target_commit"; then
+  if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+    git diff --name-only --diff-filter=U
+    echo "请按仓库指南解决冲突、验证并提交。需要撤销时可执行 git merge --abort。" >&2
   fi
+  exit 1
 fi
 
-if [[ -n "$stash_commit" ]]; then
-  echo "正在恢复同步前的本地修改……"
-  if ! git stash pop "$stash_ref"; then
-    echo "警告：恢复本地修改时发生冲突，stash 已保留：${stash_commit}" >&2
-    echo "请解决冲突后检查 git status。" >&2
-    exit 1
-  fi
-fi
-
-echo "完成：${upstream_remote}/${upstream_branch} 已同步到本地 ${current_branch}。"
-if [[ "$push_after_sync" == true ]]; then
-  echo "完成：本地 ${current_branch} 已推送到 ${origin_remote}/${current_branch}。"
-fi
+echo "已停在合并提交前。请完成仓库指南中的验证和同步记录后提交。"

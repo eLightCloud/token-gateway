@@ -217,6 +217,6 @@ func getAPIVersion(c *gin.Context, modelName string) string {
 		return apiVersion
 	}
 	apiVersion = "v1.1"
-	common.SysLog("api_version not found, using default: " + apiVersion)
+	common.SysLog(common.LogText("api_version not found, using default: %s", apiVersion))
 	return apiVersion
 }
