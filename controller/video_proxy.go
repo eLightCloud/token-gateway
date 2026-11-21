@@ -209,6 +209,10 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 			message: "Credentialless artifact request was rejected", err: errTaskMediaRequestRejected,
 		}
 	}
+	seedanceHead := useSeedanceVideoHeadProbe(c, task, descriptor, method)
+	if seedanceHead {
+		method = http.MethodGet
+	}
 
 	channel, err := model.CacheGetChannel(task.ChannelId)
 	if err != nil {
@@ -258,6 +262,10 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 	if len(descriptor.ContentPath) == 0 {
 		clientHeaders = taskArtifactClientHeaders(c.Request.Header)
 	}
+	if seedanceHead {
+		clientHeaders["Range"] = "bytes=0-0"
+		delete(clientHeaders, "If-Range")
+	}
 	for name, value := range clientHeaders {
 		req.Header.Set(name, value)
 	}
@@ -286,6 +294,11 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 		}
 	}
 	defer resp.Body.Close()
+	if seedanceHead {
+		if err := normalizeSeedanceVideoHeadProbe(resp); err != nil {
+			return err
+		}
+	}
 
 	if len(descriptor.ContentPath) > 0 && resp.StatusCode == http.StatusOK {
 		return writeTaskMediaContentPath(c, resp.Body, descriptor)

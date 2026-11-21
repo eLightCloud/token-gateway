@@ -26,6 +26,8 @@ func applyTaskSettlementJournal(ctx context.Context, journal *model.TaskSettleme
 	var err error
 	if journal.Operation == model.TaskSettlementOperationReserve {
 		stored, err = model.ReserveTaskSettlementJournal(journal)
+	} else if proof := RelaySettlementFor(ctx); proof != nil && journal.Operation == model.TaskSettlementOperationSettle {
+		stored, err = persistRelaySettlement(proof, journal)
 	} else {
 		stored, err = model.EnsureTaskSettlementJournal(journal)
 	}
@@ -102,9 +104,13 @@ func applyPersistedTaskSettlementJournal(ctx context.Context, stored *model.Task
 			return err
 		}
 	}
-	if err := completeTaskSettlementJournalLog(stored); err != nil {
+	finishRelayLog := RelaySettlementFor(ctx) != nil && stored.Operation == model.TaskSettlementOperationSettle && !stored.LogDone
+	if err := completeTaskSettlementJournalLog(stored, finishRelayLog); err != nil {
 		requestBillingRecovery(ctx, stored.RequestId, err)
 		return err
+	}
+	if finishRelayLog {
+		return nil
 	}
 	if err := model.DeleteTaskSettlementJournal(stored.RequestId); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("delete completed billing journal %s failed: %v", stored.RequestId, err))
@@ -112,7 +118,7 @@ func applyPersistedTaskSettlementJournal(ctx context.Context, stored *model.Task
 	return nil
 }
 
-func completeTaskSettlementJournalLog(journal *model.TaskSettlementJournal) error {
+func completeTaskSettlementJournalLog(journal *model.TaskSettlementJournal, finishRelayLog bool) error {
 	if journal.LogDone {
 		return nil
 	}
@@ -135,7 +141,11 @@ func completeTaskSettlementJournalLog(journal *model.TaskSettlementJournal) erro
 	if err := model.RecordTaskBillingLog(params); err != nil {
 		return err
 	}
-	if err := model.MarkTaskSettlementLogDone(journal.RequestId); err != nil {
+	acknowledge := model.MarkTaskSettlementLogDone
+	if finishRelayLog {
+		acknowledge = model.FinishRelaySettlementLog
+	}
+	if err := acknowledge(journal.RequestId); err != nil {
 		return err
 	}
 	journal.LogDone = true
@@ -164,7 +174,7 @@ func SweepPendingTaskSettlements(ctx context.Context) (recovered int) {
 			logger.LogWarn(ctx, fmt.Sprintf("recover billing adjustment %s failed: %v", journals[i].RequestId, applyErr))
 			continue
 		}
-		if err := completeTaskSettlementJournalLog(journal); err != nil {
+		if err := completeTaskSettlementJournalLog(journal, false); err != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("recover billing log %s failed: %v", journal.RequestId, err))
 			continue
 		}

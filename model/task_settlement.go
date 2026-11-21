@@ -425,13 +425,21 @@ func applyTaskSettlementUsageTx(tx *gorm.DB, journal *TaskSettlementJournal) err
 }
 
 func MarkTaskSettlementLogDone(requestId string) error {
-	return DB.Model(&TaskSettlementJournal{}).
+	return markTaskSettlementLogDone(DB, requestId)
+}
+
+func markTaskSettlementLogDone(db *gorm.DB, requestId string) error {
+	return db.Model(&TaskSettlementJournal{}).
 		Where("request_id = ? AND applied = ?", requestId, true).
 		Updates(map[string]interface{}{"log_done": true, "updated_at": common.GetTimestamp()}).Error
 }
 
 func DeleteTaskSettlementJournal(requestId string) error {
-	return DB.Where("request_id = ? AND applied = ? AND log_done = ?", requestId, true, true).
+	return deleteTaskSettlementJournal(DB, requestId)
+}
+
+func deleteTaskSettlementJournal(db *gorm.DB, requestId string) error {
+	return db.Where("request_id = ? AND applied = ? AND log_done = ?", requestId, true, true).
 		Delete(&TaskSettlementJournal{}).Error
 }
 

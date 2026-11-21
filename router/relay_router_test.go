@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -159,7 +160,8 @@ func setupRelayRouterTestDB(t *testing.T) {
 
 	common.IsMasterNode = false
 	common.RedisEnabled = false
-	common.SQLitePath = fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	// Match the gateway's default SQLite behavior for concurrent relay writes.
+	common.SQLitePath = filepath.Join(t.TempDir(), "relay.db") + "?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 	require.NoError(t, os.Setenv("SQL_DSN", "local"))
 	require.NoError(t, model.InitDB())

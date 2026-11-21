@@ -77,6 +77,14 @@ func TestClickHouseLogTTLClause(t *testing.T) {
 	assert.EqualValues(t, "\nTTL toDateTime(created_at) + INTERVAL 7 DAY DELETE", clickHouseLogTTLClause(7))
 }
 
+func TestClickHouseLogRetentionPolicyOverridesTTL(t *testing.T) {
+	t.Setenv("LOG_SQL_CLICKHOUSE_TTL_DAYS", "7")
+	t.Setenv("LOG_ALLOW_DELETION", "")
+	assert.Zero(t, clickHouseLogTTLDays())
+	t.Setenv("LOG_ALLOW_DELETION", "true")
+	assert.Equal(t, 7, clickHouseLogTTLDays())
+}
+
 func TestClickHouseLogCreateTableSQL(t *testing.T) {
 	withoutTTL := clickHouseLogCreateTableSQL(0)
 	assert.Contains(t, withoutTTL, "CREATE TABLE IF NOT EXISTS logs")

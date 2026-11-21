@@ -253,6 +253,12 @@ func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data st
 	return FlushWriter(c)
 }
 
+const holdOpenAIStreamDoneKey = "hold_openai_stream_done"
+
+func HoldOpenAIStreamDone(c *gin.Context, hold func()) {
+	c.Set(holdOpenAIStreamDoneKey, hold)
+}
+
 func StringData(c *gin.Context, str string) error {
 	if c == nil || c.Writer == nil {
 		return errors.New("context or writer is nil")
@@ -260,6 +266,13 @@ func StringData(c *gin.Context, str string) error {
 
 	if requestContextDone(c) {
 		return nil
+	}
+	if str == "[DONE]" {
+		value, _ := c.Get(holdOpenAIStreamDoneKey)
+		if hold, _ := value.(func()); hold != nil {
+			hold()
+			return nil
+		}
 	}
 
 	c.Render(-1, common.CustomEvent{Data: "data: " + str})

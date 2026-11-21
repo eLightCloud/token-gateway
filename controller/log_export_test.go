@@ -2,15 +2,18 @@ package controller
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -110,7 +113,25 @@ func TestLogExportDatabaseMatrix(t *testing.T) {
 			require.NoError(t, mainDB.AutoMigrate(&model.Channel{}, &model.User{}))
 			if tc.kind == "clickhouse" {
 				t.Setenv("LOG_SQL_DSN", isolatedDSN)
+				require.NoError(t, db.Exec(releasedClickHouseLogSchema).Error)
+				retained := releasedAuditLog{UserId: 42, CreatedAt: common.GetTimestamp() - 3*86400, Type: model.LogTypeLogin, RequestId: "retention-fixture"}
+				require.NoError(t, db.Create(&retained).Error)
+				t.Setenv("LOG_SQL_CLICKHOUSE_TTL_DAYS", "7")
+				t.Setenv("LOG_ALLOW_DELETION", "true")
 				require.NoError(t, model.InitLogDB())
+				var schema string
+				require.NoError(t, model.LOG_DB.Raw("SHOW CREATE TABLE logs").Scan(&schema).Error)
+				require.Contains(t, schema, "TTL")
+				t.Setenv("LOG_ALLOW_DELETION", "false")
+				require.NoError(t, model.InitLogDB())
+				require.NoError(t, model.InitLogDB())
+				require.NoError(t, model.LOG_DB.Raw("SHOW CREATE TABLE logs").Scan(&schema).Error)
+				assert.NotContains(t, schema, "TTL")
+				var count int64
+				require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("request_id = ?", retained.RequestId).Count(&count).Error)
+				assert.EqualValues(t, 1, count)
+				t.Setenv("PERSONAL_LOG_CURSOR_ENABLED", "true")
+				assert.False(t, model.PersonalLogCursorEnabled())
 			} else {
 				require.NoError(t, db.AutoMigrate(&model.Log{}))
 			}
@@ -147,6 +168,251 @@ func TestLogExportDatabaseMatrix(t *testing.T) {
 			assert.Contains(t, all[2]["other"], "admin_info")
 			assert.Equal(t, true, all[3]["success"])
 		})
+	}
+}
+
+func TestPersonalLogCursorDatabaseMatrix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("PERSONAL_LOG_CURSOR_ENABLED", "true")
+	for _, tc := range []struct {
+		kind string
+		env  string
+		typ  common.DatabaseType
+	}{
+		{"sqlite", "", common.DatabaseTypeSQLite},
+		{"mysql", "AUDIT_MYSQL_DSN", common.DatabaseTypeMySQL},
+		{"postgres", "AUDIT_POSTGRES_DSN", common.DatabaseTypePostgreSQL},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			dsn := os.Getenv(tc.env)
+			if tc.env != "" && dsn == "" {
+				t.Skip(tc.env + " is not configured")
+			}
+			mainDB, _ := newAuditTestDatabase(t, "sqlite", "")
+			logDB, _ := newAuditTestDatabase(t, tc.kind, dsn)
+			useLogExportDatabases(t, mainDB, logDB, common.DatabaseTypeSQLite, tc.typ)
+			require.NoError(t, mainDB.AutoMigrate(&model.User{}))
+			require.NoError(t, logDB.AutoMigrate(&model.Log{}))
+			now := common.GetTimestamp()
+			require.NoError(t, logDB.Create(&[]model.Log{
+				{UserId: 42, CreatedAt: now - 2, RequestId: "older"},
+				{UserId: 42, CreatedAt: now - 1, RequestId: "correlated", Content: "consume"},
+				{UserId: 42, CreatedAt: now - 1, RequestId: "correlated", Content: "refund"},
+				{UserId: 43, CreatedAt: now, RequestId: "correlated", Content: "another user's log"},
+				{UserId: 42, CreatedAt: now - 400*86400, RequestId: "out-of-default-range"},
+			}).Error)
+			first := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "page_size=1")[0]
+			require.Equal(t, true, first["success"], first)
+			firstPage := first["data"].(map[string]any)
+			firstRow := firstPage["items"].([]any)[0].(map[string]any)
+			assert.Equal(t, "refund", firstRow["content"])
+			cursor := firstPage["next_cursor"].(string)
+			require.NotEmpty(t, cursor)
+			payload, _, _ := strings.Cut(cursor, ".")
+			cursorBytes, err := base64.RawURLEncoding.DecodeString(payload)
+			require.NoError(t, err)
+			var expiredState map[string]any
+			require.NoError(t, common.Unmarshal(cursorBytes, &expiredState))
+			expiredState["IssuedAt"] = now - 3601
+			cursorBytes, err = common.Marshal(expiredState)
+			require.NoError(t, err)
+			payload = base64.RawURLEncoding.EncodeToString(cursorBytes)
+			expired := payload + "." + common.GenerateHMAC("personal-log-page:v1:"+payload)
+			require.NoError(t, logDB.Create(&model.Log{UserId: 42, CreatedAt: now, RequestId: "just-written"}).Error)
+			second := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "page_size=1&cursor="+cursor)[0]
+			require.Equal(t, true, second["success"], second)
+			secondPage := second["data"].(map[string]any)
+			assert.Equal(t, "consume", secondPage["items"].([]any)[0].(map[string]any)["content"])
+			assert.NotEqual(t, firstPage["record_keys"], secondPage["record_keys"])
+			for _, rejected := range []map[string]any{
+				callLogHandler(t, GetPersonalLogPage, 43, common.RoleCommonUser, "page_size=1&cursor="+cursor)[0],
+				callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "page_size=1&request_id=correlated&cursor="+cursor)[0],
+				callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "page_size=1&cursor="+cursor+"x")[0],
+				callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "page_size=1&cursor="+expired)[0],
+			} {
+				assert.Equal(t, false, rejected["success"])
+				assert.Equal(t, "Invalid or expired log cursor", rejected["message_key"])
+			}
+			byRequest := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "request_id=correlated&user_id=43")[0]
+			require.Equal(t, true, byRequest["success"], byRequest)
+			matched := byRequest["data"].(map[string]any)
+			require.Len(t, matched["items"].([]any), 2)
+			assert.Equal(t, false, matched["has_more"])
+			assert.Equal(t, firstPage["record_keys"].([]any)[0], matched["record_keys"].([]any)[0])
+			latest := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "page_size=1")[0]
+			require.Equal(t, true, latest["success"], latest)
+			assert.Equal(t, "just-written", latest["data"].(map[string]any)["items"].([]any)[0].(map[string]any)["request_id"])
+			legacy := callLogHandler(t, GetUserLogs, 42, common.RoleCommonUser, "page_size=1&p=2")[0]
+			require.Equal(t, true, legacy["success"], legacy)
+			assert.EqualValues(t, 4, legacy["data"].(map[string]any)["total"])
+
+			t.Run("time range and page size", func(t *testing.T) {
+				query := fmt.Sprintf("start_timestamp=%d&end_timestamp=%d", now-2, now-1)
+				page := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, query+"&page_size=2")[0]
+				require.Equal(t, true, page["success"], page)
+				data := page["data"].(map[string]any)
+				items := data["items"].([]any)
+				require.Len(t, items, 2)
+				assert.Equal(t, "refund", items[0].(map[string]any)["content"])
+				assert.Equal(t, "consume", items[1].(map[string]any)["content"])
+
+				next := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, query+"&page_size=2&cursor="+data["next_cursor"].(string))[0]
+				require.Equal(t, true, next["success"], next)
+				last := next["data"].(map[string]any)
+				remaining := last["items"].([]any)
+				require.Len(t, remaining, 1)
+				assert.Equal(t, "older", remaining[0].(map[string]any)["request_id"])
+				assert.Equal(t, false, last["has_more"])
+				assert.Empty(t, last["next_cursor"])
+
+				resized := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, query+"&page_size=1&cursor="+data["next_cursor"].(string))[0]
+				assert.Equal(t, false, resized["success"])
+				assert.Equal(t, "Invalid or expired log cursor", resized["message_key"])
+			})
+		})
+	}
+}
+
+func TestPersonalLogPageRequiresUsageRead(t *testing.T) {
+	user, _ := setupAccessTokenAudit(t)
+	t.Setenv("PERSONAL_LOG_CURSOR_ENABLED", "true")
+	const path = "/api/log/self/page"
+	router := gin.New()
+	router.GET(path, middleware.DisableCache(), middleware.UserAuth(), GetPersonalLogPage)
+	readToken, _ := createScopedAccessToken(t, user.Id, 0, "usage:read")
+	profileToken, _ := createScopedAccessToken(t, user.Id, 0, "profile:read")
+	assert.Equal(t, http.StatusUnauthorized, accessTokenRequest(router, http.MethodGet, path, "", "", "").Code)
+	assert.Equal(t, http.StatusForbidden, accessTokenRequest(router, http.MethodGet, path, profileToken, "", "").Code)
+	allowed := accessTokenRequest(router, http.MethodGet, path, readToken, "", "")
+	assert.Equal(t, http.StatusOK, allowed.Code)
+	assert.Contains(t, allowed.Header().Get("Cache-Control"), "no-store")
+	assert.Contains(t, allowed.Body.String(), `"success":true`)
+}
+
+func TestOldAndNewLogRoutesShareHeavyBudget(t *testing.T) {
+	t.Setenv("PERSONAL_LOG_CURSOR_ENABLED", "true")
+	db, _ := newAuditTestDatabase(t, "sqlite", "")
+	useLogExportDatabases(t, db, db, common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.User{}))
+	entered := make(chan struct{})
+	resume := make(chan struct{})
+	completed := make(chan struct{})
+	var waiting atomic.Bool
+	require.NoError(t, db.Callback().Query().Before("gorm:query").Register("hold-first-log-read", func(tx *gorm.DB) {
+		if tx.Statement.Table == "logs" && waiting.CompareAndSwap(false, true) {
+			close(entered)
+			<-resume
+		}
+	}))
+	t.Cleanup(func() {
+		close(resume)
+		<-completed
+	})
+	go func() {
+		defer close(completed)
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/api/log/self", nil)
+		ctx.Set("id", 42)
+		ctx.Set("role", common.RoleCommonUser)
+		GetUserLogs(ctx)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the initial legacy read did not reach the database")
+	}
+	legacy := callLogHandler(t, GetLogsStat, 42, common.RoleAdminUser, "")[0]
+	filtered := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "model_name=missing")[0]
+	for _, response := range []map[string]any{legacy, filtered} {
+		assert.Equal(t, false, response["success"])
+		assert.Equal(t, "The log service is busy. Please try again.", response["message_key"])
+	}
+	latest := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "")[0]
+	assert.Equal(t, true, latest["success"])
+
+}
+
+func TestLogReadBudgetSharesLeasesAcrossNodes(t *testing.T) {
+	addr := os.Getenv("TEST_LOG_READ_REDIS_ADDR")
+	if addr == "" {
+		addr = miniredis.RunT(t).Addr()
+	}
+	client := redis.NewClient(&redis.Options{Addr: addr})
+	previousClient, wasEnabled := common.RDB, common.RedisEnabled
+	common.RDB, common.RedisEnabled = client, true
+	t.Cleanup(func() {
+		common.RDB, common.RedisEnabled = previousClient, wasEnabled
+		_ = client.Close()
+	})
+	key := "test-log-reads:{" + common.GetUUID() + "}:"
+	keys := []string{key + "active", key + "heavy", key + "starts"}
+	first := &logReadBudget{total: 2, heavy: 1, keys: keys}
+	second := &logReadBudget{total: 2, heavy: 1, keys: keys}
+	ctx := context.Background()
+	releaseHeavy := first.acquire(ctx, true, time.Minute)
+	require.NotNil(t, releaseHeavy)
+	assert.Nil(t, second.acquire(ctx, true, time.Minute))
+	releaseLatest := second.acquire(ctx, false, time.Minute)
+	require.NotNil(t, releaseLatest)
+	assert.Nil(t, first.acquire(ctx, false, time.Minute))
+	releaseHeavy()
+	reclaimed := second.acquire(ctx, true, time.Minute)
+	require.NotNil(t, reclaimed)
+	reclaimed()
+	releaseLatest()
+	first.interval, second.interval = time.Second, time.Second
+	lastStart := first.acquire(ctx, false, time.Minute)
+	require.NotNil(t, lastStart)
+	lastStart()
+	assert.Nil(t, second.acquire(ctx, false, time.Minute), "the cluster start budget survives release")
+	common.RedisEnabled = false
+	unavailable := &logReadBudget{total: 2, heavy: 1, keys: keys}
+	assert.Nil(t, unavailable.acquire(ctx, false, time.Minute))
+	assert.Zero(t, unavailable.active)
+	assert.Zero(t, first.active)
+}
+
+func TestLogReadBudgetLeavesConnectionsForWrites(t *testing.T) {
+	t.Setenv("PERSONAL_LOG_CURSOR_ENABLED", "true")
+	db, _ := newAuditTestDatabase(t, "sqlite", "")
+	useLogExportDatabases(t, db, db, common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.User{}))
+	pool, err := db.DB()
+	require.NoError(t, err)
+	pool.SetMaxOpenConns(2)
+	writeConn, err := pool.Conn(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writeConn.Close() })
+	blocked := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "")[0]
+	assert.Equal(t, "The log service is busy. Please try again.", blocked["message_key"])
+	require.NoError(t, writeConn.Close())
+	latest := callLogHandler(t, GetPersonalLogPage, 42, common.RoleCommonUser, "")[0]
+	assert.Equal(t, true, latest["success"])
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/log/stat", nil)
+	readCtx, release, admitted := beginLogRead(ctx, true, logHistoryReadTimeout)
+	require.True(t, admitted)
+	defer release()
+	first, err := pool.Conn(context.Background())
+	require.NoError(t, err)
+	defer first.Close()
+	second, err := pool.Conn(context.Background())
+	require.NoError(t, err)
+	defer second.Close()
+	writerCtx, stopWriter := context.WithCancel(context.Background())
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		if conn, err := pool.Conn(writerCtx); err == nil {
+			_ = conn.Close()
+		}
+	}()
+	defer func() { stopWriter(); <-writerDone }()
+	select {
+	case <-readCtx.Done():
+		assert.ErrorIs(t, readCtx.Err(), context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("admitted heavy read did not yield to the connection waiter")
 	}
 }
 

@@ -52,25 +52,8 @@ func Distribute() func(c *gin.Context) {
 		}
 		_, pinned, _ := constraints.ResolvedPin()
 		if !pinned {
-			// Select a channel for the user
-			// check token model mapping
-			modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
-			if modelLimitEnable {
-				s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
-				if !ok {
-					// token model limit is empty, all models are not allowed
-					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenNoModelAccess))
-					return
-				}
-				var tokenModelLimit map[string]bool
-				tokenModelLimit, ok = s.(map[string]bool)
-				if !ok {
-					tokenModelLimit = map[string]bool{}
-				}
-				if !TokenModelLimitAllows(tokenModelLimit, modelRequest.Model) {
-					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}))
-					return
-				}
+			if !authorizeTokenModel(c, modelRequest.Model) {
+				return
 			}
 
 			if shouldSelectChannel {

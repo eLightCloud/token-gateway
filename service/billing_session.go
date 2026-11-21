@@ -92,6 +92,11 @@ func (s *BillingSession) settle(ctx context.Context, actualQuota int, channelId 
 		return err
 	}
 	if err := applyTaskSettlementJournal(ctx, journal, logParams); err != nil {
+		if proof := RelaySettlementFor(ctx); proof != nil && (proof.Durable || proof.Uncertain) {
+			// The journal owns the balance once committed. An ambiguous
+			// commit must not lead to a second, competing refund operation.
+			s.fundingSettled = true
+		}
 		return err
 	}
 	s.fundingSettled = true

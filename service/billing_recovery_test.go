@@ -194,12 +194,12 @@ func TestBillingRecoveryWritesMissingLogWithoutChargingAgain(t *testing.T) {
 	require.NoError(t, err)
 	journal := &model.TaskSettlementJournal{RequestId: "legacy-subscription-log", UserId: userID, BillingSource: BillingSourceSubscription, Applied: true, LogPayload: string(payload)}
 	require.NoError(t, model.DB.Create(journal).Error)
-	require.NoError(t, completeTaskSettlementJournalLog(journal))
+	require.NoError(t, completeTaskSettlementJournalLog(journal, false))
 	var replayed model.Log
 	require.NoError(t, model.LOG_DB.Where("billing_operation_id = ?", journal.RequestId).First(&replayed).Error)
 	assert.Equal(t, BillingSourceSubscription, replayed.BillingSource)
 	assert.EqualValues(t, 9_300, getUserQuota(t, userID))
-	require.NoError(t, completeTaskSettlementJournalLog(journal))
+	require.NoError(t, completeTaskSettlementJournalLog(journal, false))
 
 }
 

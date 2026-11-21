@@ -352,6 +352,87 @@ func TestLegacyVideoArtifactContentUsesGetResultURL(t *testing.T) {
 	assert.Equal(t, "bytes 0-3/4", recorder.Header().Get("Content-Range"))
 }
 
+func TestSeedanceVideoArtifactContentSupportsHeadOnGetSignedMedia(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	allowPrivateTaskMediaTest(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"))
+		assert.Empty(t, r.Header.Get("If-Range"))
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("ETag", `"media"`)
+		if r.Header.Get("If-None-Match") == `"media"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		const media = "video-data"
+		switch r.Header.Get("Range") {
+		case "bytes=0-0":
+			w.Header().Set("Content-Range", "bytes 0-0/10")
+			w.Header().Set("Content-Length", "1")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = io.WriteString(w, media[:1])
+		case "bytes=2-4":
+			w.Header().Set("Content-Range", "bytes 2-4/10")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = io.WriteString(w, media[2:5])
+		case "":
+			_, _ = io.WriteString(w, media)
+		default:
+			t.Errorf("unexpected upstream range %q", r.Header.Get("Range"))
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	task.Platform = "doubao"
+	task.Properties.UpstreamModelName = "doubao-seedance-2-0-mini-260615"
+	task.PrivateData.Execution = &model.TaskExecutionSnapshot{TaskPlugin: &model.TaskPluginSnapshot{Key: "doubao", APIVersion: 1}}
+	task.SetData(map[string]any{"content": map[string]any{"video_url": upstream.URL + "/video.mp4?fixture=signature"}})
+	require.NoError(t, model.DB.Save(task).Error)
+
+	for _, tc := range []struct {
+		name, method, byteRange, etag string
+		signed                        bool
+		status                        int
+		body, length, contentRange    string
+	}{
+		{name: "owner HEAD", method: http.MethodHead, status: http.StatusOK, length: "10"},
+		{name: "signed HEAD", method: http.MethodHead, byteRange: "bytes=2-4", signed: true, status: http.StatusOK, length: "10"},
+		{name: "conditional HEAD", method: http.MethodHead, etag: `"media"`, signed: true, status: http.StatusNotModified},
+		{name: "signed GET", method: http.MethodGet, signed: true, status: http.StatusOK, body: "video-data", length: "10"},
+		{name: "signed Range", method: http.MethodGet, byteRange: "bytes=2-4", signed: true, status: http.StatusPartialContent, body: "deo", length: "3", contentRange: "bytes 2-4/10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Set("id", task.UserId)
+			c.Set(middleware.TaskArtifactAccessContextKey, tc.signed)
+			c.Params = gin.Params{{Key: "key", Value: task.TaskID}, {Key: "artifact_key", Value: "video"}}
+			c.Request = httptest.NewRequest(tc.method, "/v1/tasks/"+task.TaskID+"/artifacts/video/content", nil)
+			c.Request.Header.Set("Range", tc.byteRange)
+			c.Request.Header.Set("If-None-Match", tc.etag)
+			if tc.method == http.MethodHead && tc.byteRange != "" {
+				c.Request.Header.Set("If-Range", `"client"`)
+			}
+
+			TaskArtifactContent(c)
+
+			assert.Equal(t, tc.status, recorder.Code)
+			assert.Equal(t, tc.body, recorder.Body.String())
+			assert.Equal(t, tc.length, recorder.Header().Get("Content-Length"))
+			assert.Equal(t, tc.contentRange, recorder.Header().Get("Content-Range"))
+			assert.Equal(t, `"media"`, recorder.Header().Get("ETag"))
+			if tc.status == http.StatusOK {
+				assert.Equal(t, "video/mp4", recorder.Header().Get("Content-Type"))
+			}
+		})
+	}
+}
+
 func TestDisabledArtifactStorePreservesPluginUpstreamContent(t *testing.T) {
 	task := setupGenericTaskTest(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

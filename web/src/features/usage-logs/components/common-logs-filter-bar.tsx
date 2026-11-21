@@ -114,6 +114,8 @@ function buildSearchSourceKey(values: {
 
 interface CommonLogsFilterBarProps<TData> {
   table: Table<TData>
+  onPersonalSearch?: () => void
+  manualStats?: boolean
 }
 
 export function CommonLogsFilterBar<TData>(
@@ -126,7 +128,11 @@ export function CommonLogsFilterBar<TData>(
   const searchParams = route.useSearch()
   const { isAdminView: isAdmin } = useLogsViewScope()
   const { sensitiveVisible, setSensitiveVisible } = useUsageLogsContext()
-  const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
+  const onPersonalSearch = props.onPersonalSearch
+  const personalCursor = onPersonalSearch !== undefined
+  const fetchingLogs = useIsFetching({
+    queryKey: [personalCursor ? 'personal-log-page' : 'logs'],
+  })
   const { data: adminGroups } = useQuery({
     queryKey: ['groups'],
     queryFn: async () => requireServerSuccess(await getGroups()),
@@ -147,7 +153,7 @@ export function CommonLogsFilterBar<TData>(
   }, [isAdmin, adminGroups, userGroups])
 
   const searchState = useMemo<CommonLogDraft>(() => {
-    const { start, end } = getDefaultTimeRange()
+    const defaults = personalCursor ? undefined : getDefaultTimeRange()
     const sourceValues = {
       startTime: searchParams.startTime,
       endTime: searchParams.endTime,
@@ -163,8 +169,10 @@ export function CommonLogsFilterBar<TData>(
     const filters: CommonLogFilters = {
       startTime: searchParams.startTime
         ? new Date(searchParams.startTime)
-        : start,
-      endTime: searchParams.endTime ? new Date(searchParams.endTime) : end,
+        : defaults?.start,
+      endTime: searchParams.endTime
+        ? new Date(searchParams.endTime)
+        : defaults?.end,
       channel: searchParams.channel || undefined,
       model: searchParams.model || undefined,
       token: searchParams.token || undefined,
@@ -174,11 +182,12 @@ export function CommonLogsFilterBar<TData>(
       upstreamRequestId: searchParams.upstreamRequestId || undefined,
     }
     return {
-      sourceKey: buildSearchSourceKey(sourceValues),
+      sourceKey: `${personalCursor}:${buildSearchSourceKey(sourceValues)}`,
       filters,
       logType: getLogTypeValue(searchParams.type),
     }
   }, [
+    personalCursor,
     searchParams.startTime,
     searchParams.endTime,
     searchParams.channel,
@@ -221,24 +230,39 @@ export function CommonLogsFilterBar<TData>(
           ...filterParams,
           type: [logType],
           page: 1,
+          ...(personalCursor && { pageSize: searchParams.pageSize }),
         },
       })
+      if (onPersonalSearch) {
+        onPersonalSearch()
+        return
+      }
       queryClient.invalidateQueries({ queryKey: ['logs'] })
       queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
     },
-    [filters, logType, navigate, queryClient]
+    [
+      filters,
+      logType,
+      navigate,
+      personalCursor,
+      onPersonalSearch,
+      queryClient,
+      searchParams.pageSize,
+    ]
   )
 
   const handleReset = useCallback(() => {
     const { start, end } = getDefaultTimeRange()
-    const resetFilters: CommonLogFilters = { startTime: start, endTime: end }
+    const resetFilters: CommonLogFilters = personalCursor
+      ? {}
+      : { startTime: start, endTime: end }
     const resetSearch = {
       type: [LOG_TYPE_ALL_VALUE],
-      startTime: start.getTime(),
-      endTime: end.getTime(),
+      startTime: resetFilters.startTime?.getTime(),
+      endTime: resetFilters.endTime?.getTime(),
     }
     setDraft({
-      sourceKey: buildSearchSourceKey(resetSearch),
+      sourceKey: `${personalCursor}:${buildSearchSourceKey(resetSearch)}`,
       filters: resetFilters,
       logType: LOG_TYPE_ALL_VALUE,
     })
@@ -249,11 +273,22 @@ export function CommonLogsFilterBar<TData>(
       search: {
         page: 1,
         ...resetSearch,
+        ...(personalCursor && { pageSize: searchParams.pageSize }),
       },
     })
+    if (onPersonalSearch) {
+      onPersonalSearch()
+      return
+    }
     queryClient.invalidateQueries({ queryKey: ['logs'] })
     queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
-  }, [navigate, queryClient])
+  }, [
+    navigate,
+    personalCursor,
+    onPersonalSearch,
+    queryClient,
+    searchParams.pageSize,
+  ])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -297,7 +332,7 @@ export function CommonLogsFilterBar<TData>(
     'Only used to find historical logs. New records are available in Audit Logs.'
   )
 
-  const statsBar = <CommonLogsStats />
+  const statsBar = <CommonLogsStats manual={props.manualStats} />
   const sensitiveToggle = (
     <Tooltip>
       <TooltipTrigger

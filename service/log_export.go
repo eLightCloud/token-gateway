@@ -31,6 +31,10 @@ var logExportLocks sync.Map
 // this node dies. ok is false while another export of the user is running;
 // otherwise release must be called when the export ends.
 func AcquireLogExportLock(userId int) (release func(), ok bool, err error) {
+	return AcquireLogExportLockWithContext(context.Background(), userId)
+}
+
+func AcquireLogExportLockWithContext(requestCtx context.Context, userId int) (release func(), ok bool, err error) {
 	if !common.RedisEnabled {
 		if _, running := logExportLocks.LoadOrStore(userId, struct{}{}); running {
 			return nil, false, nil
@@ -41,7 +45,7 @@ func AcquireLogExportLock(userId int) (release func(), ok bool, err error) {
 	ctx := context.Background()
 	key := fmt.Sprintf("log_export:%d", userId)
 	owner := common.GetRandomString(16)
-	acquired, err := common.RDB.SetNX(ctx, key, owner, logExportLockTTL).Result()
+	acquired, err := common.RDB.SetNX(requestCtx, key, owner, logExportLockTTL).Result()
 	if err != nil || !acquired {
 		return nil, false, err
 	}

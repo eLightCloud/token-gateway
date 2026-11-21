@@ -371,6 +371,7 @@ func migrateDB() error {
 		&HeavyStatsPermit{},
 		&OrganizationDiscountSnapshot{},
 		&TaskSettlementJournal{},
+		&RelayOperation{},
 		&SeedanceEnhanceConfig{},
 		&SeedanceEnhanceExecution{},
 		&SeedanceEnhanceAttempt{},
@@ -489,6 +490,9 @@ func migrateClickHouseLogDB() error {
 }
 
 func clickHouseLogTTLDays() int {
+	if RequireLogDeletionAllowed() != nil {
+		return 0
+	}
 	ttlDays := common.GetEnvOrDefault("LOG_SQL_CLICKHOUSE_TTL_DAYS", 0)
 	if ttlDays < 0 {
 		return 0

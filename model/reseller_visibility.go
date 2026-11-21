@@ -1,16 +1,22 @@
 package model
 
 import (
+	"context"
+
 	"github.com/QuantumNous/new-api/common"
 )
 
 // Customer log metadata is a positive projection: nested or future provider
 // diagnostics cannot accidentally expose host routing or procurement facts.
-func redactPersonalCustomerLogs(userID int, logs []*Log) error {
-	kind, err := ResellerUserKind(DB, userID)
+func redactPersonalCustomerLogsWithContext(ctx context.Context, userID int, logs []*Log) error {
+	kind, err := ResellerUserKind(DB.WithContext(ctx), userID)
 	if err != nil {
 		return err
 	}
+	return redactLogsForReseller(kind, logs)
+}
+
+func redactLogsForReseller(kind string, logs []*Log) error {
 	if kind != "agent_customer" {
 		return nil
 	}

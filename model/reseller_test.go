@@ -216,7 +216,7 @@ func TestResellerS1(t *testing.T) {
 	})
 	t.Run("customer log prices remain accurate without routing metadata", func(t *testing.T) {
 		logs := []*Log{{ChannelId: 11, Other: `{"model_price":0.2,"personal_ratio":0.9,"billing_mode":"tiered_expr","billing_unit":"request","fixed_price":0.2,"admin_info":{"channel_id":11},"channel_name":"private-channel","upstream_key":"private-key"}`}}
-		require.NoError(t, redactPersonalCustomerLogs(b.UserID, logs))
+		require.NoError(t, redactPersonalCustomerLogsWithContext(context.Background(), b.UserID, logs))
 		var visible map[string]any
 		require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &visible))
 		assert.Equal(t, 0.2, visible["model_price"])

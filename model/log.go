@@ -146,14 +146,18 @@ func FormatRootLogs(logs []*Log) {
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
+	return GetLogByTokenIdWithContext(context.Background(), tokenId)
+}
+
+func GetLogByTokenIdWithContext(ctx context.Context, tokenId int) (logs []*Log, err error) {
 	order := "id desc"
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		order = clickHouseLogOrder("")
 	}
-	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
+	err = LOG_DB.WithContext(ctx).Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
 	formatUserLogs(logs, 0)
 	if err == nil && len(logs) > 0 {
-		err = redactPersonalCustomerLogs(logs[0].UserId, logs)
+		err = redactPersonalCustomerLogsWithContext(ctx, logs[0].UserId, logs)
 	}
 	return logs, err
 }
@@ -542,7 +546,11 @@ func (f LogFilter) apply(tx *gorm.DB) (*gorm.DB, error) {
 }
 
 func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
-	tx, err := filter.apply(LOG_DB)
+	return GetAllLogsWithContext(context.Background(), filter, startIdx, num)
+}
+
+func GetAllLogsWithContext(ctx context.Context, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
+	tx, err := filter.apply(LOG_DB.WithContext(ctx))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -589,7 +597,7 @@ func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int
 			}
 		} else {
 			// Bulk query channels from DB
-			if err = DB.Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
+			if err = DB.WithContext(ctx).Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
 				return logs, total, err
 			}
 		}
@@ -608,7 +616,11 @@ func GetAllLogs(filter LogFilter, startIdx int, num int) (logs []*Log, total int
 const logSearchCountLimit = 10000
 
 func GetUserLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
-	tx, err := filter.apply(LOG_DB.Where("logs.user_id = ?", userId))
+	return GetUserLogsWithContext(context.Background(), userId, filter, startIdx, num)
+}
+
+func GetUserLogsWithContext(ctx context.Context, userId int, filter LogFilter, startIdx int, num int) (logs []*Log, total int64, err error) {
+	tx, err := filter.apply(LOG_DB.WithContext(ctx).Where("logs.user_id = ?", userId))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -628,7 +640,7 @@ func GetUserLogs(userId int, filter LogFilter, startIdx int, num int) (logs []*L
 	}
 
 	formatUserLogs(logs, startIdx)
-	if err := redactPersonalCustomerLogs(userId, logs); err != nil {
+	if err := redactPersonalCustomerLogsWithContext(ctx, userId, logs); err != nil {
 		return nil, 0, err
 	}
 	return logs, total, err
@@ -651,8 +663,15 @@ func StreamAllLogs(ctx context.Context, filter LogFilter, role int, fn func(*Log
 		if log.ChannelId != 0 {
 			name, ok := channelNames[log.ChannelId]
 			if !ok {
-				if channel, err := CacheGetChannel(log.ChannelId); err == nil {
-					name = channel.Name
+				if common.MemoryCacheEnabled {
+					if channel, err := CacheGetChannel(log.ChannelId); err == nil {
+						name = channel.Name
+					}
+				} else {
+					var channel Channel
+					if err := DB.WithContext(ctx).Select("name").Where("id = ?", log.ChannelId).Take(&channel).Error; err == nil {
+						name = channel.Name
+					}
 				}
 				channelNames[log.ChannelId] = name
 			}
@@ -708,10 +727,15 @@ type Stat struct {
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
+	return SumUsedQuotaWithContext(context.Background(), logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+}
+
+func SumUsedQuotaWithContext(ctx context.Context, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
+	db := LOG_DB.WithContext(ctx)
+	tx := db.Table("logs").Select("COALESCE(sum(quota), 0) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
+	rpmTpmQuery := db.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err
@@ -799,6 +823,9 @@ func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
 }
 
 func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if err := RequireLogDeletionAllowed(); err != nil {
+		return 0, err
+	}
 	if proceed, err := prepareOrganizationInvoiceLogCleanup(ctx, targetTimestamp); err != nil || !proceed {
 		return 0, err
 	}

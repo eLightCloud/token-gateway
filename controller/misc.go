@@ -84,6 +84,7 @@ func GetStatus(c *gin.Context) {
 		"enable_drawing":                common.DrawingEnabled,
 		"enable_task":                   common.TaskEnabled,
 		"enable_data_export":            common.DataExportEnabled,
+		"personal_log_cursor_enabled":   model.PersonalLogCursorEnabled(),
 		"data_export_default_time":      common.DataExportDefaultTime,
 		"default_collapse_sidebar":      common.DefaultCollapseSidebar,
 		"mj_notify_enabled":             setting.MjNotifyEnabled,

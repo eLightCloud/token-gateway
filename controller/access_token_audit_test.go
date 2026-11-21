@@ -753,6 +753,7 @@ func TestSecurityAndOperationEventsUseAuditTable(t *testing.T) {
 	var logs []model.Log
 	require.NoError(t, model.LOG_DB.Find(&logs).Error)
 	assert.Len(t, logs, 4)
+	t.Setenv("LOG_ALLOW_DELETION", "true")
 	_, err := model.DeleteOldLogBatch(context.Background(), time.Now().Unix()+1, 100)
 	require.NoError(t, err)
 	var count int64
@@ -1166,6 +1167,7 @@ func TestAuditDatabaseMatrix(t *testing.T) {
 }
 
 func TestIndependentAuditLogStores(t *testing.T) {
+	t.Setenv("LOG_ALLOW_DELETION", "true")
 	_, _ = setupAccessTokenAudit(t)
 	previousMaster := common.IsMasterNode
 	common.IsMasterNode = true

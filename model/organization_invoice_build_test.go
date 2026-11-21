@@ -1053,6 +1053,7 @@ func TestOrganizationInvoiceConfirmedExpenseRequiresOriginalAttribution(t *testi
 }
 
 func TestOrganizationInvoiceClearedHistoryNeverBecomesCompleteZero(t *testing.T) {
+	t.Setenv("LOG_ALLOW_DELETION", "true")
 	setupOrganizationTestState(t)
 	org := createOrganizationBillingTestFixture(t)
 	configureOrganizationInvoiceTestZeroBaseline(t, org, 202609, 10, 11)

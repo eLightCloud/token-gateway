@@ -33,7 +33,11 @@ import {
 } from '@/features/subscriptions/api'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
-import { createServerError } from '@/lib/server-error-message'
+import {
+  createServerError,
+  getServerErrorMessage,
+} from '@/lib/server-error-message'
+import { statusQueryOptions } from '@/lib/status-query'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -45,9 +49,11 @@ import {
 import { shouldShowBillingSource } from '../lib/billing-source'
 import { useColumnsByCategory } from '../lib/columns'
 import { parseLogOther } from '../lib/format'
+import { usePersonalLogPage } from '../lib/personal-log-page'
 import { fetchLogsByCategory } from '../lib/utils'
 import type { LogCategory } from '../types'
 import { CommonLogsFilterBar } from './common-logs-filter-bar'
+import { PersonalLogPager } from './personal-log-pager'
 import { TaskLogsFilterBar } from './task-logs-filter-bar'
 import { UsageLogsMobileList } from './usage-logs-mobile-card'
 import { useLogsViewScope, type LogsViewAccess } from './usage-logs-provider'
@@ -98,6 +104,16 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const isMobile = useMediaQuery('(max-width: 640px)')
   const searchParams = route.useSearch()
   const userId = useAuthStore((state) => state.auth.user?.id)
+  const personalFirstPage =
+    logCategory === 'common' && !isAdmin && (searchParams.page ?? 1) <= 1
+  const { data: status, isLoading: statusLoading } = useQuery({
+    ...statusQueryOptions,
+    enabled: personalFirstPage,
+  })
+  const cursorAvailable =
+    personalFirstPage &&
+    userId != null &&
+    status?.personal_log_cursor_enabled === true
   const resellerKind = useAuthStore((state) => state.auth.user?.reseller_kind)
   const { data: showBillingSource = false } = useQuery({
     queryKey: ['usage-log-billing-source', isAdmin, userId],
@@ -164,7 +180,16 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     ],
   })
 
-  const { data, isLoading, isFetching } = useQuery({
+  const personalPage = usePersonalLogPage({
+    enabled: cursorAvailable,
+    userId,
+    pageSize: pagination.pageSize,
+    searchParams,
+    columnFilters,
+  })
+  const cursorMode = cursorAvailable && !personalPage.unavailable
+  const legacyPage = useQuery({
+    enabled: !cursorMode && !(personalFirstPage && statusLoading),
     queryKey: [
       'logs',
       logCategory,
@@ -202,14 +227,20 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     },
   })
 
-  const logs = data?.items || []
+  const logs =
+    (cursorMode ? personalPage.query.data?.rows : legacyPage.data?.items) || []
   const columns = useColumnsByCategory(
     logCategory,
     isAdmin,
     isRoot,
     showBillingSource
   )
-  const isLoadingData = isLoading || (isFetching && !data)
+  const isLoadingData = cursorMode
+    ? personalPage.query.isLoading
+    : legacyPage.isLoading || (personalFirstPage && statusLoading)
+  const isFetching = cursorMode
+    ? personalPage.query.isFetching || personalPage.moving
+    : legacyPage.isFetching
 
   const { table } = useDataTable({
     data: logs as Record<string, unknown>[],
@@ -225,23 +256,52 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     onColumnFiltersChange,
     manualPagination: true,
     manualFiltering: true,
-    totalCount: data?.total || 0,
-    ensurePageInRange,
+    totalCount: cursorMode ? undefined : legacyPage.data?.total || 0,
+    ensurePageInRange: cursorMode ? undefined : ensurePageInRange,
+    getRowId: cursorMode ? (row) => String(row.record_key) : undefined,
   })
 
   const isCommon = logCategory === 'common'
+  const manualStats =
+    isCommon &&
+    !isAdmin &&
+    (cursorAvailable ||
+      personalPage.unavailable ||
+      (personalFirstPage && statusLoading))
+  const listError = cursorMode
+    ? personalPage.query.error
+    : personalPage.unavailable && legacyPage.error
+  const emptyTitle = listError ? t('Failed to load logs') : t('No Logs Found')
+  const emptyDescription = listError
+    ? getServerErrorMessage(listError, t('Failed to load logs'))
+    : t(
+        'No usage logs available. Logs will appear here once API calls are made.'
+      )
 
   return (
     <DataTablePage
       table={table}
       compactPagination={isMobile && isCommon}
+      paginationContent={
+        (cursorMode && (
+          <PersonalLogPager
+            pageSize={pagination.pageSize}
+            busy={isFetching}
+            canGoBack={personalPage.canGoBack}
+            canGoNext={personalPage.canGoNext}
+            onRefresh={personalPage.refresh}
+            onPrevious={personalPage.previous}
+            onNext={personalPage.next}
+            onPageSizeChange={(size) => table.setPageSize(size)}
+          />
+        )) ||
+        undefined
+      }
       columns={columns as ColumnDef<Record<string, unknown>>[]}
       isLoading={isLoadingData}
       isFetching={isFetching}
-      emptyTitle={t('No Logs Found')}
-      emptyDescription={t(
-        'No usage logs available. Logs will appear here once API calls are made.'
-      )}
+      emptyTitle={emptyTitle}
+      emptyDescription={emptyDescription}
       skeletonKeyPrefix='usage-log-skeleton'
       applyHeaderSize
       tableClassName={cn(
@@ -252,11 +312,17 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
           table={table}
           isLoading={isLoadingData}
           logCategory={logCategory}
+          emptyTitle={listError ? emptyTitle : undefined}
+          emptyDescription={listError ? emptyDescription : undefined}
         />
       }
       toolbar={
         isCommon ? (
-          <CommonLogsFilterBar table={table} />
+          <CommonLogsFilterBar
+            table={table}
+            onPersonalSearch={cursorMode ? personalPage.startSearch : undefined}
+            manualStats={manualStats}
+          />
         ) : (
           <TaskLogsFilterBar table={table} logCategory={logCategory} />
         )

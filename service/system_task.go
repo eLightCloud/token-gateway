@@ -129,6 +129,9 @@ func StartSystemTaskRunner() {
 }
 
 func StartLogCleanupTask(targetTimestamp int64) (*model.SystemTask, error) {
+	if err := model.RequireLogDeletionAllowed(); err != nil {
+		return nil, err
+	}
 	if targetTimestamp <= 0 {
 		return nil, errors.New("target timestamp is required")
 	}
@@ -304,6 +307,10 @@ func runWithLeaseHeartbeat(parent context.Context, task *model.SystemTask, runne
 }
 
 func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID string) {
+	if err := model.RequireLogDeletionAllowed(); err != nil {
+		failSystemTask(task, runnerID, err)
+		return
+	}
 	payload := LogCleanupPayload{}
 	if err := task.DecodePayload(&payload); err != nil {
 		failSystemTask(task, runnerID, err)

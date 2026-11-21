@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
@@ -55,8 +56,13 @@ func limitLogTimeRange(startTimestamp int64, endTimestamp int64) (int64, error) 
 }
 
 func GetAllLogs(c *gin.Context) {
+	ctx, release, ok := beginLogRead(c, true, logHistoryReadTimeout)
+	if !ok {
+		return
+	}
+	defer release()
 	pageInfo := common.GetPageQuery(c)
-	logs, total, err := model.GetAllLogs(logFilterFromQuery(c, true), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	logs, total, err := model.GetAllLogsWithContext(ctx, logFilterFromQuery(c, true), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -83,13 +89,18 @@ func GetUserLogs(c *gin.Context) {
 		}
 		filter.StartTimestamp = startTimestamp
 	}
-	logs, total, err := model.GetUserLogs(c.GetInt("id"), filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	ctx, release, ok := beginLogRead(c, true, logHistoryReadTimeout)
+	if !ok {
+		return
+	}
+	defer release()
+	logs, total, err := model.GetUserLogsWithContext(ctx, c.GetInt("id"), filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		resellerResponse(c, nil, err)
 		return
 	}
 	pageInfo.SetTotal(int(total))
-	visible, err := resellerVisibleLogs(c.GetInt("id"), logs)
+	visible, err := resellerVisibleLogsWithContext(ctx, c.GetInt("id"), logs)
 	if err != nil {
 		resellerResponse(c, nil, err)
 		return
@@ -125,11 +136,17 @@ func exportLogs(c *gin.Context, all bool) {
 		return
 	}
 	filter.StartTimestamp = startTimestamp
+	requestCtx := c.Request.Context()
+	ctx, releaseRead, acquired := beginLogRead(c, true, logExportReadTimeout)
+	if !acquired {
+		return
+	}
+	defer releaseRead()
 
 	userId := c.GetInt("id")
 	customer := false
 	if !all {
-		kind, err := model.ResellerUserKind(model.DB, userId)
+		kind, err := model.ResellerUserKind(model.DB.WithContext(ctx), userId)
 		if err != nil {
 			resellerResponse(c, nil, err)
 			return
@@ -139,7 +156,7 @@ func exportLogs(c *gin.Context, all bool) {
 			filter.UpstreamRequestId = ""
 		}
 	}
-	release, ok, err := service.AcquireLogExportLock(userId)
+	release, ok, err := service.AcquireLogExportLockWithContext(ctx, userId)
 	if err != nil {
 		common.SysError(common.LogText("failed to lock log export: %s", err.Error()))
 		common.ApiErrorT(c, "Failed to export logs")
@@ -151,6 +168,12 @@ func exportLogs(c *gin.Context, all bool) {
 	}
 	defer release()
 
+	// Give the terminal NDJSON result time to flush after a query deadline.
+	response := http.NewResponseController(c.Writer)
+	deadline, _ := ctx.Deadline()
+	if response.SetWriteDeadline(deadline.Add(time.Second)) == nil {
+		defer func() { _ = response.SetWriteDeadline(time.Time{}) }()
+	}
 	c.Header("Content-Type", "application/x-ndjson; charset=utf-8")
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Accel-Buffering", "no")
@@ -158,6 +181,9 @@ func exportLogs(c *gin.Context, all bool) {
 
 	count := 0
 	writeLog := func(log *model.Log) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		var visible any = log
 		if customer {
 			visible = resellerCustomerLog(log)
@@ -172,13 +198,12 @@ func exportLogs(c *gin.Context, all bool) {
 		count++
 		return nil
 	}
-	ctx := c.Request.Context()
 	if all {
 		err = model.StreamAllLogs(ctx, filter, c.GetInt("role"), writeLog)
 	} else {
 		err = model.StreamUserLogs(ctx, userId, filter, writeLog)
 	}
-	if ctx.Err() != nil {
+	if requestCtx.Err() != nil {
 		return
 	}
 	// The status is already sent, so the result object becomes the last line.
@@ -206,7 +231,12 @@ func GetLogByKey(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgTokenInvalid)
 		return
 	}
-	logs, err := model.GetLogByTokenId(tokenId)
+	ctx, release, ok := beginLogRead(c, false, logLatestReadTimeout)
+	if !ok {
+		return
+	}
+	defer release()
+	logs, err := model.GetLogByTokenIdWithContext(ctx, tokenId)
 	if err != nil {
 		c.JSON(200, gin.H{
 			"success": false,
@@ -214,7 +244,7 @@ func GetLogByKey(c *gin.Context) {
 		})
 		return
 	}
-	visible, err := resellerVisibleLogs(c.GetInt("id"), logs)
+	visible, err := resellerVisibleLogsWithContext(ctx, c.GetInt("id"), logs)
 	if err != nil {
 		resellerResponse(c, nil, err)
 		return
@@ -235,7 +265,12 @@ func GetLogsStat(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	ctx, release, ok := beginLogRead(c, true, logHistoryReadTimeout)
+	if !ok {
+		return
+	}
+	defer release()
+	stat, err := model.SumUsedQuotaWithContext(ctx, logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -268,13 +303,18 @@ func GetLogsSelfStat(c *gin.Context) {
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
-	channel, err := resellerVisibleStatChannel(c.GetInt("id"), channel)
+	ctx, release, ok := beginLogRead(c, true, logHistoryReadTimeout)
+	if !ok {
+		return
+	}
+	defer release()
+	channel, err := resellerVisibleStatChannel(ctx, c.GetInt("id"), channel)
 	if err != nil {
 		resellerResponse(c, nil, err)
 		return
 	}
 	group := c.Query("group")
-	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	quotaNum, err := model.SumUsedQuotaWithContext(ctx, logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
 	if err != nil {
 		resellerResponse(c, nil, err)
 		return

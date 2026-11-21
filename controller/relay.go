@@ -256,6 +256,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		finishReply()
 
 		if newAPIError == nil {
+			if newAPIError = settleChatBeforeSuccess(c); newAPIError != nil {
+				return
+			}
 			service.MarkRequestPolicySuccess(c, relayInfo.StreamStatus)
 			relayInfo.LastError = nil
 			return

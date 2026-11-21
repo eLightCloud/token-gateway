@@ -209,6 +209,9 @@ export type DataTablePageProps<TData> = {
   /** Minimal previous/next pagination for narrow feature layouts. */
   compactPagination?: boolean
 
+  /** Feature pagination for data sources that do not return a total. */
+  paginationContent?: React.ReactNode
+
   /**
    * Render pagination via `PageFooterPortal` (sticks to page footer).
    * Defaults to `true`. Set `false` to render inline below the table.
@@ -395,7 +398,7 @@ function renderPagination<TData>(
     return null
   }
 
-  const pagination = (
+  const pagination = props.paginationContent ?? (
     <DataTablePagination
       table={props.table}
       compact={props.compactPagination}

@@ -63,6 +63,32 @@ func countSystemTasks(t *testing.T, taskType string) int64 {
 	return count
 }
 
+func TestLogRetentionBlocksNewAndQueuedCleanup(t *testing.T) {
+	truncate(t)
+	t.Setenv("LOG_ALLOW_DELETION", "")
+	cutoff := common.GetTimestamp()
+	entry := model.Log{CreatedAt: cutoff - 1, RequestId: "retained-cleanup-test"}
+	require.NoError(t, model.LOG_DB.Create(&entry).Error)
+	t.Cleanup(func() { _ = model.LOG_DB.Delete(&entry).Error })
+
+	_, err := StartLogCleanupTask(cutoff)
+	require.EqualError(t, err, "Usage log deletion is disabled")
+	assert.Zero(t, countSystemTasks(t, model.SystemTaskTypeLogCleanup))
+	_, err = model.DeleteOldLogBatch(context.Background(), cutoff, 1)
+	require.EqualError(t, err, "Usage log deletion is disabled")
+
+	queued, err := model.CreateSystemTask(model.SystemTaskTypeLogCleanup, LogCleanupPayload{TargetTimestamp: cutoff}, LogCleanupState{})
+	require.NoError(t, err)
+	claimed, ok, err := model.ClaimSystemTask(queued.ID, queued.Type, "retention-test", cutoff+60)
+	require.NoError(t, err)
+	require.True(t, ok)
+	runLogCleanupTask(context.Background(), claimed, "retention-test")
+	finished, err := model.GetLatestSystemTask(model.SystemTaskTypeLogCleanup)
+	require.NoError(t, err)
+	assert.Equal(t, model.SystemTaskStatusFailed, finished.Status)
+	require.NoError(t, model.LOG_DB.Where("request_id = ?", entry.RequestId).Take(&model.Log{}).Error)
+}
+
 func TestSystemTaskSchedulerCreatesWhenDueAndDedups(t *testing.T) {
 	truncate(t)
 

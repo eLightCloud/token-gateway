@@ -24,10 +24,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { formatLogQuota } from '@/lib/format'
 import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getLogStats, getUserLogStats } from '../api'
 import { DEFAULT_LOG_STATS } from '../constants'
 import { buildApiParams } from '../lib/utils'
+import { PersonalLogStatsAction } from './personal-log-stats-action'
 import { useLogsViewScope, useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
@@ -48,19 +50,32 @@ function StatBadge(props: {
   )
 }
 
-export function CommonLogsStats() {
+export function CommonLogsStats(props: { manual?: boolean }) {
   const { t } = useTranslation()
   const { isAdminView: isAdmin } = useLogsViewScope()
+  const userId = useAuthStore((state) => state.auth.user?.id)
   const searchParams = route.useSearch()
+  const statSearch = props.manual
+    ? {
+        startTime: searchParams.startTime,
+        endTime: searchParams.endTime,
+        model: searchParams.model,
+        token: searchParams.token,
+        group: searchParams.group,
+      }
+    : searchParams
   const { sensitiveVisible } = useUsageLogsContext()
 
-  const { data: stats, isLoading } = useQuery({
-    queryKey: ['usage-logs-stats', isAdmin, searchParams],
+  const query = useQuery({
+    enabled: !props.manual,
+    queryKey: props.manual
+      ? ['usage-logs-stats', 'manual', userId, statSearch]
+      : ['usage-logs-stats', isAdmin, statSearch],
     queryFn: async () => {
       const params = buildApiParams({
         page: 1,
         pageSize: 1,
-        searchParams,
+        searchParams: statSearch,
         columnFilters: [],
         isAdmin,
       })
@@ -73,10 +88,11 @@ export function CommonLogsStats() {
         ? result.data || DEFAULT_LOG_STATS
         : DEFAULT_LOG_STATS
     },
-    placeholderData: (previousData) => previousData,
+    placeholderData: props.manual ? undefined : (previousData) => previousData,
+    ...(props.manual && { retry: false, meta: { errorToast: false } }),
   })
 
-  if (isLoading) {
+  if (query.isLoading && !props.manual) {
     return (
       <div className='flex items-center gap-2'>
         <Skeleton className='h-7 w-[150px] rounded-md' />
@@ -86,7 +102,8 @@ export function CommonLogsStats() {
     )
   }
 
-  return (
+  const stats = query.data
+  const badges = (
     <div className='flex flex-wrap items-center gap-2'>
       <StatBadge
         label={t('Usage')}
@@ -105,4 +122,16 @@ export function CommonLogsStats() {
       />
     </div>
   )
+  if (props.manual) {
+    return (
+      <PersonalLogStatsAction
+        busy={query.isFetching}
+        error={query.error}
+        onCalculate={() => void query.refetch()}
+      >
+        {stats && !query.isError && badges}
+      </PersonalLogStatsAction>
+    )
+  }
+  return badges
 }

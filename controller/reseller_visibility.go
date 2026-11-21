@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -8,18 +9,26 @@ import (
 )
 
 func resellerVisibleLogs(userID int, logs []*model.Log) (any, error) {
-	kind, err := model.ResellerUserKind(model.DB, userID)
+	return resellerVisibleLogsWithContext(context.Background(), userID, logs)
+}
+
+func resellerVisibleLogsWithContext(ctx context.Context, userID int, logs []*model.Log) (any, error) {
+	kind, err := model.ResellerUserKind(model.DB.WithContext(ctx), userID)
 	if err != nil {
 		return nil, err
 	}
+	return projectLogsForReseller(kind, logs), nil
+}
+
+func projectLogsForReseller(kind string, logs []*model.Log) any {
 	if kind != "agent_customer" {
-		return logs, nil
+		return logs
 	}
 	rows := make([]map[string]any, 0, len(logs))
 	for _, entry := range logs {
 		rows = append(rows, resellerCustomerLog(entry))
 	}
-	return rows, nil
+	return rows
 }
 
 func resellerCustomerLog(entry *model.Log) map[string]any {
@@ -147,8 +156,8 @@ func resellerVisibleMidjourney(userID int, tasks []*model.Midjourney) (any, erro
 }
 
 // Customer statistics cannot expose host routing through filter-based inference.
-func resellerVisibleStatChannel(userID, channel int) (int, error) {
-	kind, err := model.ResellerUserKind(model.DB, userID)
+func resellerVisibleStatChannel(ctx context.Context, userID, channel int) (int, error) {
+	kind, err := model.ResellerUserKind(model.DB.WithContext(ctx), userID)
 	if err != nil {
 		return 0, err
 	}

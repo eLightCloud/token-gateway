@@ -64,6 +64,18 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 // transaction commits first; a log-database failure leaves the outbox journal
 // for billing_recovery instead of losing the invoice row.
 func SettleBillingAndRecordConsumeLog(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int, params model.RecordConsumeLogParams, applyUsage bool) error {
+	if ctx != nil && ctx.Request != nil {
+		if proof := RelaySettlementFor(ctx.Request.Context()); proof != nil {
+			proof.Commit = func() error {
+				return settleBillingAndRecordConsumeLog(ctx, relayInfo, actualQuota, params, applyUsage)
+			}
+			return nil
+		}
+	}
+	return settleBillingAndRecordConsumeLog(ctx, relayInfo, actualQuota, params, applyUsage)
+}
+
+func settleBillingAndRecordConsumeLog(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int, params model.RecordConsumeLogParams, applyUsage bool) error {
 	if relayInfo == nil {
 		return fmt.Errorf("relayInfo is nil")
 	}
