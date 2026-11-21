@@ -59,6 +59,7 @@ docs/70-research/claude 兼容/numspirit-测试证据-2026-10-22-180827/
 docs/70-research/claude 兼容/lighting-API补测证据-2026-10-22-232155/
 docs/70-research/claude 兼容/numspirit-API补测证据-2026-10-22-232155/
 docs/70-research/2026-11-21-Browser-Use复验证据
+assets
 
 # 本地运行工作区（PID、本地构建二进制、运行日志）
 /.local/
