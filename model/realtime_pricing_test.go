@@ -123,6 +123,9 @@ func TestRealtimePricing(t *testing.T) {
 	org := Organization{Name: "rt-org", Status: OrganizationStatusEnabled}
 	require.NoError(t, db.Create(&org).Error)
 	require.NoError(t, db.Create(&OrganizationMember{OrganizationId: org.Id, UserId: user.Id, Role: OrganizationRoleMember}).Error)
+	retiredDiscount := OrganizationDiscountSnapshot{OrganizationId: org.Id, ChannelDiscounts: "{broken"}
+	require.NoError(t, db.Create(&retiredDiscount).Error)
+	require.NoError(t, db.Model(&org).Update("current_discount_snapshot_id", retiredDiscount.Id).Error)
 	conflicts, err := MigrateRealtimePricing(root.Id, "freeze")
 	require.NoError(t, err)
 	assert.Empty(t, conflicts)

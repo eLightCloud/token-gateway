@@ -291,30 +291,15 @@ func applyRealtimePricingTx(tx *gorm.DB, user User, snapshots map[string]*types.
 	}
 	organizationID := 0
 	organization := &RealtimePricingConfig{Items: []RealtimePricingItem{}}
-	var oldDiscount *types.OrganizationDiscountSnapshot
 	if len(members) == 1 {
 		organizationID = members[0].OrganizationId
 		var org Organization
-		if err := tx.First(&org, organizationID).Error; err != nil {
+		if err := tx.Select("id").First(&org, organizationID).Error; err != nil {
 			return err
 		}
 		organization, err = ReadRealtimePricing(tx, "organization", organizationID, modelNames...)
 		if err != nil {
 			return err
-		}
-		if org.CurrentDiscountSnapshotId > 0 {
-			var old OrganizationDiscountSnapshot
-			if err := tx.First(&old, "id = ? AND organization_id = ?", org.CurrentDiscountSnapshotId, org.Id).Error; err != nil {
-				return err
-			}
-			discounts, err := UnmarshalOrganizationChannelDiscounts(old.ChannelDiscounts)
-			if err != nil {
-				return err
-			}
-			oldDiscount = &types.OrganizationDiscountSnapshot{SnapshotID: old.Id, ChannelDiscounts: map[int]float64{}}
-			for id, ratio := range discounts {
-				oldDiscount.ChannelDiscounts[id] = OrganizationDiscountRatioFloatFromScaled(ratio)
-			}
 		}
 	}
 	for name, snapshot := range snapshots {
@@ -351,7 +336,7 @@ func applyRealtimePricingTx(tx *gorm.DB, user User, snapshots map[string]*types.
 			channels = oldChannels
 		}
 		snapshot.Channels = channels
-		snapshot.Realtime = &types.RealtimePricingContext{Version: RealtimePricingVersion, OrganizationID: organizationID, UserRevision: personal.Revision, OrganizationRevision: organization.Revision, LegacyDiscount: oldDiscount}
+		snapshot.Realtime = &types.RealtimePricingContext{Version: RealtimePricingVersion, OrganizationID: organizationID, UserRevision: personal.Revision, OrganizationRevision: organization.Revision}
 		snapshots[name] = snapshot
 	}
 	return nil

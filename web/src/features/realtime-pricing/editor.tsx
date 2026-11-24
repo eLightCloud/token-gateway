@@ -268,7 +268,7 @@ function PricingDraft(props: {
         <div role='status' className='space-y-2 rounded border p-3'>
           <p>
             {t(
-              'Realtime pricing is not active. Existing pricing remains in effect.'
+              'Realtime pricing is not active. Existing personal ratios remain in effect.'
             )}
           </p>
           {viewer?.role === ROLE.SUPER_ADMIN && (
@@ -305,7 +305,7 @@ function PricingDraft(props: {
         }}
         title={t('Confirm pricing migration')}
         desc={t(
-          'Ensure all instances support this release and configuration is backed up. Activation migrates personal consumption rules; conflicts prevent activation. Existing organization channel factors remain unchanged.'
+          'Back up the configuration and confirm that all instances support this release. Activation migrates personal pricing rules. Conflicts prevent activation.'
         )}
         handleConfirm={() => {
           if (migrationConfirm) migration.mutate(migrationConfirm)

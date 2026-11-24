@@ -18,9 +18,12 @@ func readReadyOrganizationInvoicePeriods(org int, period model.OrganizationInvoi
 		if summary == nil || summary.Status != model.OrganizationInvoiceSummaryStatusReady || (!summary.Finalized && now > summary.PeriodEnd) {
 			return nil, false, nil
 		}
-		invoice, err := model.DecodeOrganizationInvoiceSummary(*summary)
+		invoice, err := readOrganizationInvoicePublication(*summary)
 		if err != nil {
 			return nil, false, err
+		}
+		if invoice == nil {
+			return nil, false, nil
 		}
 		invoices = append(invoices, invoice)
 	}
@@ -37,4 +40,14 @@ func readReadyOrganizationInvoicePeriods(org int, period model.OrganizationInvoi
 		}
 	}
 	return invoice, true, nil
+}
+
+// Normal queries repair invalid cache publications under a revision guard.
+// A nil result with no error tells the caller to register normal build work.
+func readOrganizationInvoicePublication(summary model.OrganizationInvoicePeriodSummary) (*model.OrganizationInvoice, error) {
+	invoice, err := model.DecodeOrganizationInvoiceSummary(summary)
+	if err != nil {
+		return nil, model.InvalidateUnreadableOrganizationInvoiceSummary(summary)
+	}
+	return invoice, nil
 }

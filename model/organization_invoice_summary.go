@@ -58,15 +58,14 @@ type OrganizationInvoicePeriodSummary struct {
 	Finalized                   bool                             `json:"finalized" gorm:"not null"`
 	WalletPayload               []byte                           `json:"-"`
 	Payload                     []byte                           `json:"-"`
-	// RuleRecalcPayload holds the previous ready invoice payload after a
-	// settlement-rule change so the worker can rebuild amounts without
-	// re-reading consumption or wallet facts. Every fact-change invalidation
-	// clears it; only the rule-change path writes it.
+	// RuleRecalcPayload identifies work claimed before settlement factor retirement.
 	RuleRecalcPayload []byte `json:"-" gorm:"column:rule_recalc_payload"`
-	Metrics           string `json:"metrics,omitempty" gorm:"type:text"`
-	Error             string `json:"error,omitempty" gorm:"type:text"`
-	CreatedAt         int64  `json:"created_at" gorm:"autoCreateTime;column:created_at"`
-	UpdatedAt         int64  `json:"updated_at" gorm:"autoUpdateTime;column:updated_at;index"`
+	// LegacyRulePublication keeps the original bytes for audit after retirement.
+	LegacyRulePublication []byte `json:"-"`
+	Metrics               string `json:"metrics,omitempty" gorm:"type:text"`
+	Error                 string `json:"error,omitempty" gorm:"type:text"`
+	CreatedAt             int64  `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	UpdatedAt             int64  `json:"updated_at" gorm:"autoUpdateTime;column:updated_at;index"`
 }
 
 type OrganizationInvoiceBaseline struct {
@@ -115,15 +114,16 @@ func GetOrganizationInvoiceBaseline(organizationId int) (*OrganizationInvoiceBas
 	return &baseline, nil
 }
 
-func DecodeOrganizationInvoiceSummary(summary OrganizationInvoicePeriodSummary) (*OrganizationInvoice, error) {
-	if summary.Status != OrganizationInvoiceSummaryStatusReady || len(summary.Payload) == 0 {
-		return nil, errors.New("organization invoice summary is not ready")
-	}
-	var invoice OrganizationInvoice
-	if err := common.Unmarshal(summary.Payload, &invoice); err != nil {
-		return nil, fmt.Errorf("decode organization invoice summary: %w", err)
-	}
-	return &invoice, nil
+// InvalidateUnreadableOrganizationInvoiceSummary registers a fresh build
+// only if the unusable publication is still the generation the reader saw.
+func InvalidateUnreadableOrganizationInvoiceSummary(summary OrganizationInvoicePeriodSummary) error {
+	return DB.Model(&OrganizationInvoicePeriodSummary{}).
+		Where("id = ? AND revision = ? AND status = ?", summary.Id, summary.Revision, OrganizationInvoiceSummaryStatusReady).
+		Updates(map[string]any{
+			"status":  OrganizationInvoiceSummaryStatusInvalidated,
+			"payload": nil, "wallet_payload": nil,
+			"error": "invoice snapshot consumption could not be verified", "updated_at": common.GetTimestamp(),
+		}).Error
 }
 
 func CompleteOrganizationInvoiceSummaryWithMetrics(
@@ -131,7 +131,7 @@ func CompleteOrganizationInvoiceSummaryWithMetrics(
 	invoice *OrganizationInvoice,
 	metrics string,
 ) error {
-	return publishOrganizationInvoiceSnapshot(context.Background(), summary, invoice, metrics, true)
+	return publishOrganizationInvoiceSnapshot(context.Background(), summary, invoice, metrics)
 }
 
 func FailOrganizationInvoiceSummary(summary OrganizationInvoicePeriodSummary, buildErr error) error {
@@ -163,7 +163,7 @@ func InvalidateOrganizationInvoiceSummaries(organizationId int, effectiveMonth i
 	if err != nil {
 		return fmt.Errorf("invalid invoice summary effective month: %w", err)
 	}
-	return invalidateOrganizationInvoiceSummariesFrom(DB, organizationId, start.Unix(), "invalidated by accounting fact or rule change")
+	return invalidateOrganizationInvoiceSummariesFrom(DB, organizationId, start.Unix(), "invalidated by accounting fact change")
 }
 
 // organizationInvoiceMonthStartContaining 返回 t 所在组织账单月的第一秒。成员关系变更
@@ -182,68 +182,11 @@ func invalidateOrganizationInvoiceSummariesFrom(
 	return tx.Model(&OrganizationInvoicePeriodSummary{}).
 		Where("organization_id = ? AND period_end >= ?", organizationId, periodStart).
 		Updates(map[string]any{
-			"status":              OrganizationInvoiceSummaryStatusInvalidated,
-			"payload":             nil,
-			"rule_recalc_payload": nil,
-			"error":               reason,
-			"updated_at":          common.GetTimestamp(),
+			"status":     OrganizationInvoiceSummaryStatusInvalidated,
+			"payload":    nil,
+			"error":      reason,
+			"updated_at": common.GetTimestamp(),
 		}).Error
-}
-
-// invalidateOrganizationInvoiceSummariesForRuleChange marks affected summaries
-// invalidated by a settlement-rule change and preserves each previous ready
-// payload as the protected input of the light recalculation. Non-ready rows
-// have nothing to reuse and follow the plain invalidation. The caller runs
-// this inside the same transaction that saves the rule.
-func invalidateOrganizationInvoiceSummariesForRuleChange(
-	tx *gorm.DB,
-	organizationId int,
-	periodStart int64,
-	reason string,
-) error {
-	var affected []OrganizationInvoicePeriodSummary
-	// A fact invalidation must serialize with capturing the protected input.
-	// A plain snapshot read can otherwise resurrect a payload cleared by a
-	// concurrent task confirmation or log delivery.
-	if err := lockForUpdate(tx).Select("id, calculation_version, status, payload, rule_recalc_payload").
-		Where(
-			"organization_id = ? AND period_end >= ?",
-			organizationId, periodStart,
-		).
-		Order("id").Find(&affected).Error; err != nil {
-		return err
-	}
-	recalcInputs := make(map[int64][]byte, len(affected))
-	for _, summary := range affected {
-		if summary.CalculationVersion != OrganizationInvoiceSummaryCalculationVersion {
-			continue
-		}
-		if summary.Status == OrganizationInvoiceSummaryStatusReady && len(summary.Payload) > 0 {
-			recalcInputs[summary.Id] = summary.Payload
-		} else if len(summary.RuleRecalcPayload) > 0 {
-			// Repeated rule-only edits share the same frozen facts. Fact-change
-			// invalidations clear this input and can never enter this branch.
-			recalcInputs[summary.Id] = summary.RuleRecalcPayload
-		}
-	}
-	if err := tx.Model(&OrganizationInvoicePeriodSummary{}).
-		Where("organization_id = ? AND period_end >= ?", organizationId, periodStart).
-		Updates(map[string]any{
-			"status":              OrganizationInvoiceSummaryStatusInvalidated,
-			"payload":             nil,
-			"rule_recalc_payload": nil,
-			"error":               reason,
-			"updated_at":          common.GetTimestamp(),
-		}).Error; err != nil {
-		return err
-	}
-	for id, payload := range recalcInputs {
-		if err := tx.Model(&OrganizationInvoicePeriodSummary{}).Where("id = ?", id).
-			Updates(map[string]any{"rule_recalc_payload": payload}).Error; err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func InvalidateOrganizationInvoicePeriods(
@@ -268,11 +211,10 @@ func InvalidateOrganizationInvoicePeriods(
 					OrganizationInvoiceSummaryCalculationVersion,
 				).
 				Updates(map[string]any{
-					"status":              OrganizationInvoiceSummaryStatusInvalidated,
-					"payload":             nil,
-					"rule_recalc_payload": nil,
-					"error":               "invalidated by explicit refresh",
-					"updated_at":          now,
+					"status":     OrganizationInvoiceSummaryStatusInvalidated,
+					"payload":    nil,
+					"error":      "invalidated by explicit refresh",
+					"updated_at": now,
 				}).Error; err != nil {
 				return err
 			}

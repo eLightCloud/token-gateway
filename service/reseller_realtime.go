@@ -30,7 +30,7 @@ func reservePersonalRealtimeUsage(c *gin.Context, info *relaycommon.RelayInfo, u
 	state := value.(*personalRealtimeReservation)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	quota, clamp := calculateAudioQuota(QuotaInfo{InputDetails: TokenDetails{TextTokens: usage.InputTokenDetails.TextTokens, AudioTokens: usage.InputTokenDetails.AudioTokens}, OutputDetails: TokenDetails{TextTokens: usage.OutputTokenDetails.TextTokens, AudioTokens: usage.OutputTokenDetails.AudioTokens}, ModelName: info.OriginModelName, UsePrice: info.UsePrice, ModelRatio: info.PriceData.ModelRatio, GroupRatio: info.PriceData.GroupRatioInfo.GroupRatio, DiscountRatio: organizationDiscountRatioFloat(info.PriceData)})
+	quota, clamp := calculateAudioQuota(QuotaInfo{InputDetails: TokenDetails{TextTokens: usage.InputTokenDetails.TextTokens, AudioTokens: usage.InputTokenDetails.AudioTokens}, OutputDetails: TokenDetails{TextTokens: usage.OutputTokenDetails.TextTokens, AudioTokens: usage.OutputTokenDetails.AudioTokens}, ModelName: info.OriginModelName, UsePrice: info.UsePrice, ModelRatio: info.PriceData.ModelRatio, GroupRatio: info.PriceData.GroupRatioInfo.GroupRatio})
 	noteQuotaClamp(info, clamp)
 	if clamp != nil {
 		return 0, clamp

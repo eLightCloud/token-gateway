@@ -76,7 +76,7 @@ func RecalculateOrganizationInvoicePeriods(ctx context.Context, organizationId i
 				Updates(map[string]any{
 					"revision": row.Revision + 1, "status": OrganizationInvoiceSummaryStatusBuilding,
 					"stage": OrganizationInvoiceStagePending, "source_as_of": min(now, row.PeriodEnd),
-					"evidence_as_of": 0, "log_high_watermark": nil, "rule_recalc_payload": nil,
+					"evidence_as_of": 0, "log_high_watermark": nil,
 					"wallet_payload": nil, "metrics": "", "error": "", "failure_kind": "",
 					"finalized": now > row.PeriodEnd, "updated_at": now,
 				})

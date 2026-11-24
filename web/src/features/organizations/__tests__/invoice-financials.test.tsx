@@ -18,180 +18,18 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import { createInstance } from 'i18next'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { I18nextProvider } from 'react-i18next'
-import { afterAll, beforeAll, describe, test, expect, vi } from 'vitest'
+import { describe, test, expect } from 'vitest'
 
 import en from '@/i18n/locales/en.json'
 import zh from '@/i18n/locales/zh.json'
 
-import { SettlementRulesSheet } from '../invoice'
-import * as invoiceApi from '../invoice-api'
 import { OrganizationInvoiceFinancialSummary } from '../invoice-financial-summary'
 import { OrganizationInvoiceReconciliation } from '../invoice-reconciliation'
 import type { OrganizationInvoice } from '../invoice-types'
-
-describe('settlement settings discovery', () => {
-  const animations = Object.getOwnPropertyDescriptor(
-    HTMLElement.prototype,
-    'getAnimations'
-  )
-  beforeAll(() => {
-    Object.defineProperty(HTMLElement.prototype, 'getAnimations', {
-      configurable: true,
-      value: () => [],
-    })
-  })
-  afterAll(() => {
-    if (animations) {
-      Object.defineProperty(HTMLElement.prototype, 'getAnimations', animations)
-    } else {
-      Reflect.deleteProperty(HTMLElement.prototype, 'getAnimations')
-    }
-  })
-  test.each(['preparing', 'updating', 'failed', 'ready'] as const)(
-    'only a ready empty basis shows no categories: %s',
-    async (status) => {
-      vi.spyOn(invoiceApi, 'getOrganizationSettlementRules').mockResolvedValue({
-        success: true,
-        data: [],
-        discovery: { status },
-      })
-      const client = new QueryClient({
-        defaultOptions: { queries: { retry: false } },
-      })
-      const view = render(
-        <QueryClientProvider client={client}>
-          <SettlementRulesSheet
-            open
-            onOpenChange={() => {}}
-            organizationId={1}
-            authenticatedUserId={1}
-          />
-        </QueryClientProvider>
-      )
-      await waitFor(() =>
-        expect(invoiceApi.getOrganizationSettlementRules).toHaveBeenCalled()
-      )
-      if (status === 'ready') {
-        expect(
-          await screen.findByText(
-            'No used model categories are available to configure.'
-          )
-        ).toBeTruthy()
-      } else {
-        const label = {
-          failed:
-            'Settlement category discovery failed. Retry the preparation, then save again.',
-          preparing: 'Preparing used model categories...',
-          updating: 'Category list is updating in the background.',
-        }[status]
-        expect(await screen.findByText(label)).toBeTruthy()
-        expect(
-          screen.queryByText(
-            'No used model categories are available to configure.'
-          )
-        ).toBeNull()
-      }
-      view.unmount()
-      client.clear()
-    }
-  )
-
-  test('a waiting save preserves the input and never automatically repeats PUT', async () => {
-    const rule = {
-      category_key: 'gpt',
-      category_name: 'GPT',
-      fallback: false,
-      models: ['gpt-5'],
-      factor: '1.0000',
-      factor_scaled: 10000,
-      effective_month: '2026-10',
-      version: 0,
-      inherited: true,
-    }
-    vi.spyOn(invoiceApi, 'getOrganizationSettlementRules').mockResolvedValue({
-      success: true,
-      data: [rule],
-      discovery: { status: 'ready' },
-    })
-    const save = vi
-      .spyOn(invoiceApi, 'updateOrganizationSettlementRule')
-      .mockResolvedValue({
-        success: false,
-        code: 'settlement_category_preparing',
-        retryable: true,
-      })
-    const client = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-        mutations: { retry: false },
-      },
-    })
-    const view = render(
-      <QueryClientProvider client={client}>
-        <SettlementRulesSheet
-          open
-          onOpenChange={() => {}}
-          organizationId={1}
-          authenticatedUserId={1}
-        />
-      </QueryClientProvider>
-    )
-    const input = await screen.findByLabelText('Settlement factor')
-    fireEvent.change(input, { target: { value: '0.9' } })
-    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
-    await waitFor(() =>
-      expect(invoiceApi.getOrganizationSettlementRules).toHaveBeenCalledTimes(2)
-    )
-    expect(input).toHaveValue('0.9')
-    expect(save).toHaveBeenCalledTimes(1)
-    view.unmount()
-    client.clear()
-  })
-
-  test('closing settings cancels the request without submitting a save', async () => {
-    let signal: AbortSignal | undefined
-    vi.spyOn(invoiceApi, 'getOrganizationSettlementRules').mockImplementation(
-      (_month, _org, requestSignal) => {
-        signal = requestSignal
-        return new Promise(() => {})
-      }
-    )
-    const save = vi.spyOn(invoiceApi, 'updateOrganizationSettlementRule')
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    })
-    const panel = (open: boolean) => (
-      <QueryClientProvider client={client}>
-        <SettlementRulesSheet
-          open={open}
-          onOpenChange={() => {}}
-          organizationId={1}
-          authenticatedUserId={1}
-        />
-      </QueryClientProvider>
-    )
-    const view = render(panel(true))
-    await waitFor(() => expect(signal).toBeDefined())
-    view.rerender(panel(false))
-    await waitFor(() => expect(signal?.aborted).toBe(true))
-    expect(save).not.toHaveBeenCalled()
-    view.unmount()
-    client.clear()
-  })
-})
 
 describe('organization invoice financial summary', () => {
   test('renders an account with inflow even when its usage is zero', async () => {
@@ -239,7 +77,6 @@ describe('organization invoice financial summary', () => {
       model_rows: [],
       gross_total_quota: 0,
       gross_total_amount_usd: '0',
-      settled_total_amount_usd: '0',
     }
 
     const html = renderToStaticMarkup(
@@ -384,7 +221,6 @@ function completeInvoice(): OrganizationInvoice {
     model_rows: [],
     gross_total_quota: 100,
     gross_total_amount_usd: '20',
-    settled_total_amount_usd: '18',
   }
 }
 
@@ -433,6 +269,7 @@ test.each(['missing', 'empty', 'incomplete', 'counter', 'issue'] as const)(
     const html = await financialMarkup(invoice)
     expect(html).toContain('Expenses awaiting confirmation')
     expect(html).toContain('subtotal, not a complete bill')
+    expect(html).not.toContain('The settlement amount')
   }
 )
 
@@ -523,7 +360,7 @@ test('financial headers and explanations follow the selected language without ch
     })
   ).toBeVisible()
   expect(screen.getAllByRole('columnheader')).toHaveLength(13)
-  expect(screen.getByText(/final fee is determined/)).toBeVisible()
+  expect(screen.getByText(/final charge recorded for usage/)).toBeVisible()
   const row = screen.getByText('alice').closest('tr')
   assert.ok(row)
   expect(within(row).getAllByRole('cell')).toHaveLength(13)
@@ -537,7 +374,7 @@ test('financial headers and explanations follow the selected language without ch
   expect(
     screen.getByRole('columnheader', { name: '当前余额（查询时）' })
   ).toBeVisible()
-  expect(screen.getByText(/不表示管理员已确认账单或已付款/)).toBeVisible()
+  expect(screen.getByText(/用量对应的已入账最终费用/)).toBeVisible()
   expect(JSON.stringify(invoice)).toBe(snapshot)
 })
 

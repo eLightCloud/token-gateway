@@ -53,31 +53,6 @@ func RunOrganizationInvoiceMonthlyBuild(ctx context.Context, item *OrganizationI
 	organizationId := summary.OrganizationId
 	dataPeriod := organizationInvoiceEffectiveDataPeriod(summary, item.Period)
 
-	// A settlement-rule change left the previous ready payload as the protected
-	// recalc input: re-apply the current rule table onto it instead of replaying
-	// the period. Fact-change invalidations clear the input, so an unusable or
-	// missing payload simply falls through to the full rebuild below.
-	if len(summary.RuleRecalcPayload) > 0 {
-		published, err := tryOrganizationInvoiceRuleRecalc(ctx, summary, item.Period)
-		if err != nil {
-			if errors.Is(err, ErrOrganizationInvoiceBuildSuperseded) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return failOrganizationInvoiceBuild(summary, err)
-		}
-		if published {
-			return nil
-		}
-		if err := DB.Model(&OrganizationInvoicePeriodSummary{}).
-			Where("id = ? AND revision = ? AND status = ?", summary.Id, summary.Revision, OrganizationInvoiceSummaryStatusBuilding).
-			Update("rule_recalc_payload", nil).Error; err != nil {
-			return failOrganizationInvoiceBuild(summary, err)
-		}
-	}
-
 	// Wallet baseline/history failures must not suppress confirmed consumption.
 	// Missing wallet evidence is carried into its independent diagnostics.
 	metrics := &OrganizationInvoiceCoverageMetrics{}
@@ -212,7 +187,7 @@ func RunOrganizationInvoiceMonthlyBuild(ctx context.Context, item *OrganizationI
 	invoice.Revision = summary.Revision
 	invoice.Period = item.Period
 	invoice.CoveragePeriod = dataPeriod
-	if err := publishOrganizationInvoiceSnapshot(ctx, summary, invoice, string(metricsText), true); err != nil {
+	if err := publishOrganizationInvoiceSnapshot(ctx, summary, invoice, string(metricsText)); err != nil {
 		// A superseded generation (invalidated or re-claimed meanwhile) is not
 		// a failure: the newer generation owns the row now.
 		if errors.Is(err, ErrOrganizationInvoiceBuildSuperseded) {
@@ -445,14 +420,6 @@ func GetOrganizationInvoiceWithAggregates(
 	if err != nil {
 		return nil, err
 	}
-	months, err := organizationInvoiceMonths(period)
-	if err != nil {
-		return nil, err
-	}
-	rules, err := loadOrganizationSettlementRules(organizationId, months[len(months)-1].key)
-	if err != nil {
-		return nil, err
-	}
 	accountQuotas, models, categories, grossTotalQuota, err := accumulateOrganizationInvoiceAggregates(aggregates)
 	if err != nil {
 		return nil, err
@@ -476,20 +443,16 @@ func GetOrganizationInvoiceWithAggregates(
 	if err != nil {
 		return nil, err
 	}
-	categoryRows, settledTotal, err := buildOrganizationInvoiceCategoryRows(categories, accounts, months, rules)
-	if err != nil {
-		return nil, err
-	}
+	categoryRows := buildOrganizationInvoiceCategoryRows(categories, accounts)
 	modelRows := buildOrganizationInvoiceModelRows(models, accounts, grossTotalQuota)
 	return &OrganizationInvoice{
-		WalletWarning:         walletWarning,
-		Period:                period,
-		Currency:              "USD",
-		Accounts:              accounts,
-		CategoryRows:          categoryRows,
-		ModelRows:             modelRows,
-		GrossTotalQuota:       grossTotalQuota,
-		GrossTotalAmountUSD:   organizationInvoiceAmountString(grossTotalQuota),
-		SettledTotalAmountUSD: settledTotal.StringFixed(10),
+		WalletWarning:       walletWarning,
+		Period:              period,
+		Currency:            "USD",
+		Accounts:            accounts,
+		CategoryRows:        categoryRows,
+		ModelRows:           modelRows,
+		GrossTotalQuota:     grossTotalQuota,
+		GrossTotalAmountUSD: organizationInvoiceAmountString(grossTotalQuota),
 	}, nil
 }

@@ -40,17 +40,6 @@ func (f *organizationInvoiceCSVAmountFormatter) amount(value string) string {
 	return formatted
 }
 
-func invoiceCSVFactor(row model.OrganizationInvoiceCategoryRow) string {
-	if !row.MultipleFactors {
-		return row.Factor
-	}
-	parts := make([]string, 0, len(row.FactorSegments))
-	for _, segment := range row.FactorSegments {
-		parts = append(parts, segment.PeriodMonth+":"+segment.Factor)
-	}
-	return strings.Join(parts, "; ")
-}
-
 func writeOrganizationInvoiceCSV(
 	writer *csv.Writer,
 	exportContext *model.OrganizationInvoiceExportContext,
@@ -74,9 +63,9 @@ func writeOrganizationInvoiceCSV(
 		)
 		categoryHeader = append(categoryHeader, model.OrganizationBillingUsername(account.Username, account.UserId))
 	}
-	categoryDisplayNameHeader = append(categoryDisplayNameHeader, "", "", "")
-	categoryHeader = append(categoryHeader, "折前合计", "结算系数", "结算后金额")
-	_ = writer.Write([]string{"# 模型归类结算汇总"})
+	categoryDisplayNameHeader = append(categoryDisplayNameHeader, "")
+	categoryHeader = append(categoryHeader, "消费合计")
+	_ = writer.Write([]string{"# 模型分类消费汇总"})
 	_ = writer.Write(categoryDisplayNameHeader)
 	_ = writer.Write(categoryHeader)
 	for _, row := range invoice.CategoryRows {
@@ -84,24 +73,14 @@ func writeOrganizationInvoiceCSV(
 		for _, amount := range row.AccountAmounts {
 			record = append(record, amountFormatter.amount(amount.GrossAmountUSD))
 		}
-		record = append(
-			record,
-			amountFormatter.amount(row.GrossAmountUSD),
-			invoiceCSVFactor(row),
-			amountFormatter.amount(row.SettledAmountUSD),
-		)
+		record = append(record, amountFormatter.amount(row.GrossAmountUSD))
 		_ = writer.Write(record)
 	}
 	categoryTotal := []string{"合计"}
 	for _, account := range invoice.Accounts {
 		categoryTotal = append(categoryTotal, amountFormatter.amount(account.GrossAmountUSD))
 	}
-	categoryTotal = append(
-		categoryTotal,
-		amountFormatter.amount(invoice.GrossTotalAmountUSD),
-		"—",
-		amountFormatter.amount(invoice.SettledTotalAmountUSD),
-	)
+	categoryTotal = append(categoryTotal, amountFormatter.amount(invoice.GrossTotalAmountUSD))
 	_ = writer.Write(categoryTotal)
 	previousBalanceAmounts := []string{"用户上期余额"}
 	periodRechargeAmounts := []string{"用户当期流入金额"}
@@ -125,10 +104,10 @@ func writeOrganizationInvoiceCSV(
 			amountFormatter.optionalAmount(account.Financials.CurrentBalanceAmountUSD),
 		)
 	}
-	previousBalanceAmounts = append(previousBalanceAmounts, "", "", "")
-	periodRechargeAmounts = append(periodRechargeAmounts, "", "", "")
-	consumptionAmounts = append(consumptionAmounts, "", "", "")
-	currentBalances = append(currentBalances, "", "", "")
+	previousBalanceAmounts = append(previousBalanceAmounts, "")
+	periodRechargeAmounts = append(periodRechargeAmounts, "")
+	consumptionAmounts = append(consumptionAmounts, "")
+	currentBalances = append(currentBalances, "")
 	_ = writer.Write(previousBalanceAmounts)
 	_ = writer.Write(periodRechargeAmounts)
 	_ = writer.Write(consumptionAmounts)

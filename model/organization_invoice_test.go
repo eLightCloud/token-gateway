@@ -1,14 +1,11 @@
 package model
 
 import (
-	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -139,20 +136,6 @@ func TestOrganizationInvoiceInputValidation(t *testing.T) {
 	_, err = ParseOrganizationInvoiceMonth("2026-13")
 	require.Error(t, err)
 
-	for input, expected := range map[string]int{
-		"0":       0,
-		"0.0001":  1,
-		"1":       10000,
-		"10.0000": 100000,
-	} {
-		actual, parseErr := ParseOrganizationSettlementFactor(input)
-		require.NoError(t, parseErr, input)
-		assert.EqualValues(t, expected, actual, input)
-	}
-	for _, input := range []string{"-0.1", "1.00001", "10.0001", "1e0", "+1", ".5", "1.", "NaN", ""} {
-		_, parseErr := ParseOrganizationSettlementFactor(input)
-		require.Error(t, parseErr, input)
-	}
 }
 
 func TestOrganizationInvoiceCategoryKeysAreStableAndSafe(t *testing.T) {
@@ -242,15 +225,8 @@ func TestGetOrganizationInvoiceBuildsAccountCrossTables(t *testing.T) {
 	}
 	require.Contains(t, categoryByKey, "gpt")
 	assert.EqualValues(t, int64(4000), categoryByKey["gpt"].GrossQuota)
-	assert.EqualValues(t, "0.5000", categoryByKey["gpt"].Factor)
-	assert.EqualValues(t, "0.0000", categoryByKey["claude"].Factor)
-
-	expectedSettled := decimal.NewFromInt(4000).
-		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
-		Mul(decimal.NewFromFloat(0.5)).
-		Add(decimal.NewFromInt(4000).Div(decimal.NewFromFloat(common.QuotaPerUnit))).
-		StringFixed(10)
-	assert.EqualValues(t, expectedSettled, invoice.SettledTotalAmountUSD)
+	assert.Equal(t, organizationInvoiceAmountString(10000), invoice.GrossTotalAmountUSD)
+	assert.Equal(t, organizationInvoiceAmountString(2000), categoryByKey["claude"].GrossAmountUSD)
 
 	require.NoError(t, DB.Create(&OrganizationBillingSettlementRule{
 		OrganizationId: organizationId,
@@ -270,16 +246,11 @@ func TestGetOrganizationInvoiceBuildsAccountCrossTables(t *testing.T) {
 			break
 		}
 	}
-	assert.True(t, crossMonthGPT.MultipleFactors)
-	assert.EqualValues(t, "multiple", crossMonthGPT.Factor)
-	require.Len(t, crossMonthGPT.FactorSegments, 2)
-	assert.EqualValues(t, "2026-06", crossMonthGPT.FactorSegments[0].PeriodMonth)
-	assert.EqualValues(t, "0.5000", crossMonthGPT.FactorSegments[0].Factor)
-	assert.EqualValues(t, "2026-07", crossMonthGPT.FactorSegments[1].PeriodMonth)
-	assert.EqualValues(t, "0.8000", crossMonthGPT.FactorSegments[1].Factor)
+
+	assert.Equal(t, int64(13999), crossMonthGPT.GrossQuota)
 }
 
-func TestGetOrganizationInvoiceGroupsNewCategoriesAndAppliesMonthlyRule(t *testing.T) {
+func TestGetOrganizationInvoiceGroupsNewCategories(t *testing.T) {
 	setupOrganizationTestState(t)
 	organizationId := createOrganizationBillingTestFixture(t)
 	require.NoError(t, LOG_DB.Create(&[]Log{
@@ -334,7 +305,6 @@ func TestGetOrganizationInvoiceGroupsNewCategoriesAndAppliesMonthlyRule(t *testi
 	categoryByKey := make(map[string]OrganizationInvoiceCategoryRow, len(invoice.CategoryRows))
 	for _, row := range invoice.CategoryRows {
 		categoryByKey[row.CategoryKey] = row
-		assert.EqualValues(t, "1.0000", row.Factor)
 	}
 	assert.EqualValues(t, int64(1500), categoryByKey["glm"].GrossQuota)
 	assert.EqualValues(t, []string{"glm-5.1", "glm-5.2"}, categoryByKey["glm"].Models)
@@ -345,35 +315,6 @@ func TestGetOrganizationInvoiceGroupsNewCategoriesAndAppliesMonthlyRule(t *testi
 	assert.EqualValues(t, []string{"text-embedding-3-large", "text-embedding-v4"}, categoryByKey["vector"].Models)
 	assert.EqualValues(t, "向量", categoryByKey["vector"].CategoryName)
 
-	require.NoError(t, PrepareOrganizationInvoiceModelSetsNow(context.Background(), organizationId))
-	options, discovery, err := GetOrganizationSettlementRuleOptions(context.Background(), organizationId, 202607)
-	require.NoError(t, err)
-	assert.Equal(t, OrganizationInvoiceDiscoveryReady, discovery.Status)
-	require.Len(t, options, 3)
-	for _, option := range options {
-		assert.EqualValues(t, "1.0000", option.Factor)
-		assert.True(t, option.Inherited)
-	}
-
-	updated, err := UpdateOrganizationSettlementRule(context.Background(), organizationId, "glm", 202607, 10400, 0)
-	require.NoError(t, err)
-	assert.True(t, updated.Changed)
-
-	settledInvoice, err := GetOrganizationInvoice(organizationId, period)
-	require.NoError(t, err)
-	for _, row := range settledInvoice.CategoryRows {
-		if row.CategoryKey != "glm" {
-			continue
-		}
-		assert.EqualValues(t, "1.0400", row.Factor)
-		expectedSettled := decimal.NewFromInt(1500).
-			Div(decimal.NewFromFloat(common.QuotaPerUnit)).
-			Mul(decimal.NewFromFloat(1.04)).
-			StringFixed(10)
-		assert.EqualValues(t, expectedSettled, row.SettledAmountUSD)
-		return
-	}
-	require.Fail(t, "GLM category missing after settlement rule update")
 }
 
 func TestGetOrganizationInvoiceRejectsNegativeConsumeQuota(t *testing.T) {
@@ -403,120 +344,4 @@ func TestGetOrganizationInvoiceRejectsNegativeConsumeQuota(t *testing.T) {
 	_, err = GetOrganizationInvoice(organizationId, period)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "negative consume quota")
-}
-
-func TestUpdateOrganizationSettlementRuleUsesVersionCASAndIdempotence(t *testing.T) {
-	setupOrganizationTestState(t)
-	organizationId := createOrganizationInvoiceTestFixture(t)
-	require.NoError(t, PrepareOrganizationInvoiceModelSetsNow(context.Background(), organizationId))
-	period, err := NewOrganizationInvoicePeriod("2026-07-01", "2026-07-31", time.Now())
-	require.NoError(t, err)
-	summary, claimed, err := RegisterOrganizationInvoiceSummary(organizationId, period, false, period.EndTimestamp+1)
-	require.NoError(t, err)
-	require.True(t, claimed)
-	require.NoError(t, CompleteOrganizationInvoiceSummaryWithMetrics(summary, &OrganizationInvoice{
-		GenerationStatus: OrganizationInvoiceGenerationStatusReady,
-		Period:           period,
-		Currency:         "USD",
-		Accounts:         []OrganizationInvoiceAccount{},
-		CategoryRows:     []OrganizationInvoiceCategoryRow{},
-		ModelRows:        []OrganizationInvoiceModelRow{},
-	}, ""))
-
-	created, err := UpdateOrganizationSettlementRule(context.Background(), organizationId, "gpt", 202607, 9000, 0)
-	require.NoError(t, err)
-	assert.True(t, created.Changed)
-	assert.EqualValues(t, 1, created.Rule.Version)
-	var invalidated OrganizationInvoicePeriodSummary
-	require.NoError(t, DB.First(&invalidated, summary.Id).Error)
-	assert.EqualValues(t, OrganizationInvoiceSummaryStatusInvalidated, invalidated.Status)
-
-	idempotent, err := UpdateOrganizationSettlementRule(context.Background(), organizationId, "gpt", 202607, 9000, 0)
-	require.NoError(t, err)
-	assert.False(t, idempotent.Changed)
-	assert.EqualValues(t, 1, idempotent.Rule.Version)
-
-	_, err = UpdateOrganizationSettlementRule(context.Background(), organizationId, "gpt", 202607, 8000, 0)
-	var conflict *OrganizationSettlementVersionConflictError
-	require.ErrorAs(t, err, &conflict)
-	assert.EqualValues(t, 1, conflict.Actual)
-
-	updated, err := UpdateOrganizationSettlementRule(context.Background(), organizationId, "gpt", 202607, 8000, 1)
-	require.NoError(t, err)
-	assert.True(t, updated.Changed)
-	assert.EqualValues(t, 2, updated.Rule.Version)
-
-	options, discovery, err := GetOrganizationSettlementRuleOptions(context.Background(), organizationId, 202608)
-	require.NoError(t, err)
-	assert.Equal(t, OrganizationInvoiceDiscoveryReady, discovery.Status)
-	require.NoError(t, err)
-	require.NotEmpty(t, options)
-	var gptOption OrganizationSettlementRuleOption
-	for _, option := range options {
-		if option.CategoryKey == "gpt" {
-			gptOption = option
-			break
-		}
-	}
-	assert.EqualValues(t, "0.8000", gptOption.Factor)
-	assert.EqualValues(t, "2026-07", gptOption.SourceEffectiveMonth)
-	assert.True(t, gptOption.Inherited)
-	assert.Zero(t, gptOption.Version)
-}
-
-func TestUpdateOrganizationSettlementRuleSerializesConcurrentFirstWrite(t *testing.T) {
-	setupOrganizationTestState(t)
-	organizationId := createOrganizationInvoiceTestFixture(t)
-	require.NoError(t, PrepareOrganizationInvoiceModelSetsNow(context.Background(), organizationId))
-
-	type updateResult struct {
-		result *OrganizationSettlementRuleUpdateResult
-		err    error
-	}
-	start := make(chan struct{})
-	results := make(chan updateResult, 2)
-	var waitGroup sync.WaitGroup
-	for _, factorScaled := range []int{8000, 9000} {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			<-start
-			result, err := UpdateOrganizationSettlementRule(
-				context.Background(),
-				organizationId,
-				"gpt",
-				202607,
-				factorScaled,
-				0,
-			)
-			results <- updateResult{result: result, err: err}
-		}()
-	}
-	close(start)
-	waitGroup.Wait()
-	close(results)
-
-	changed := 0
-	conflicts := 0
-	for result := range results {
-		if result.err == nil {
-			require.NotNil(t, result.result)
-			assert.True(t, result.result.Changed)
-			changed++
-			continue
-		}
-		var conflict *OrganizationSettlementVersionConflictError
-		require.ErrorAs(t, result.err, &conflict)
-		assert.EqualValues(t, 1, conflict.Actual)
-		conflicts++
-	}
-	assert.EqualValues(t, 1, changed)
-	assert.EqualValues(t, 1, conflicts)
-
-	var stored OrganizationBillingSettlementRule
-	require.NoError(t, DB.
-		Where("organization_id = ? AND category_key = ? AND effective_month = ?", organizationId, "gpt", 202607).
-		First(&stored).Error)
-	assert.EqualValues(t, 1, stored.Version)
-	assert.Contains(t, []int{8000, 9000}, stored.FactorScaled)
 }

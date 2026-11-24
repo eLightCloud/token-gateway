@@ -16,8 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ApiResponse } from './types'
-
 export type OrganizationInvoiceParams = {
   start_date: string
   end_date: string
@@ -68,16 +66,6 @@ export type OrganizationInvoiceAccountAmount = {
   gross_amount_usd: string
 }
 
-export type OrganizationInvoiceFactorSegment = {
-  period_month: string
-  factor: string
-  factor_scaled: number
-  rule_effective_month?: string
-  rule_version: number
-  gross_quota: number
-  settled_amount_usd: string
-}
-
 export type OrganizationInvoiceCategoryRow = {
   category_key: string
   category_name: string
@@ -86,10 +74,6 @@ export type OrganizationInvoiceCategoryRow = {
   account_amounts: OrganizationInvoiceAccountAmount[]
   gross_quota: number
   gross_amount_usd: string
-  factor: string
-  multiple_factors: boolean
-  factor_segments: OrganizationInvoiceFactorSegment[]
-  settled_amount_usd: string
 }
 
 export type OrganizationInvoiceModelRow = {
@@ -157,57 +141,5 @@ export type OrganizationInvoice = {
   model_rows: OrganizationInvoiceModelRow[]
   gross_total_quota: number
   gross_total_amount_usd: string
-  settled_total_amount_usd: string
   build?: OrganizationInvoiceBuildInfo
-}
-
-export type OrganizationSettlementRuleOption = {
-  category_key: string
-  category_name: string
-  fallback: boolean
-  models: string[]
-  factor: string
-  factor_scaled: number
-  effective_month: string
-  source_effective_month?: string
-  version: number
-  inherited: boolean
-}
-
-export type OrganizationSettlementDiscovery = {
-  status: 'preparing' | 'updating' | 'ready' | 'failed'
-  evidence_as_of?: number
-  failure_code?: string
-}
-
-export type OrganizationSettlementRulesResponse = ApiResponse<
-  OrganizationSettlementRuleOption[]
-> & {
-  discovery?: OrganizationSettlementDiscovery
-}
-
-export type OrganizationSettlementRuleUpdateResponse =
-  ApiResponse<OrganizationSettlementRuleUpdateResult> & {
-    code?: string
-    retryable?: boolean
-  }
-
-export type OrganizationSettlementRuleUpdatePayload = {
-  category_key: string
-  factor: string
-  effective_month: string
-  expected_version: number
-}
-
-export type OrganizationSettlementRuleUpdateResult = {
-  category_key: string
-  factor: string
-  factor_scaled: number
-  effective_month: string
-  version: number
-  created_at: number
-  updated_at: number
-  changed: boolean
-  previous_factor: string
-  previous_factor_scaled: number
 }

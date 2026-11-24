@@ -28,48 +28,23 @@ type organizationStatsPassTestResult struct {
 	Deferred           bool  `json:"continuation_deferred"`
 }
 
-func TestOrganizationInvoiceModelDiscoveryYieldsToSharedPermit(t *testing.T) {
+func TestRetiredOrganizationInvoiceModelDiscoveryDrainsQueuedTask(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
-	const org = 7981
-	require.NoError(t, model.DB.Create(&model.Organization{Id: org, Name: "discovery permit", Status: model.OrganizationStatusEnabled}).Error)
-	require.NoError(t, model.DB.Create(&model.OrganizationMember{OrganizationId: org, UserId: 7982, JoinedAt: 1, BillingStartAt: 1, Role: model.OrganizationRoleMember}).Error)
-	require.NoError(t, model.RegisterOrganizationInvoiceModelPreparation(ctx, org))
-	require.NoError(t, model.TryAcquireHeavyStatsPermit(ctx, model.HeavyStatsDomainOrganization, "invoice-owner", "invoice-task"))
-	t.Cleanup(func() {
-		model.ReleaseHeavyStatsPermit(ctx, model.HeavyStatsDomainOrganization, "invoice-owner", "invoice-task")
-		model.DB.Where("organization_id = ?", org).Delete(&model.OrganizationInvoiceModelSet{})
-	})
-	task, _, err := EnqueueSystemTask(model.SystemTaskTypeOrganizationInvoiceModelDiscovery, nil)
+	handler := retiredOrganizationInvoiceModelDiscoveryHandler{}
+	assert.NotImplements(t, (*ScheduledSystemTaskHandler)(nil), handler)
+	task, _, err := EnqueueSystemTask(handler.Type(), nil)
 	require.NoError(t, err)
 	claimed, ok, err := model.ClaimSystemTask(task.ID, task.Type, "discovery-owner", common.GetTimestamp()+60)
 	require.NoError(t, err)
 	require.True(t, ok)
-	organizationInvoiceModelDiscoveryHandler{}.Run(ctx, claimed, "discovery-owner")
+	handler.Run(t.Context(), claimed, "discovery-owner")
 	finished, err := model.GetSystemTaskByTaskID(task.TaskID)
 	require.NoError(t, err)
-	var outcome struct {
-		Outcome   string `json:"outcome"`
-		Processed int    `json:"processed"`
-		Published int    `json:"published"`
-	}
-	require.NoError(t, common.UnmarshalJsonStr(finished.Result, &outcome))
-	assert.Equal(t, "waiting_permit", outcome.Outcome)
-	assert.Zero(t, outcome.Processed)
-	assert.Zero(t, outcome.Published)
-	var basis model.OrganizationInvoiceModelSet
-	require.NoError(t, model.DB.Where("organization_id = ?", org).First(&basis).Error)
-	assert.Equal(t, model.OrganizationInvoiceModelStatusPreparing, basis.Status)
-	assert.Zero(t, basis.TargetThroughAt, "a foreign statistics permit prevents even starting a source scan")
-	model.ReleaseHeavyStatsPermit(ctx, model.HeavyStatsDomainOrganization, "invoice-owner", "invoice-task")
-	task, _, err = EnqueueSystemTask(model.SystemTaskTypeOrganizationInvoiceModelDiscovery, nil)
+	assert.Equal(t, model.SystemTaskStatusSucceeded, finished.Status)
+	assert.JSONEq(t, `{"outcome":"retired"}`, finished.Result)
+	active, err := model.GetActiveSystemTask(task.Type)
 	require.NoError(t, err)
-	claimed, ok, err = model.ClaimSystemTask(task.ID, task.Type, "discovery-owner", common.GetTimestamp()+60)
-	require.NoError(t, err)
-	require.True(t, ok)
-	organizationInvoiceModelDiscoveryHandler{}.Run(ctx, claimed, "discovery-owner")
-	require.NoError(t, model.DB.Where("organization_id = ?", org).First(&basis).Error)
-	assert.Equal(t, model.OrganizationInvoiceModelStatusReady, basis.Status)
+	assert.Nil(t, active)
 }
 
 // waitForOrganizationInvoiceSummaries polls the summaries table directly —
@@ -199,7 +174,6 @@ func TestOrganizationInvoiceWorkerAdvancesDependencyChainWithoutRequests(t *test
 	assert.Equal(t, "2026-10-15", cached.Period.EndDate)
 	assert.Equal(t, directOctober.GrossTotalQuota, cached.GrossTotalQuota)
 	assert.Equal(t, directOctober.GrossTotalAmountUSD, cached.GrossTotalAmountUSD)
-	assert.Equal(t, directOctober.SettledTotalAmountUSD, cached.SettledTotalAmountUSD)
 	require.Len(t, cached.Accounts, 1)
 	assert.Equal(t, directOctober.Accounts[0].Financials.NetDeltaQuota, cached.Accounts[0].Financials.NetDeltaQuota)
 	assert.Equal(t, directOctober.Accounts[0].Financials.OpeningBalanceAmountUSD, cached.Accounts[0].Financials.OpeningBalanceAmountUSD)
@@ -340,6 +314,13 @@ func TestOrganizationInvoiceWorkerDatabaseMatrix(t *testing.T) {
 			require.NoError(t, model.EnsureOrganizationInvoiceSummaryTables())
 			require.NoError(t, model.EnsureOrganizationUsageTables())
 			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.Midjourney{}, &model.User{}, &model.Token{}, &model.Log{}, &model.Channel{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.OrganizationBillingSettlementRule{}, &model.TaskSettlementJournal{}, &model.UserQuotaAdjustment{}, &model.UserQuotaAdjustmentLegacyFact{}, &model.Checkin{}, &model.Redemption{}, &model.TopUp{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.SystemTask{}, &model.SystemTaskLock{}))
+			require.NoError(t, db.AutoMigrate(
+				&model.Ability{}, &model.RealtimePricingHead{}, &model.RealtimePricingRule{},
+				&model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.ResellerIdentity{},
+				&model.ResellerAccount{}, &model.ResellerProjection{}, &model.ResellerConfigHead{},
+				&model.ResellerModelConfig{}, &model.ResellerConfigRevision{}, &model.ResellerFundingSnapshot{},
+				&model.ResellerBillingReceipt{}, &model.ResellerRequest{}, &model.ResellerEvent{},
+			))
 			// Reuse the same observable contracts against real engines, including the
 			// generic scheduler's restart path and subscription funding attribution.
 			for _, tc := range []struct {
@@ -355,6 +336,8 @@ func TestOrganizationInvoiceWorkerDatabaseMatrix(t *testing.T) {
 				{"zero_delta_confirmation", TestRecalculate_ZeroDelta},
 				{"zero_actual_confirmation", TestRecalculate_ActualQuotaZero},
 				{"statistics_optimization", TestOrganizationStatsWorkerOptimizationContracts},
+				{"retired_model_discovery", TestRetiredOrganizationInvoiceModelDiscoveryDrainsQueuedTask},
+				{"invalid_publication_recovery", TestGetOrganizationInvoiceRebuildsInconsistentPublication},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					require.NoError(t, model.LOG_DB.Exec("DELETE FROM logs").Error)
@@ -501,36 +484,7 @@ func TestOrganizationStatsWorkerOptimizationContracts(t *testing.T) {
 		assert.Equal(t, newOwner, current.BuildOwner)
 		require.NoError(t, model.DB.Where("organization_id = ?", org).Delete(&model.OrganizationUsageSnapshot{}).Error)
 	})
-	t.Run("one_discovery_task_advances_multiple_members", func(t *testing.T) {
-		truncate(t)
-		ctx := context.Background()
-		const org = 7961
-		require.NoError(t, model.DB.Create(&model.Organization{Id: org, Name: "bounded discovery", Status: model.OrganizationStatusEnabled}).Error)
-		for _, user := range []int{7962, 7963, 7964} {
-			require.NoError(t, model.DB.Create(&model.OrganizationMember{OrganizationId: org, UserId: user, JoinedAt: 1, BillingStartAt: 1}).Error)
-		}
-		require.NoError(t, model.RegisterOrganizationInvoiceModelPreparation(ctx, org))
-		assert.True(t, (organizationInvoiceModelDiscoveryHandler{}).Enabled())
-		assert.Zero(t, (organizationInvoiceModelDiscoveryHandler{}).Interval(), "new persisted work is not delayed by the ready refresh cadence")
-		task, _, err := EnqueueSystemTask(model.SystemTaskTypeOrganizationInvoiceModelDiscovery, nil)
-		require.NoError(t, err)
-		claimed, ok, err := model.ClaimSystemTask(task.ID, task.Type, "bounded-discovery-owner", common.GetTimestamp()+60)
-		require.NoError(t, err)
-		require.True(t, ok)
-		organizationInvoiceModelDiscoveryHandler{}.Run(ctx, claimed, "bounded-discovery-owner")
-		finished, err := model.GetSystemTaskByTaskID(task.TaskID)
-		require.NoError(t, err)
-		var result organizationStatsPassTestResult
-		require.NoError(t, common.UnmarshalJsonStr(finished.Result, &result))
-		assert.Equal(t, 3, result.Processed)
-		assert.Equal(t, 3, result.Published)
-		assert.Zero(t, result.Failed)
-		var ready int64
-		require.NoError(t, model.DB.Model(&model.OrganizationInvoiceModelSet{}).Where("organization_id = ? AND status = ?", org, model.OrganizationInvoiceModelStatusReady).Count(&ready).Error)
-		assert.EqualValues(t, 3, ready)
-		assert.False(t, (organizationInvoiceModelDiscoveryHandler{}).Enabled(), "fresh rows must not create idle task lifecycles")
-		t.Cleanup(func() { model.DB.Where("organization_id = ?", org).Delete(&model.OrganizationInvoiceModelSet{}) })
-	})
+
 }
 
 // A closed historical month may derive an apparently valid zero balance when

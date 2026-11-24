@@ -40,7 +40,7 @@ export function OrganizationInvoiceFinancialNotes(props: {
       </p>
       <p>
         {t(
-          'Confirmed consumption means the final fee is determined, before organization settlement factors. It does not mean the administrator has approved or paid the invoice.'
+          'Confirmed consumption is the final charge recorded for usage.'
         )}
       </p>
       <p>

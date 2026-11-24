@@ -16,17 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { isAxiosError } from 'axios'
-import { CalendarDays, Download, RefreshCw, Settings2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { CalendarDays, Download, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
 
-import { ConfirmDialog } from '@/components/confirm-dialog'
 import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -42,15 +37,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty'
-import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -73,22 +59,13 @@ import {
   getBeijingMonthDateRange,
 } from './beijing-time'
 import { FilterDraftNotice } from './filter-draft-notice'
-import {
-  buildOrganizationInvoiceExportUrl,
-  getOrganizationSettlementRules,
-  organizationInvoiceKeys,
-  updateOrganizationSettlementRule,
-} from './invoice-api'
+import { buildOrganizationInvoiceExportUrl } from './invoice-api'
 import { organizationInvoiceCategoryName } from './invoice-category'
 import { OrganizationInvoiceFinancialSummary } from './invoice-financial-summary'
 import { formatOrganizationInvoiceUSD } from './invoice-format'
 import { organizationInvoiceNeedsExpenseReview } from './invoice-presentation'
 import { OrganizationInvoiceReconciliation } from './invoice-reconciliation'
-import type {
-  OrganizationInvoice,
-  OrganizationSettlementRuleOption,
-  OrganizationSettlementRuleUpdatePayload,
-} from './invoice-types'
+import type { OrganizationInvoice } from './invoice-types'
 import { OrganizationRecalculateButton } from './organization-recalculate-button'
 import { UsageDateRangeFields } from './usage-date-range'
 import { useOrganizationInvoiceQuery } from './use-organization-invoice-query'
@@ -98,21 +75,6 @@ type OrganizationInvoicePanelProps = {
   enabled?: boolean
   organizationId?: number
   currentOrganizationId?: number
-}
-
-type SettlementRuleRowProps = {
-  rule: OrganizationSettlementRuleOption
-  isPending: boolean
-  onSave: (rule: OrganizationSettlementRuleOption, factor: string) => void
-}
-
-function factorLabel(
-  rule: OrganizationInvoice['category_rows'][number]
-): string {
-  if (!rule.multiple_factors) return rule.factor
-  return rule.factor_segments
-    .map((segment) => `${segment.period_month}: ${segment.factor}`)
-    .join(', ')
 }
 
 function InvoiceTableSkeleton() {
@@ -170,13 +132,7 @@ function CategoryInvoiceTable(props: {
               </TableHead>
             ))}
             <TableHead className='min-w-32 text-right'>
-              {t('Gross total')}
-            </TableHead>
-            <TableHead className='min-w-36 text-right'>
-              {t('Settlement factor')}
-            </TableHead>
-            <TableHead className='min-w-32 text-right'>
-              {t('Settled amount')}
+              {t('Consumption total')}
             </TableHead>
           </TableRow>
         </TableHeader>
@@ -217,16 +173,6 @@ function CategoryInvoiceTable(props: {
                 <TableCell className='text-right font-medium tabular-nums'>
                   {formatOrganizationInvoiceUSD(row.gross_amount_usd)}
                 </TableCell>
-                <TableCell className='text-right tabular-nums'>
-                  {row.factor === '0.0000' ? (
-                    <Badge variant='secondary'>{t('Free / exempt')}</Badge>
-                  ) : (
-                    factorLabel(row)
-                  )}
-                </TableCell>
-                <TableCell className='text-right font-medium tabular-nums'>
-                  {formatOrganizationInvoiceUSD(row.settled_amount_usd)}
-                </TableCell>
               </TableRow>
             )
           })}
@@ -247,12 +193,6 @@ function CategoryInvoiceTable(props: {
             <TableCell className='text-right font-semibold tabular-nums'>
               {formatOrganizationInvoiceUSD(
                 props.invoice.gross_total_amount_usd
-              )}
-            </TableCell>
-            <TableCell className='text-right'>—</TableCell>
-            <TableCell className='text-right font-semibold tabular-nums'>
-              {formatOrganizationInvoiceUSD(
-                props.invoice.settled_total_amount_usd
               )}
             </TableCell>
           </TableRow>
@@ -347,330 +287,6 @@ function ModelInvoiceTable(props: {
   )
 }
 
-function SettlementRuleRow(props: SettlementRuleRowProps) {
-  const { t } = useTranslation()
-  const [factor, setFactor] = useState(props.rule.factor)
-  const [confirmZero, setConfirmZero] = useState(false)
-  const [confirmDefault, setConfirmDefault] = useState(false)
-  const numericFactor = Number(factor)
-  const factorValid =
-    /^\d+(?:\.\d{1,4})?$/.test(factor) &&
-    Number.isFinite(numericFactor) &&
-    numericFactor >= 0 &&
-    numericFactor <= 10
-  const changed = factorValid && factor !== props.rule.factor
-
-  const save = () => {
-    if (!changed) return
-    if (numericFactor === 0) {
-      setConfirmZero(true)
-      return
-    }
-    props.onSave(props.rule, factor)
-  }
-
-  return (
-    <div className='space-y-3 rounded-lg border p-4'>
-      <div className='flex items-start justify-between gap-3'>
-        <div className='min-w-0'>
-          <p className='font-medium'>
-            {organizationInvoiceCategoryName(
-              props.rule.category_key,
-              props.rule.category_name,
-              props.rule.fallback,
-              t
-            )}
-          </p>
-          <p className='text-muted-foreground mt-1 text-xs break-words'>
-            {props.rule.models.join(', ')}
-          </p>
-        </div>
-        {props.rule.inherited ? (
-          <Badge variant='outline'>{t('Inherited')}</Badge>
-        ) : (
-          <Badge variant='secondary'>v{props.rule.version}</Badge>
-        )}
-      </div>
-      <div className='flex flex-wrap items-end gap-2'>
-        <label className='min-w-36 flex-1 space-y-1'>
-          <span className='text-muted-foreground text-xs'>
-            {t('Settlement factor')}
-          </span>
-          <Input
-            inputMode='decimal'
-            value={factor}
-            aria-invalid={!factorValid}
-            onChange={(event) => setFactor(event.target.value)}
-          />
-        </label>
-        <Button
-          variant='outline'
-          disabled={props.isPending || factor === '1.0000'}
-          onClick={() => setConfirmDefault(true)}
-        >
-          {t('Use default')}
-        </Button>
-        <Button disabled={props.isPending || !changed} onClick={save}>
-          {t('Save')}
-        </Button>
-      </div>
-      {!factorValid ? (
-        <p className='text-destructive text-xs'>
-          {t('Enter a factor from 0.0000 to 10.0000 with up to 4 decimals.')}
-        </p>
-      ) : null}
-      {props.rule.source_effective_month ? (
-        <p className='text-muted-foreground text-xs'>
-          {t('Source effective month')}: {props.rule.source_effective_month}
-        </p>
-      ) : null}
-      <ConfirmDialog
-        open={confirmZero}
-        onOpenChange={setConfirmZero}
-        title={t('Confirm free settlement')}
-        desc={t(
-          'A zero factor makes this category free or exempt for the selected month. Personal usage charges are not changed.'
-        )}
-        confirmText={t('Set factor to zero')}
-        isLoading={props.isPending}
-        handleConfirm={() => {
-          setConfirmZero(false)
-          props.onSave(props.rule, factor)
-        }}
-      />
-      <ConfirmDialog
-        open={confirmDefault}
-        onOpenChange={setConfirmDefault}
-        title={t('Confirm default settlement factor')}
-        desc={t(
-          'Set this category to the default factor 1.0000 starting in {{month}}?',
-          { month: props.rule.effective_month }
-        )}
-        confirmText={t('Use default')}
-        isLoading={props.isPending}
-        handleConfirm={() => {
-          setConfirmDefault(false)
-          setFactor('1.0000')
-          props.onSave(props.rule, '1.0000')
-        }}
-      />
-    </div>
-  )
-}
-
-export function SettlementRulesSheet(props: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  organizationId?: number
-  currentOrganizationId?: number
-  authenticatedUserId?: number
-}) {
-  const { t } = useTranslation()
-  const queryClient = useQueryClient()
-  const currentMonth = getBeijingMonthDateRange().effectiveMonth
-  const [effectiveMonth, setEffectiveMonth] = useState(currentMonth)
-  const effectiveMonthValid = /^\d{4}-(?:0[1-9]|1[0-2])$/.test(effectiveMonth)
-  const scope = {
-    mode: props.organizationId ? ('admin' as const) : ('current' as const),
-    organizationId: props.organizationId ?? props.currentOrganizationId,
-    authenticatedUserId: props.authenticatedUserId,
-  }
-  const rulesQuery = useQuery({
-    queryKey: organizationInvoiceKeys.rules(scope, effectiveMonth),
-    queryFn: ({ signal }) =>
-      getOrganizationSettlementRules(
-        effectiveMonth,
-        props.organizationId,
-        signal
-      ),
-    enabled:
-      props.open && Boolean(props.authenticatedUserId) && effectiveMonthValid,
-    // The GET is main-database-only and light; this poll just follows the
-    // shared background preparation without triggering any scan.
-    refetchInterval: (query) =>
-      query.state.data?.discovery &&
-      query.state.data.discovery.status !== 'ready'
-        ? 5000
-        : false,
-  })
-  useEffect(() => {
-    if (!props.open) {
-      void queryClient.cancelQueries({
-        queryKey: organizationInvoiceKeys.rules(
-          {
-            mode: props.organizationId ? 'admin' : 'current',
-            organizationId: props.organizationId ?? props.currentOrganizationId,
-            authenticatedUserId: props.authenticatedUserId,
-          },
-          effectiveMonth
-        ),
-        exact: true,
-      })
-    }
-  }, [
-    props.open,
-    props.organizationId,
-    props.currentOrganizationId,
-    props.authenticatedUserId,
-    effectiveMonth,
-    queryClient,
-  ])
-  const discovery = rulesQuery.data?.discovery
-  const updateMutation = useMutation({
-    mutationFn: (payload: OrganizationSettlementRuleUpdatePayload) =>
-      updateOrganizationSettlementRule(payload, props.organizationId),
-    onSuccess: (response) => {
-      if (response.code === 'settlement_category_preparing') {
-        toast.info(
-          t(
-            'Settlement basis is still updating. Please try saving again shortly.'
-          )
-        )
-        void rulesQuery.refetch()
-        return
-      }
-      if (response.code === 'settlement_category_discovery_failed') {
-        toast.error(
-          t(
-            'Settlement category discovery failed. Retry the preparation, then save again.'
-          )
-        )
-        void rulesQuery.refetch()
-        return
-      }
-      if (!response.success) {
-        if (response.message) toast.error(response.message)
-        return
-      }
-      toast.success(
-        t('Settlement factor saved. Affected invoices are updating.')
-      )
-      void queryClient.invalidateQueries({
-        queryKey: organizationInvoiceKeys.rules(scope, effectiveMonth),
-      })
-      void queryClient.invalidateQueries({
-        queryKey: organizationInvoiceKeys.scope(scope),
-      })
-    },
-    onError: (error) => {
-      if (isAxiosError(error) && error.response?.status === 409) {
-        void queryClient.invalidateQueries({
-          queryKey: organizationInvoiceKeys.rules(scope, effectiveMonth),
-        })
-      }
-    },
-  })
-  let rulesError: string | undefined
-  if (rulesQuery.error instanceof Error) {
-    rulesError = rulesQuery.error.message
-  } else if (rulesQuery.data && !rulesQuery.data.success) {
-    rulesError = rulesQuery.data.message || t('Failed to load')
-  }
-
-  return (
-    <Sheet open={props.open} onOpenChange={props.onOpenChange}>
-      <SheetContent className='w-full sm:max-w-2xl'>
-        <SheetHeader className='border-b'>
-          <SheetTitle>{t('Settlement factor settings')}</SheetTitle>
-          <SheetDescription>
-            {t(
-              'Factors are organization-only and affect invoice display and export, not personal charges.'
-            )}
-          </SheetDescription>
-        </SheetHeader>
-        <div className='px-4'>
-          <label className='block max-w-56 space-y-1'>
-            <span className='text-muted-foreground text-xs'>
-              {t('Effective month (Beijing time)')}
-            </span>
-            <Input
-              type='month'
-              value={effectiveMonth}
-              onChange={(event) => setEffectiveMonth(event.target.value)}
-            />
-            {effectiveMonthValid && effectiveMonth < currentMonth ? (
-              <span className='text-warning block text-xs'>
-                {t(
-                  'Changing a historical month recalculates historical organization invoices.'
-                )}
-              </span>
-            ) : null}
-          </label>
-        </div>
-        <ScrollArea className='min-h-0 flex-1'>
-          <div className='space-y-3 px-4 pb-6'>
-            {rulesQuery.isLoading ? <InvoiceTableSkeleton /> : null}
-            {discovery?.status === 'preparing' &&
-            !rulesQuery.data?.data?.length ? (
-              <div className='bg-muted text-muted-foreground space-y-1 rounded-md border p-3 text-sm'>
-                <p>{t('Preparing used model categories...')}</p>
-                <p className='text-xs'>
-                  {t(
-                    'The first preparation scans usage history in the background and finishes on its own.'
-                  )}
-                </p>
-              </div>
-            ) : null}
-            {discovery?.status === 'updating' ||
-            (discovery?.status === 'preparing' &&
-              Boolean(rulesQuery.data?.data?.length)) ? (
-              <p className='text-warning text-xs'>
-                {t('Category list is updating in the background.')}
-              </p>
-            ) : null}
-            {discovery?.status === 'failed' ? (
-              <ErrorState
-                title={t(
-                  'Settlement category discovery failed. Retry the preparation, then save again.'
-                )}
-                onRetry={() => {
-                  void rulesQuery.refetch()
-                }}
-                className='min-h-24'
-              />
-            ) : null}
-            {rulesError ? (
-              <ErrorState
-                title={t('Failed to load settlement factors')}
-                description={rulesError}
-                onRetry={() => {
-                  void rulesQuery.refetch()
-                }}
-                className='min-h-56'
-              />
-            ) : null}
-            {!rulesError &&
-              rulesQuery.data?.data?.map((rule) => (
-                <SettlementRuleRow
-                  key={`${rule.category_key}-${rule.effective_month}-${rule.version}-${rule.factor}`}
-                  rule={rule}
-                  isPending={updateMutation.isPending}
-                  onSave={(selectedRule, factor) =>
-                    updateMutation.mutate({
-                      category_key: selectedRule.category_key,
-                      factor,
-                      effective_month: effectiveMonth,
-                      expected_version: selectedRule.version,
-                    })
-                  }
-                />
-              ))}
-            {!rulesError &&
-            !rulesQuery.isLoading &&
-            discovery?.status === 'ready' &&
-            !rulesQuery.data?.data?.length ? (
-              <p className='text-muted-foreground py-12 text-center text-sm'>
-                {t('No used model categories are available to configure.')}
-              </p>
-            ) : null}
-          </div>
-        </ScrollArea>
-      </SheetContent>
-    </Sheet>
-  )
-}
-
-// Backend build-stage keys mapped to i18n labels for the generating card.
 const organizationInvoiceBuildStageLabels: Record<string, string> = {
   pending: 'Waiting for the invoice builder',
   baseline: 'Preparing opening balances',
@@ -707,7 +323,6 @@ function OrganizationInvoiceContent(props: OrganizationInvoicePanelProps) {
     initialRange: currentRange,
     required: true,
   })
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const submitted = useOrganizationInvoiceQuery({
     ...props,
     authenticatedUserId,
@@ -811,10 +426,6 @@ function OrganizationInvoiceContent(props: OrganizationInvoicePanelProps) {
               <Download data-icon='inline-start' />
               {t('Export CSV')}
             </Button>
-            <Button onClick={() => setSettingsOpen(true)}>
-              <Settings2 data-icon='inline-start' />
-              {t('Configure factors')}
-            </Button>
           </div>
         </CardContent>
         {submitted.hasChanges ? (
@@ -872,14 +483,14 @@ function OrganizationInvoiceContent(props: OrganizationInvoicePanelProps) {
             </Card>
           ) : null}
           <OrganizationInvoiceReconciliation invoice={invoice} />
-          <div className='grid gap-4 md:grid-cols-3'>
+          <div className='grid gap-4 md:grid-cols-2'>
             <Card size='sm'>
               <CardHeader>
                 <CardDescription>
                   {t(
                     expenseNeedsReview
                       ? 'Confirmed usage subtotal'
-                      : 'Gross amount'
+                      : 'Consumption total'
                   )}
                 </CardDescription>
                 <CardTitle className='text-2xl tabular-nums'>
@@ -887,24 +498,6 @@ function OrganizationInvoiceContent(props: OrganizationInvoicePanelProps) {
                     <Skeleton className='h-8 w-28' />
                   ) : (
                     `$${formatOrganizationInvoiceUSD(invoice?.gross_total_amount_usd ?? '0')}`
-                  )}
-                </CardTitle>
-              </CardHeader>
-            </Card>
-            <Card size='sm'>
-              <CardHeader>
-                <CardDescription>
-                  {t(
-                    expenseNeedsReview
-                      ? 'Calculated settlement subtotal'
-                      : 'Calculated settlement amount'
-                  )}
-                </CardDescription>
-                <CardTitle className='text-2xl tabular-nums'>
-                  {invoiceLoading ? (
-                    <Skeleton className='h-8 w-28' />
-                  ) : (
-                    `$${formatOrganizationInvoiceUSD(invoice?.settled_total_amount_usd ?? '0')}`
                   )}
                 </CardTitle>
               </CardHeader>
@@ -946,12 +539,7 @@ function OrganizationInvoiceContent(props: OrganizationInvoicePanelProps) {
 
           <Card>
             <CardHeader>
-              <CardTitle>{t('Model category settlement summary')}</CardTitle>
-              <CardDescription>
-                {t(
-                  'Account columns show gross USD amounts. Settlement factors apply only to category totals.'
-                )}
-              </CardDescription>
+              <CardTitle>{t('Model category consumption summary')}</CardTitle>
             </CardHeader>
             <CardContent className='px-0'>
               <CategoryInvoiceTable
@@ -976,14 +564,6 @@ function OrganizationInvoiceContent(props: OrganizationInvoicePanelProps) {
           </Card>
         </>
       )}
-
-      <SettlementRulesSheet
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        organizationId={props.organizationId}
-        currentOrganizationId={props.currentOrganizationId}
-        authenticatedUserId={authenticatedUserId}
-      />
     </div>
   )
 }

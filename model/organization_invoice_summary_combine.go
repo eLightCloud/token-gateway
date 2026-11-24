@@ -42,8 +42,6 @@ func CombineOrganizationInvoiceSummaries(
 		row           OrganizationInvoiceCategoryRow
 		models        map[string]struct{}
 		accountQuotas map[int]int64
-		factors       map[int]struct{}
-		settled       decimal.Decimal
 	}
 
 	accounts := make(map[int]*accountAccumulator)
@@ -55,7 +53,6 @@ func CombineOrganizationInvoiceSummaries(
 		Period:             period,
 		Currency:           "USD",
 	}
-	settledTotal := decimal.Zero
 	for _, invoice := range invoices {
 		if invoice == nil || invoice.GenerationStatus != OrganizationInvoiceGenerationStatusReady {
 			return nil, errors.New("organization invoice monthly summary is not ready")
@@ -81,11 +78,6 @@ func CombineOrganizationInvoiceSummaries(
 		if err := addOrganizationInvoiceQuota(&result.GrossTotalQuota, invoice.GrossTotalQuota); err != nil {
 			return nil, err
 		}
-		invoiceSettled, err := decimal.NewFromString(invoice.SettledTotalAmountUSD)
-		if err != nil {
-			return nil, err
-		}
-		settledTotal = settledTotal.Add(invoiceSettled)
 
 		for _, account := range invoice.Accounts {
 			item, exists := accounts[account.UserId]
@@ -114,10 +106,8 @@ func CombineOrganizationInvoiceSummaries(
 					row:           row,
 					models:        make(map[string]struct{}),
 					accountQuotas: make(map[int]int64),
-					factors:       make(map[int]struct{}),
 				}
 				item.row.GrossQuota = 0
-				item.row.FactorSegments = nil
 				categories[row.CategoryKey] = item
 			}
 			for _, modelName := range row.Models {
@@ -133,15 +123,6 @@ func CombineOrganizationInvoiceSummaries(
 				}
 				item.accountQuotas[amount.UserId] = quota
 			}
-			for _, segment := range row.FactorSegments {
-				item.factors[segment.FactorScaled] = struct{}{}
-				item.row.FactorSegments = append(item.row.FactorSegments, segment)
-			}
-			settled, err := decimal.NewFromString(row.SettledAmountUSD)
-			if err != nil {
-				return nil, err
-			}
-			item.settled = item.settled.Add(settled)
 		}
 
 		for _, row := range invoice.ModelRows {
@@ -192,14 +173,6 @@ func CombineOrganizationInvoiceSummaries(
 		sort.Strings(item.row.Models)
 		item.row.AccountAmounts = buildOrganizationInvoiceAccountAmounts(item.accountQuotas, result.Accounts)
 		item.row.GrossAmountUSD = organizationInvoiceAmountString(item.row.GrossQuota)
-		item.row.MultipleFactors = len(item.factors) > 1
-		item.row.Factor = "multiple"
-		if len(item.factors) == 1 {
-			for factor := range item.factors {
-				item.row.Factor = FormatOrganizationSettlementFactor(factor)
-			}
-		}
-		item.row.SettledAmountUSD = item.settled.StringFixed(10)
 		result.CategoryRows = append(result.CategoryRows, item.row)
 	}
 	sort.Slice(result.CategoryRows, func(i, j int) bool {
@@ -221,7 +194,6 @@ func CombineOrganizationInvoiceSummaries(
 		result.CoveragePeriod.EndDate = time.Unix(result.CoveragePeriod.EndTimestamp, 0).In(organizationInvoiceLocation).Format("2006-01-02")
 	}
 	result.GrossTotalAmountUSD = organizationInvoiceAmountString(result.GrossTotalQuota)
-	result.SettledTotalAmountUSD = settledTotal.StringFixed(10)
 	return result, nil
 }
 

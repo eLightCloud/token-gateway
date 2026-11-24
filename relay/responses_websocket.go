@@ -311,10 +311,6 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			return apiErr
 		}
 		billingPrepared = true
-		service.ApplyOrganizationDiscountForChannel(info, s.lockedChannelID)
-		if apiErr = service.PrepareOrganizationDiscountReservation(info); apiErr != nil {
-			return apiErr
-		}
 		if apiErr = service.PrepareTieredBillingForSelectedGroup(c, info); apiErr != nil {
 			return apiErr
 		}
@@ -359,10 +355,6 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			}
 			service.PinPersonalPricingChannel(c, info)
 			if apiErr = helper.RefreshPersonalRequestQuota(info); apiErr != nil {
-				return apiErr
-			}
-			service.ApplyOrganizationDiscountForChannel(info, channel.Id)
-			if apiErr = service.PrepareOrganizationDiscountReservation(info); apiErr != nil {
 				return apiErr
 			}
 			if apiErr = service.PrepareTieredBillingForSelectedGroup(c, info); apiErr != nil {

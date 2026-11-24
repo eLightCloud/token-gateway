@@ -62,10 +62,8 @@ func prepareOrganizationInvoiceLogCleanup(ctx context.Context, before int64) (bo
 	if len(rows) == 0 {
 		return false, nil
 	}
-	// Both availability probes run before the transaction: on SQLite the
-	// transaction owns the only pooled connection, so a HasTable probe inside
-	// it would wait on itself forever.
-	if !organizationInvoiceSourceTablesAvailable() || !organizationInvoiceModelSetsAvailable() {
+	// Probe outside the transaction so SQLite's single connection stays usable.
+	if !organizationInvoiceSourceTablesAvailable() {
 		return true, nil
 	}
 	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -81,12 +79,7 @@ func prepareOrganizationInvoiceLogCleanup(ctx context.Context, before int64) (bo
 				return err
 			}
 		}
-		// Match settings saves: model-basis rows precede summary rows in the
-		// lock order, so eligibility remains protected without a lock cycle.
-		if err := markOrganizationInvoiceModelSetsCleared(tx, before); err != nil {
-			return err
-		}
-		if err := tx.Model(&OrganizationInvoicePeriodSummary{}).Where("period_start < ?", before).Updates(map[string]any{"status": OrganizationInvoiceSummaryStatusInvalidated, "payload": nil, "wallet_payload": nil, "rule_recalc_payload": nil, "error": "source logs cleared", "updated_at": common.GetTimestamp()}).Error; err != nil {
+		if err := tx.Model(&OrganizationInvoicePeriodSummary{}).Where("period_start < ?", before).Updates(map[string]any{"status": OrganizationInvoiceSummaryStatusInvalidated, "payload": nil, "wallet_payload": nil, "error": "source logs cleared", "updated_at": common.GetTimestamp()}).Error; err != nil {
 			return err
 		}
 		// Task-association chunks are immutable id-range evidence; ordinary day
@@ -193,12 +186,6 @@ func acknowledgeOrganizationInvoiceLog(log *Log) error {
 		return nil
 	}
 	clickHouse := common.UsingLogDatabase(common.DatabaseTypeClickHouse)
-	// Model sets keep their own progress and must rewind even when the member
-	// has no invoice source cursor yet; the helper is a single conditional
-	// statement and normally matches zero rows.
-	if err := rewindOrganizationInvoiceModelSetsForLog(DB, log); err != nil {
-		return err
-	}
 	cursorQuery := DB.Where("user_id = ? AND version = ?", log.UserId, OrganizationInvoiceSummaryCalculationVersion)
 	if log.Id > 0 && !clickHouse {
 		cursorQuery = cursorQuery.Where("read_head >= ? OR covered_through >= ?", log.Id, log.CreatedAt)
@@ -254,7 +241,7 @@ func acknowledgeOrganizationInvoiceLog(log *Log) error {
 			// No status filter: an in-flight build must be superseded by this
 			// delivery through its own conditional updates, so stale facts can
 			// never publish as ready.
-			if err := tx.Model(&OrganizationInvoicePeriodSummary{}).Where("organization_id = ? AND period_end >= ? AND (source_as_of >= ? OR source_as_of = 0)", cursor.OrganizationId, origin, origin).Updates(map[string]any{"status": OrganizationInvoiceSummaryStatusInvalidated, "payload": nil, "wallet_payload": nil, "rule_recalc_payload": nil, "error": "log delivery changed covered evidence", "updated_at": common.GetTimestamp()}).Error; err != nil {
+			if err := tx.Model(&OrganizationInvoicePeriodSummary{}).Where("organization_id = ? AND period_end >= ? AND (source_as_of >= ? OR source_as_of = 0)", cursor.OrganizationId, origin, origin).Updates(map[string]any{"status": OrganizationInvoiceSummaryStatusInvalidated, "payload": nil, "wallet_payload": nil, "error": "log delivery changed covered evidence", "updated_at": common.GetTimestamp()}).Error; err != nil {
 				return err
 			}
 			if err := tx.Model(&OrganizationInvoiceDayCache{}).Where("organization_id = ? AND scope_hash NOT LIKE ? AND ((start_at <= ? AND end_at > ?) OR (start_at <= ? AND end_at > ?))", cursor.OrganizationId, organizationInvoiceTaskAssociationScope+":%", origin, origin, log.CreatedAt, log.CreatedAt).Updates(map[string]any{"usage": nil, "wallet_log_facts": nil, "wallet": nil, "coverage": nil}).Error; err != nil {

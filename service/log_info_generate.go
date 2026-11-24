@@ -30,37 +30,16 @@ func attachQuotaSaturationToOther(other *model.LogOther, clamp *common.QuotaClam
 	other.SetAdmin("quota_saturation", clamp.AuditMap())
 }
 
-// AppendOrganizationDiscountBillingInfo writes the organization discount into
-// the consume log. The top-level "effective_ratio" is the final multiplier
-// applied to the base price (user_group_ratio × organization channel discount).
-// The request-fixed discount fact goes under admin_info.organization_discount
-// for administrator auditing.
-func AppendOrganizationDiscountBillingInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
-	if relayInfo == nil || other == nil || relayInfo.PriceData.DiscountSnapshot == nil {
-		return
-	}
-	snapshot := relayInfo.PriceData.DiscountSnapshot
-	appendDiscountBillingInfo(other, relayInfo.PriceData.GroupRatioInfo.GroupRatio, snapshot.SnapshotID, snapshot.AppliedChannelId, snapshot.EffectiveRatio())
-}
-
-// appendOrganizationDiscountBillingInfo writes the persisted asynchronous
-// billing snapshot's discount fact using the same field semantics.
+// appendOrganizationDiscountBillingInfo records a retired discount frozen on an existing task.
 func appendOrganizationDiscountBillingInfo(other *model.LogOther, groupRatio float64, discount *model.TaskBillingDiscount) {
 	if other == nil || discount == nil {
 		return
 	}
-	appendDiscountBillingInfo(other, groupRatio, discount.SnapshotID, discount.ChannelId, discount.Ratio)
-}
-
-func appendDiscountBillingInfo(other *model.LogOther, groupRatio float64, snapshotId, channelId int, ratio float64) {
-	if other == nil {
-		return
-	}
-	other.SetPublic("effective_ratio", groupRatio*ratio)
-	other.SetAdmin("organization_discount", map[string]interface{}{
-		"snapshot_id": snapshotId,
-		"channel_id":  channelId,
-		"ratio":       ratio,
+	other.SetPublic("effective_ratio", groupRatio*discount.Ratio)
+	other.SetAdmin("organization_discount", map[string]any{
+		"snapshot_id": discount.SnapshotID,
+		"channel_id":  discount.ChannelId,
+		"ratio":       discount.Ratio,
 	})
 }
 
@@ -168,7 +147,6 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendParamOverrideInfo(relayInfo, other)
 	appendRequestPluginRecord(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
-	AppendOrganizationDiscountBillingInfo(relayInfo, other)
 	return other
 }
 
@@ -378,9 +356,6 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 	}
 	appendRequestPath(nil, relayInfo, other)
 	appendRequestPluginRecord(relayInfo, other)
-	if snapshot := priceData.DiscountSnapshot; snapshot != nil {
-		appendDiscountBillingInfo(other, priceData.GroupRatioInfo.GroupRatio, snapshot.SnapshotID, snapshot.AppliedChannelId, snapshot.EffectiveRatio())
-	}
 	return other
 }
 

@@ -530,9 +530,6 @@ func TestOrganizationInvoiceDatabaseMatrix(t *testing.T) {
 			t.Run("confirmed_origin_missing", TestOrganizationInvoiceConfirmedExpenseRequiresOriginalAttribution)
 			t.Run("slice_equivalence", TestOrganizationInvoiceSliceAggregationMatchesSingleShot)
 			t.Run("recalculation", TestOrganizationInvoiceRecalculationPreservesCachesAndDeduplicates)
-			t.Run("rule_recalc_no_replay", TestOrganizationInvoiceRuleChangeLightRecalcRepublishesWithoutReplay)
-			t.Run("rule_fact_invalidation", TestOrganizationInvoiceRuleFactInvalidationRejectsCapturedInput)
-			t.Run("rule_capture_lock", TestOrganizationInvoiceRuleCaptureLocksFacts)
 			t.Run("partial_hour_resume", TestOrganizationInvoiceUsageShardsResumeWithoutDoubleCount)
 			t.Run("cutoff_and_revision", TestOrganizationInvoiceFrozenCutoffAndShardRevision)
 			t.Run("wallet_sources", TestOrganizationInvoiceBoundedWalletReadMatchesLegacyTreatment)
@@ -584,6 +581,7 @@ func TestOrganizationInvoiceDatabaseMatrix(t *testing.T) {
 				t.Run("opening", TestOrganizationInvoiceOpeningYieldRemainsResumable)
 			})
 			t.Run("split_topology", TestOrganizationInvoiceRecalculationReusesSplitTopology)
+			t.Run("legacy_recalc_uses_fresh_facts", TestOrganizationInvoiceLegacyRecalcReclaimsEvidence)
 			t.Run("claim_request_race", TestOrganizationInvoiceClaimAdoptsRequestRearmedGeneration)
 			t.Run("index_order_and_missing", TestCheckOrganizationLogIndexDriftDetectsReversedColumnOrder)
 			t.Run("upgrade", func(t *testing.T) {
@@ -675,44 +673,6 @@ func TestOrganizationInvoiceDatabaseMatrix(t *testing.T) {
 					}
 					assert.EqualValues(t, 3_000_000, legacyNet)
 
-					// Model discovery must retain duplicate-timestamp names and may
-					// not publish an old scan under a replacement member window.
-					const modelOrg, modelUser = 9961, 9962
-					require.NoError(t, DB.Create(&Organization{Id: modelOrg, Name: "native model discovery", Status: OrganizationStatusEnabled}).Error)
-					member := OrganizationMember{OrganizationId: modelOrg, UserId: modelUser, JoinedAt: 1, BillingStartAt: 1, Role: OrganizationRoleMember}
-					require.NoError(t, DB.Create(&member).Error)
-					require.NoError(t, logDB.Create(&[]Log{
-						{CreatedAt: 100, Type: LogTypeConsume, UserId: modelUser, ModelName: "native-a"},
-						{CreatedAt: 100, Type: LogTypeConsume, UserId: modelUser, ModelName: "native-b"},
-					}).Error)
-					require.NoError(t, PrepareOrganizationInvoiceModelSetsNow(context.Background(), modelOrg))
-					basis, err := loadOrganizationInvoiceModelBasis(context.Background(), DB, modelOrg)
-					require.NoError(t, err)
-					assert.ElementsMatch(t, []string{"native-a", "native-b"}, basis.models)
-					var modelSet OrganizationInvoiceModelSet
-					require.NoError(t, DB.Where("organization_id = ?", modelOrg).First(&modelSet).Error)
-					changed := false
-					callback := "invoice_native_model_window_change"
-					require.NoError(t, logDB.Callback().Row().After("gorm:row").Register(callback, func(tx *gorm.DB) {
-						if changed || tx.Statement.Table != "logs" {
-							return
-						}
-						changed = true
-						require.NoError(t, DB.Model(&OrganizationMember{}).Where("id = ?", member.Id).Update("billing_start_at", 200).Error)
-						require.NoError(t, RegisterOrganizationInvoiceModelPreparation(context.Background(), modelOrg))
-					}))
-					t.Cleanup(func() { logDB.Callback().Row().Remove(callback) })
-					require.NoError(t, RunOrganizationInvoiceModelSetAdvance(context.Background(), &modelSet))
-					assert.True(t, changed)
-					logDB.Callback().Row().Remove(callback)
-					var replaced OrganizationInvoiceModelSet
-					require.NoError(t, DB.First(&replaced, modelSet.Id).Error)
-					assert.Equal(t, OrganizationInvoiceModelStatusPreparing, replaced.Status)
-					assert.Empty(t, replaced.Models)
-					require.NoError(t, PrepareOrganizationInvoiceModelSetsNow(context.Background(), modelOrg))
-					basis, err = loadOrganizationInvoiceModelBasis(context.Background(), DB, modelOrg)
-					require.NoError(t, err)
-					assert.Empty(t, basis.models)
 					cancelCtx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 					defer cancel()
 					err = withOrganizationLogQuery(cancelCtx, func(tx *gorm.DB) error { return tx.Exec("SELECT sleep(1)").Error })
@@ -1055,6 +1015,7 @@ func TestOrganizationInvoiceConfirmedExpenseRequiresOriginalAttribution(t *testi
 func TestOrganizationInvoiceClearedHistoryNeverBecomesCompleteZero(t *testing.T) {
 	t.Setenv("LOG_ALLOW_DELETION", "true")
 	setupOrganizationTestState(t)
+	require.NoError(t, DB.Migrator().DropTable(&OrganizationInvoiceModelSet{}))
 	org := createOrganizationBillingTestFixture(t)
 	configureOrganizationInvoiceTestZeroBaseline(t, org, 202609, 10, 11)
 	at := beijingInvoiceTimestamp(t, "2026-09-01 12:00:00")
@@ -1281,10 +1242,91 @@ func TestOrganizationInvoiceFrozenBuildResumesAfterNewerSnapshot(t *testing.T) {
 	assert.Equal(t, frozen.LogHighWatermark, stored.LogHighWatermark)
 }
 
+func TestOrganizationInvoiceLegacyRecalcReclaimsEvidence(t *testing.T) {
+	organizationId, period := organizationInvoiceShardTestFixture(t)
+	now := common.GetTimestamp()
+	oldHighWatermark := int64(1)
+	old := OrganizationInvoicePeriodSummary{
+		OrganizationId: organizationId,
+		PeriodStart:    period.StartTimestamp, PeriodEnd: period.EndTimestamp,
+		CalculationVersion: OrganizationInvoiceSummaryCalculationVersion,
+		Revision:           1, Status: OrganizationInvoiceSummaryStatusBuilding,
+		Stage:      OrganizationInvoiceStagePublish,
+		SourceAsOf: period.StartTimestamp, EvidenceAsOf: period.StartTimestamp,
+		LogHighWatermark:  &oldHighWatermark,
+		RuleRecalcPayload: []byte(`{"settled_total_amount_usd":"0.000001"}`),
+	}
+	require.NoError(t, DB.Create(&old).Error)
+
+	item, err := ClaimNextOrganizationInvoiceBuild(t.Context(), 0)
+	require.NoError(t, err)
+	require.NotNil(t, item)
+	assert.Equal(t, old.Revision+1, item.Summary.Revision)
+	assert.Equal(t, min(now, period.EndTimestamp), item.Summary.SourceAsOf)
+	assert.Zero(t, item.Summary.EvidenceAsOf)
+	assert.Nil(t, item.Summary.LogHighWatermark)
+	require.ErrorIs(t, CompleteOrganizationInvoiceSummaryWithMetrics(old, &OrganizationInvoice{}, ""), ErrOrganizationInvoiceBuildSuperseded)
+	var archived OrganizationInvoicePeriodSummary
+	require.NoError(t, DB.First(&archived, old.Id).Error)
+	assert.Equal(t, old.RuleRecalcPayload, archived.LegacyRulePublication)
+	assert.Empty(t, archived.RuleRecalcPayload)
+
+	require.NoError(t, RunOrganizationInvoiceMonthlyBuild(t.Context(), item))
+	ready, err := LookupOrganizationInvoiceSummary(organizationId, period, true)
+	require.NoError(t, err)
+	require.NotNil(t, ready)
+	invoice, err := DecodeOrganizationInvoiceSummary(*ready)
+	require.NoError(t, err)
+	assert.Equal(t, int64(226), invoice.GrossTotalQuota)
+	assert.Empty(t, ready.RuleRecalcPayload)
+	require.NoError(t, InvalidateOrganizationInvoicePeriods(organizationId, []OrganizationInvoicePeriod{period}))
+	require.NoError(t, DB.First(&archived, old.Id).Error)
+	assert.Equal(t, old.RuleRecalcPayload, archived.LegacyRulePublication)
+	assert.NotContains(t, string(ready.Payload), "settled_amount_usd")
+
+	const previousPayload = `{
+		"generation_status":"ready",
+		"gross_total_quota":40000000,
+		"settled_total_amount_usd":"72",
+		"accounts":[{"user_id":10,"gross_quota":40000000,"financials":{"reconciliation_status":"unavailable"}}],
+		"category_rows":[{"category_key":"gpt","models":["gpt-4o"],"gross_quota":40000000,
+			"factor":"0.9000","settled_amount_usd":"72","account_amounts":[{"user_id":10,"gross_quota":40000000}]}],
+		"model_rows":[{"model_name":"gpt-4o","category_key":"gpt","gross_quota":40000000,
+			"account_amounts":[{"user_id":10,"gross_quota":40000000}]}]
+	}`
+	previous, err := DecodeOrganizationInvoiceSummary(OrganizationInvoicePeriodSummary{
+		Status: OrganizationInvoiceSummaryStatusReady, Payload: []byte(previousPayload),
+	})
+	require.NoError(t, err)
+	crossMonth, err := NewOrganizationInvoicePeriod("2026-07-01", period.EndDate, time.Now())
+	require.NoError(t, err)
+	combined, err := CombineOrganizationInvoiceSummaries(crossMonth, []*OrganizationInvoice{previous, invoice})
+	require.NoError(t, err)
+	assert.Equal(t, int64(40000226), combined.GrossTotalQuota)
+	assert.Equal(t, organizationInvoiceAmountString(40000226), combined.GrossTotalAmountUSD)
+	var accountTotal, categoryTotal, modelTotal int64
+	for _, row := range combined.Accounts {
+		accountTotal += row.GrossQuota
+	}
+	for _, row := range combined.CategoryRows {
+		categoryTotal += row.GrossQuota
+	}
+	for _, row := range combined.ModelRows {
+		modelTotal += row.GrossQuota
+	}
+	assert.Equal(t, combined.GrossTotalQuota, accountTotal)
+	assert.Equal(t, combined.GrossTotalQuota, categoryTotal)
+	assert.Equal(t, combined.GrossTotalQuota, modelTotal)
+	_, err = DecodeOrganizationInvoiceSummary(OrganizationInvoicePeriodSummary{
+		Status: OrganizationInvoiceSummaryStatusReady, Payload: []byte(`{"generation_status":"ready","settled_total_amount_usd":"72"}`),
+	})
+	require.ErrorContains(t, err, "missing confirmed consumption quota")
+}
+
 func TestOrganizationInvoiceClaimAdoptsRequestRearmedGeneration(t *testing.T) {
 	setupOrganizationTestState(t)
 	require.NoError(t, EnsureOrganizationInvoiceSummaryTables())
-	row := OrganizationInvoicePeriodSummary{OrganizationId: 7018, PeriodStart: 1000, PeriodEnd: 2000, SourceAsOf: 2000, CalculationVersion: OrganizationInvoiceSummaryCalculationVersion, Revision: 1, Status: OrganizationInvoiceSummaryStatusInvalidated, RuleRecalcPayload: []byte(`{"confirmed":"preserved"}`)}
+	row := OrganizationInvoicePeriodSummary{OrganizationId: 7018, PeriodStart: 1000, PeriodEnd: 2000, SourceAsOf: 2000, CalculationVersion: OrganizationInvoiceSummaryCalculationVersion, Revision: 1, Status: OrganizationInvoiceSummaryStatusInvalidated}
 	require.NoError(t, DB.Create(&row).Error)
 	raced := false
 	const callback = "invoice_request_rearm_race"
@@ -1302,7 +1344,6 @@ func TestOrganizationInvoiceClaimAdoptsRequestRearmedGeneration(t *testing.T) {
 	assert.True(t, raced)
 	assert.Equal(t, row.Id, item.Summary.Id)
 	assert.Equal(t, 2, item.Summary.Revision)
-	assert.Equal(t, row.RuleRecalcPayload, item.Summary.RuleRecalcPayload, "adopting the request's generation preserves protected recalc evidence")
 	require.NoError(t, DB.Callback().Update().Remove(callback))
 	require.NoError(t, DB.Model(&OrganizationInvoicePeriodSummary{}).Where("id = ?", row.Id).Updates(map[string]any{"status": OrganizationInvoiceSummaryStatusInvalidated, "revision": 3}).Error)
 	raced = false
@@ -1790,6 +1831,36 @@ type organizationInvoiceReleasedLog struct {
 
 func (organizationInvoiceReleasedLog) TableName() string { return "logs" }
 
+type organizationInvoicePriorPeriodSummary struct {
+	OrganizationStatsRetryState `gorm:"embedded"`
+	Priority                    int                              `json:"-"`
+	WalletDependencyPending     bool                             `json:"wallet_dependency_pending"`
+	Id                          int64                            `json:"id" gorm:"primaryKey"`
+	OrganizationId              int                              `json:"organization_id" gorm:"not null;uniqueIndex:idx_org_invoice_summary_period,priority:1"`
+	PeriodStart                 int64                            `json:"period_start" gorm:"not null;uniqueIndex:idx_org_invoice_summary_period,priority:2"`
+	PeriodEnd                   int64                            `json:"period_end" gorm:"not null;uniqueIndex:idx_org_invoice_summary_period,priority:3"`
+	CalculationVersion          int                              `json:"calculation_version" gorm:"not null;uniqueIndex:idx_org_invoice_summary_period,priority:4"`
+	Revision                    int                              `json:"revision" gorm:"not null"`
+	Status                      OrganizationInvoiceSummaryStatus `json:"status" gorm:"type:varchar(16);not null;index"`
+	Stage                       string                           `json:"stage" gorm:"type:varchar(32)"`
+	FailureKind                 string                           `json:"failure_kind" gorm:"type:varchar(16)"`
+	EvidenceAsOf                int64                            `json:"evidence_as_of"`
+	LogHighWatermark            *int64                           `json:"log_high_watermark,omitempty"`
+	SourceAsOf                  int64                            `json:"source_as_of" gorm:"not null"`
+	Finalized                   bool                             `json:"finalized" gorm:"not null"`
+	WalletPayload               []byte                           `json:"-"`
+	Payload                     []byte                           `json:"-"`
+	RuleRecalcPayload           []byte                           `json:"-" gorm:"column:rule_recalc_payload"`
+	Metrics                     string                           `json:"metrics,omitempty" gorm:"type:text"`
+	Error                       string                           `json:"error,omitempty" gorm:"type:text"`
+	CreatedAt                   int64                            `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	UpdatedAt                   int64                            `json:"updated_at" gorm:"autoUpdateTime;column:updated_at;index"`
+}
+
+func (organizationInvoicePriorPeriodSummary) TableName() string {
+	return "organization_invoice_period_summaries"
+}
+
 func TestOrganizationInvoiceStartupMigrationMatrix(t *testing.T) {
 	for _, kind := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(kind, func(t *testing.T) {
@@ -1834,6 +1905,17 @@ func TestOrganizationInvoiceStartupMigrationMatrix(t *testing.T) {
 				require.NoError(t, migrateDB())
 				require.NoError(t, migrateLOGDB())
 			}
+			require.True(t, DB.Migrator().HasColumn(&OrganizationInvoicePeriodSummary{}, "legacy_rule_publication"))
+			require.NoError(t, DB.Migrator().DropTable(&OrganizationInvoicePeriodSummary{}))
+			require.NoError(t, DB.AutoMigrate(&organizationInvoicePriorPeriodSummary{}))
+			require.False(t, DB.Migrator().HasColumn(&organizationInvoicePriorPeriodSummary{}, "legacy_rule_publication"))
+			previous := organizationInvoicePriorPeriodSummary{
+				Id: 37002, OrganizationId: 10, PeriodStart: 100, PeriodEnd: 200,
+				CalculationVersion: OrganizationInvoiceSummaryCalculationVersion,
+				Revision:           4, Status: OrganizationInvoiceSummaryStatusBuilding,
+				RuleRecalcPayload: []byte(`{"gross_total_quota":80,"settled_total_amount_usd":"72"}`),
+			}
+			require.NoError(t, DB.Create(&previous).Error)
 			// Upgrade the affected log table from the released model on the
 			// independent log database, preserving identity, quota and indexes.
 			require.NoError(t, LOG_DB.Migrator().DropTable(&Log{}))
@@ -1843,6 +1925,19 @@ func TestOrganizationInvoiceStartupMigrationMatrix(t *testing.T) {
 				require.NoError(t, migrateDB())
 				require.NoError(t, migrateLOGDB())
 			}
+			var summary OrganizationInvoicePeriodSummary
+			require.NoError(t, DB.First(&summary, previous.Id).Error)
+			assert.Equal(t, previous.RuleRecalcPayload, summary.RuleRecalcPayload)
+			assert.Equal(t, previous.Revision, summary.Revision)
+			require.True(t, DB.Migrator().HasIndex(&OrganizationInvoicePeriodSummary{}, "idx_org_invoice_summary_period"))
+			item, err := ClaimNextOrganizationInvoiceBuild(t.Context(), 0)
+			require.NoError(t, err)
+			require.NotNil(t, item)
+			assert.Equal(t, previous.Id, item.Summary.Id)
+			assert.Equal(t, previous.Revision+1, item.Summary.Revision)
+			require.NoError(t, DB.First(&summary, previous.Id).Error)
+			assert.Equal(t, previous.RuleRecalcPayload, summary.LegacyRulePublication)
+			assert.Empty(t, summary.RuleRecalcPayload)
 			var kept Log
 			require.NoError(t, LOG_DB.First(&kept, 37001).Error)
 			assert.Equal(t, 987, kept.Quota)

@@ -125,7 +125,6 @@ import {
   unixTimestampToBeijingDateInput,
 } from './beijing-time'
 import { canViewOrganizationBillingChannels } from './billing-visibility'
-import { OrganizationDiscountPanel } from './discount-panel'
 import { FilterDraftNotice } from './filter-draft-notice'
 import { OrganizationInvoicePanel } from './invoice'
 import { OrganizationRecalculateButton } from './organization-recalculate-button'
@@ -2598,7 +2597,6 @@ function AdminOrganizationDetailView({ id }: { id: number }) {
       {discountVisited && isRoot ? (
         <div hidden={tab !== 'discount'} className='space-y-6'>
           <RealtimePricingEditor subject='organization' subjectID={id} />
-          <OrganizationDiscountPanel organizationId={id} />
         </div>
       ) : null}
       <MemberDialog

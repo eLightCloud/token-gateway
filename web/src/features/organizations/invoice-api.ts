@@ -21,9 +21,6 @@ import { api } from '@/lib/api'
 import type {
   OrganizationInvoice,
   OrganizationInvoiceParams,
-  OrganizationSettlementRuleUpdatePayload,
-  OrganizationSettlementRulesResponse,
-  OrganizationSettlementRuleUpdateResponse,
 } from './invoice-types'
 import type { ApiResponse } from './types'
 
@@ -62,12 +59,6 @@ export const organizationInvoiceKeys = {
       params.start_date,
       params.end_date,
     ] as const,
-  rules: (scope: OrganizationInvoiceScope, effectiveMonth: string) =>
-    [
-      ...organizationInvoiceKeys.scope(scope),
-      'settlement-rules',
-      effectiveMonth,
-    ] as const,
 }
 
 export async function getOrganizationInvoice(
@@ -80,32 +71,6 @@ export async function getOrganizationInvoice(
   const response = await api.get(
     `${organizationInvoiceBasePath(organizationId)}?${query}${refresh ? '&refresh=1' : ''}`,
     { signal, disableDuplicate: Boolean(signal) }
-  )
-  return response.data
-}
-
-export async function getOrganizationSettlementRules(
-  effectiveMonth: string,
-  organizationId?: number,
-  signal?: AbortSignal
-): Promise<OrganizationSettlementRulesResponse> {
-  const query = new URLSearchParams({
-    effective_month: effectiveMonth,
-  }).toString()
-  const response = await api.get(
-    `${organizationInvoiceBasePath(organizationId)}/settlement-rules?${query}`,
-    { signal }
-  )
-  return response.data
-}
-
-export async function updateOrganizationSettlementRule(
-  payload: OrganizationSettlementRuleUpdatePayload,
-  organizationId?: number
-): Promise<OrganizationSettlementRuleUpdateResponse> {
-  const response = await api.put(
-    `${organizationInvoiceBasePath(organizationId)}/settlement-rules`,
-    payload
   )
   return response.data
 }

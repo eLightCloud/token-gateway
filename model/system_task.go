@@ -38,9 +38,8 @@ const (
 	// SystemTaskTypeOrganizationInvoiceDaily registers fixed-cutoff snapshot
 	// work (month start through yesterday) for the gray-scaled organizations.
 	SystemTaskTypeOrganizationInvoiceDaily = "organization_invoice_daily"
-	// SystemTaskTypeOrganizationInvoiceModelDiscovery advances the persisted
-	// per-member model-name sets behind the settlement-rule options; the task
-	// row is the cross-node lease serializing every scan.
+	// SystemTaskTypeOrganizationInvoiceModelDiscovery identifies old editor
+	// discovery tasks that may still be present in the queue.
 	SystemTaskTypeOrganizationInvoiceModelDiscovery = "organization_invoice_model_discovery"
 	// SystemTaskTypeOrganizationUsageBuild drains pending organization usage
 	// snapshots (billing-page rollups). It shares the heavy statistics permit

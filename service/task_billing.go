@@ -57,7 +57,6 @@ func BuildTaskConsumptionLog(c *gin.Context, info *relaycommon.RelayInfo) model.
 		other.SetPublic("is_model_mapped", true)
 		other.SetPublic("upstream_model_name", info.UpstreamModelName)
 	}
-	AppendOrganizationDiscountBillingInfo(info, other)
 	attachQuotaSaturation(c, info, other)
 	if len(info.RequestPluginSteps) > 0 {
 		other.SetAdmin("request_plugins", info.RequestPluginSteps)
@@ -81,19 +80,9 @@ func BuildTaskConsumptionLog(c *gin.Context, info *relaycommon.RelayInfo) model.
 
 // SnapshotTaskBillingContext freezes every multiplier needed by asynchronous
 // settlement. Polling and refund paths must not read mutable pricing settings.
-// The organization discount is persisted as the submission-time fact only:
-// snapshot id, actual channel id and the applied ratio — never the full map.
 func SnapshotTaskBillingContext(info *relaycommon.RelayInfo) *model.TaskBillingContext {
 	if info == nil {
 		return nil
-	}
-	var discount *model.TaskBillingDiscount
-	if snapshot := info.PriceData.DiscountSnapshot; snapshot != nil {
-		discount = &model.TaskBillingDiscount{
-			SnapshotID: snapshot.SnapshotID,
-			ChannelId:  snapshot.AppliedChannelId,
-			Ratio:      snapshot.EffectiveRatio(),
-		}
 	}
 	return &model.TaskBillingContext{
 		PersonalPricing: personalTaskSnapshot(info),
@@ -104,7 +93,6 @@ func SnapshotTaskBillingContext(info *relaycommon.RelayInfo) *model.TaskBillingC
 		OriginModelName: info.OriginModelName,
 		TieredSnapshot:  info.TieredBillingSnapshot,
 		PerCallBilling:  common.StringsContains(constant.TaskPricePatches, info.OriginModelName) || info.PriceData.UsePrice,
-		Discount:        discount,
 	}
 }
 

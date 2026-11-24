@@ -206,7 +206,7 @@ func prepareOrganizationInvoiceMemberLogEvidence(ctx context.Context, source *or
 			// Lock/update summaries before cache rows, matching invalidation
 			// and publication; never hold a day row while waiting on a bill.
 			if earliest > 0 {
-				if err := tx.Model(&OrganizationInvoicePeriodSummary{}).Where("organization_id = ? AND status = ? AND period_end >= ?", org, OrganizationInvoiceSummaryStatusReady, earliest).Where("source_as_of >= ? OR source_as_of = 0", firstChangedAt).Where("log_high_watermark IS NULL OR log_high_watermark < ?", maxChanged).Updates(map[string]any{"status": OrganizationInvoiceSummaryStatusInvalidated, "payload": nil, "wallet_payload": nil, "rule_recalc_payload": nil, "error": "late source evidence", "updated_at": common.GetTimestamp()}).Error; err != nil {
+				if err := tx.Model(&OrganizationInvoicePeriodSummary{}).Where("organization_id = ? AND status = ? AND period_end >= ?", org, OrganizationInvoiceSummaryStatusReady, earliest).Where("source_as_of >= ? OR source_as_of = 0", firstChangedAt).Where("log_high_watermark IS NULL OR log_high_watermark < ?", maxChanged).Updates(map[string]any{"status": OrganizationInvoiceSummaryStatusInvalidated, "payload": nil, "wallet_payload": nil, "error": "late source evidence", "updated_at": common.GetTimestamp()}).Error; err != nil {
 					return err
 				}
 			}

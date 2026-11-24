@@ -95,7 +95,7 @@ func organizationStatsCanEnqueue(kind string) bool {
 // next turn before immediately waking the same type again. All work remains
 // discoverable by the existing scheduler if this best-effort wakeup fails.
 func enqueueOrganizationStatsContinuation(ctx context.Context, ownType string, payload any) {
-	types := []string{model.SystemTaskTypeOrganizationInvoiceBuild, model.SystemTaskTypeOrganizationUsageBuild, model.SystemTaskTypeOrganizationInvoiceModelDiscovery}
+	types := []string{model.SystemTaskTypeOrganizationInvoiceBuild, model.SystemTaskTypeOrganizationUsageBuild}
 	wokeOther := false
 	for _, kind := range types {
 		if kind == ownType || ctx.Err() != nil {
@@ -114,11 +114,7 @@ func enqueueOrganizationStatsContinuation(ctx context.Context, ownType string, p
 			if !model.OrganizationUsageBuildPaused() {
 				pending, _ = model.HasOrganizationUsageBuildWork(ctx)
 			}
-		case model.SystemTaskTypeOrganizationInvoiceModelDiscovery:
-			if !model.OrganizationInvoiceBuildPaused() {
-				rows, err := model.FindDueOrganizationInvoiceModelSets(ctx, 0, time.Now().Unix(), 1)
-				pending = err == nil && len(rows) > 0
-			}
+
 		}
 		if pending {
 			if _, _, err := EnqueueSystemTask(kind, nil); err == nil {

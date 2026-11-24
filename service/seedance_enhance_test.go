@@ -1051,11 +1051,13 @@ func TestSeedanceOrganizationSubmissionAndLateExpenseConfirmation(t *testing.T) 
 	require.NoError(t, model.DB.Create(&model.OrganizationInvoiceAccountBaseline{OrganizationId: orgID, UserId: userID, OpeningQuota: 10000}).Error)
 	expression := `tier("video", u("seconds") * 0.02)`
 	snapshot := &billingexpr.BillingSnapshot{ExprString: expression, ExprHash: billingexpr.ExprHashString(expression), GroupRatio: 2, QuotaPerUnit: 1000, TaskUsageBilling: true, UsageFacts: map[string]any{"seconds": 5}}
-	info := &relaycommon.RelayInfo{UserId: userID, OriginModelName: seedanceenhance.Models[0] + seedanceenhance.Suffix, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID}, TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "text_to_video"}, TieredBillingSnapshot: snapshot, PriceData: types.PriceData{Quota: 100, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 2}, DiscountSnapshot: &types.OrganizationDiscountSnapshot{SnapshotID: 7, AppliedChannelId: channelID, AppliedRatio: 0.5}}}
+	info := &relaycommon.RelayInfo{UserId: userID, OriginModelName: seedanceenhance.Models[0] + seedanceenhance.Suffix, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID}, TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "text_to_video"}, TieredBillingSnapshot: snapshot, PriceData: types.PriceData{Quota: 100, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 2}}}
 	task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
 	task.TaskID, task.Platform = "organization-late-enhance", "doubao"
 	task.Properties.OriginModelName = info.OriginModelName
 	task.PrivateData.BillingContext = SnapshotTaskBillingContext(info)
+	// Simulate a task submitted before organization channel discounts were retired.
+	task.PrivateData.BillingContext.Discount = &model.TaskBillingDiscount{SnapshotID: 7, ChannelId: channelID, Ratio: 0.5}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
 	handled, err := PersistSeedanceEnhanceSubmission(c, info, task)

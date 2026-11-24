@@ -117,33 +117,6 @@ func TestTryTieredSettleFallsBackToSelectedGroupEstimateOnExprError(t *testing.T
 	}
 }
 
-func TestTryTieredSettleErrorFallbackAppliesOrganizationMarkupOnce(t *testing.T) {
-	relayInfo := &relaycommon.RelayInfo{
-		// A previous or current Reserve can be higher than the selected group's
-		// base estimate and must never become the final billing base.
-		FinalPreConsumedQuota: 500_000,
-		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode:              "tiered_expr",
-			ExprString:               `invalid +-+ expr`,
-			ExprHash:                 billingexpr.ExprHashString(`invalid +-+ expr`),
-			GroupRatio:               0.2,
-			EstimatedQuotaAfterGroup: 100_000,
-		},
-		PriceData: types.PriceData{
-			DiscountSnapshot: &types.OrganizationDiscountSnapshot{
-				AppliedChannelId: 5,
-				AppliedRatio:     2.5,
-			},
-		},
-	}
-
-	ok, baseQuota, result := TryTieredSettle(relayInfo, billingexpr.TokenParams{P: 100})
-	require.True(t, ok)
-	require.Nil(t, result)
-	assert.Equal(t, 100_000, baseQuota)
-	assert.Equal(t, 250_000, composeTieredTextQuota(relayInfo, textQuotaSummary{}, baseQuota, result))
-}
-
 // ---------------------------------------------------------------------------
 // Pre-consume vs Post-consume consistency
 // ---------------------------------------------------------------------------
@@ -396,68 +369,6 @@ func TestPrepareTieredBillingForSelectedGroupUpdatesReservation(t *testing.T) {
 	assert.Equal(t, 100_000, billing.preConsumedQuota)
 	assert.Equal(t, 100_000, relayInfo.FinalPreConsumedQuota)
 	assert.Equal(t, 0.20, relayInfo.TieredBillingSnapshot.GroupRatio)
-	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
-}
-
-func TestPrepareTieredBillingForSelectedGroupKeepsFullPriceReservationForDiscount(t *testing.T) {
-	const expr = `tier("base", p)`
-	billing := &recordingBillingSettler{preConsumedQuota: 20_000}
-	relayInfo := &relaycommon.RelayInfo{
-		Billing: billing,
-		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode:               "tiered_expr",
-			ExprString:                expr,
-			ExprHash:                  billingexpr.ExprHashString(expr),
-			GroupRatio:                0.20,
-			EstimatedQuotaBeforeGroup: 500_000,
-			EstimatedQuotaAfterGroup:  100_000,
-			QuotaPerUnit:              testQuotaPerUnit,
-		},
-		PriceData: types.PriceData{
-			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
-			DiscountSnapshot: &types.OrganizationDiscountSnapshot{
-				SnapshotID:       1,
-				ChannelDiscounts: map[int]float64{5: 0.4},
-				AppliedChannelId: 5,
-				AppliedRatio:     0.4,
-			},
-		},
-	}
-
-	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
-	// 小于 1 的组织倍率仍按原价预扣，结算时退回折扣差额。
-	require.Equal(t, []int{100_000}, billing.reserveTargets)
-	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
-	assert.InDelta(t, 0.4, relayInfo.PriceData.DiscountSnapshot.EffectiveRatio(), 1e-12)
-}
-
-func TestPrepareTieredBillingForSelectedGroupReservesOrganizationMarkup(t *testing.T) {
-	const expr = `tier("base", p)`
-	billing := &recordingBillingSettler{preConsumedQuota: 100_000}
-	relayInfo := &relaycommon.RelayInfo{
-		Billing: billing,
-		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode:               "tiered_expr",
-			ExprString:                expr,
-			ExprHash:                  billingexpr.ExprHashString(expr),
-			GroupRatio:                0.20,
-			EstimatedQuotaBeforeGroup: 500_000,
-			EstimatedQuotaAfterGroup:  100_000,
-			QuotaPerUnit:              testQuotaPerUnit,
-		},
-		PriceData: types.PriceData{
-			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
-			DiscountSnapshot: &types.OrganizationDiscountSnapshot{
-				AppliedChannelId: 5,
-				AppliedRatio:     2.5,
-			},
-		},
-	}
-
-	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
-	require.Equal(t, []int{250_000}, billing.reserveTargets)
-	assert.Equal(t, 250_000, relayInfo.FinalPreConsumedQuota)
-	// 快照仍保存未应用组织倍率的分层估算，结算失败回退时不会二次乘倍率。
 	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 }
 

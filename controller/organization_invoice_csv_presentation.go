@@ -128,10 +128,7 @@ func writeOrganizationInvoiceCSVHeaderNotes(writer *csv.Writer, invoice *model.O
 		return err
 	}
 	if organizationInvoiceCSVReviewFor(invoice).expenseNeedsReview {
-		if err := writer.Write([]string{"金额说明", "已确认消费小计，仍有费用待核对"}); err != nil {
-			return err
-		}
-		return writer.Write([]string{"结算说明", "结算金额仅覆盖已确认消费部分"})
+		return writer.Write([]string{"金额说明", "已确认消费小计，仍有费用待核对"})
 	}
 	return nil
 }
@@ -161,6 +158,6 @@ func writeOrganizationInvoiceCSVRefunds(writer *csv.Writer, invoice *model.Organ
 	if !anyRefund {
 		return nil
 	}
-	row = append(row, "", "", "")
+	row = append(row, "")
 	return writer.Write(row)
 }

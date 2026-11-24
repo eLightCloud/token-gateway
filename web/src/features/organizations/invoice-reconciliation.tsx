@@ -69,11 +69,6 @@ export function OrganizationInvoiceReconciliation(props: {
                 'Some final expenses need review. These amounts are a subtotal, not a complete bill.'
               )}
             </p>
-            <p>
-              {t(
-                'The settlement amount also covers only confirmed consumption.'
-              )}
-            </p>
             {pendingTasks > 0 ? (
               <p>
                 {t('Pending tasks: {{count}}', {

@@ -116,6 +116,11 @@ func TestAccessTokenRouteRulesCoverEveryDashboardRoute(t *testing.T) {
 			panel[key] = true
 		}
 	}
+	for _, prefix := range []string{"/api/organization/current", "/api/admin/organizations/:id"} {
+		for _, method := range []string{"GET", "PUT"} {
+			assert.NotContains(t, registered, method+" "+prefix+"/invoice/settlement-rules")
+		}
+	}
 	for _, key := range accessTokenExemptRoutes {
 		assert.True(t, registered[key], "exempt route %s is no longer registered", key)
 	}

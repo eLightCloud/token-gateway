@@ -76,7 +76,7 @@ func invalidateOrganizationInvoiceUserEvidenceTx(tx *gorm.DB, userId int, origin
 		return nil
 	}
 	orgs := tx.Model(&OrganizationMember{}).Select("organization_id").Where("user_id = ?", userId)
-	if err := tx.Model(&OrganizationInvoicePeriodSummary{}).Where("organization_id IN (?) AND period_end >= ?", orgs, origin).Updates(map[string]any{"status": OrganizationInvoiceSummaryStatusInvalidated, "payload": nil, "wallet_payload": nil, "rule_recalc_payload": nil, "error": "task expense evidence changed", "updated_at": common.GetTimestamp()}).Error; err != nil {
+	if err := tx.Model(&OrganizationInvoicePeriodSummary{}).Where("organization_id IN (?) AND period_end >= ?", orgs, origin).Updates(map[string]any{"status": OrganizationInvoiceSummaryStatusInvalidated, "payload": nil, "wallet_payload": nil, "error": "task expense evidence changed", "updated_at": common.GetTimestamp()}).Error; err != nil {
 		return err
 	}
 	if tx.Migrator().HasTable(&OrganizationInvoiceDayCache{}) {

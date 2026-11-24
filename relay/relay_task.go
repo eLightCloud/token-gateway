@@ -29,7 +29,6 @@ import (
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
-	"github.com/shopspring/decimal"
 )
 
 type TaskSubmitResult struct {
@@ -265,7 +264,6 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 4. 价格计算：基础模型价格。重试可能换了插件或渠道，每次尝试都重新定价，
 	//    不沿用上一次尝试的表达式快照。
 	info.OriginModelName = modelName
-	previousPriceData := info.PriceData
 	info.TieredBillingSnapshot = nil
 	var priceData types.PriceData
 	var err error
@@ -360,12 +358,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		noteTaskQuotaClamp(info, clamp)
 	}
 
-	if apiErr := service.PreparePersonalRequestPricing(c, info); apiErr != nil {
-		return nil, service.TaskErrorFromAPIError(apiErr)
-	}
-	if err := service.PrepareTaskOrganizationDiscount(info, previousPriceData); err != nil {
-		return nil, service.TaskErrorWrapperLocal(err, "organization_discount_load_failed", http.StatusInternalServerError)
-	}
+	info.PriceData.QuotaToPreConsume = info.PriceData.Quota
 	if apiErr := service.PrepareTaskBillingForAttempt(c, info); apiErr != nil {
 		return nil, service.TaskErrorFromAPIError(apiErr)
 	}
@@ -423,9 +416,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 				logger.LogWarn(c, common.LogText("task immediate usage settlement failed; retaining reserved quota: %v", err))
 			} else {
 				expenseConfirmed = true
-				var discountClamp *common.QuotaClamp
-				finalQuota, discountClamp = common.QuotaFromDecimalChecked(decimal.NewFromInt(int64(settlement.ActualQuotaAfterGroup)).Mul(decimal.NewFromFloat(info.PriceData.DiscountSnapshot.EffectiveRatio())))
-				noteTaskQuotaClamp(info, discountClamp)
+				finalQuota = settlement.ActualQuotaAfterGroup
 				snap.UsageFacts = facts
 				snap.EstimatedTier = settlement.MatchedTier
 				noteTaskQuotaClamp(info, settlement.Clamp)
@@ -433,8 +424,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	} else {
 		if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, parsed.TaskData); len(adjustedRatios) > 0 {
-			if preConsumeQuota, adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
-				info.PriceData.QuotaToPreConsume = preConsumeQuota
+			if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
+				info.PriceData.QuotaToPreConsume = adjustedQuota
 				// 基于调整后的 ratios 重新计算 quota
 				finalQuota = adjustedQuota
 				info.PriceData.ReplaceOtherRatios(adjustedRatios)
@@ -457,23 +448,17 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}, nil
 }
 
-// recalcQuotaFromRatios 根据 adjustedRatios 分别重算未应用组织倍率的预估额度与应用倍率后的最终额度。
-// 公式: baseQuota × ∏(ratio) — 两个额度各自从自身不含 OtherRatios 的基准计算，
-// 不得从彼此反推，避免舍入和重算漂移。
-func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, int, bool) {
+// recalcQuotaFromRatios replaces the submission estimate's multipliers with
+// the values confirmed by the provider.
+func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, bool) {
 	priceData := info.PriceData
 	if !priceData.ReplaceOtherRatios(ratios) {
-		return 0, 0, false
+		return 0, false
 	}
-	// 从各自额度中剥离旧 OtherRatios 得到基础值，再应用新 ratios
-	preConsumeBase := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.QuotaToPreConsume))
-	preConsumeQuota, clamp := common.QuotaFromFloatChecked(priceData.ApplyOtherRatiosToFloat(preConsumeBase))
+	base := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.Quota))
+	quota, clamp := common.QuotaFromFloatChecked(priceData.ApplyOtherRatiosToFloat(base))
 	noteTaskQuotaClamp(info, clamp)
-
-	quotaBase := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.Quota))
-	quota, quotaClamp := common.QuotaFromFloatChecked(priceData.ApplyOtherRatiosToFloat(quotaBase))
-	noteTaskQuotaClamp(info, quotaClamp)
-	return preConsumeQuota, quota, true
+	return quota, true
 }
 
 // noteTaskQuotaClamp records the first quota saturation event onto the task's

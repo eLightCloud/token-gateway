@@ -223,22 +223,6 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 	// initial group was free so downstream state stays consistent.
 	relayInfo.PriceData.FreeModel = false
 	reserveTarget := snap.EstimatedQuotaAfterGroup
-	organizationRatio := organizationDiscountRatioFloat(relayInfo.PriceData)
-	if organizationRatio > 1 {
-		var err error
-		reserveTarget, err = billingexpr.QuotaRoundStrict(
-			snap.EstimatedQuotaBeforeGroup * snap.GroupRatio * organizationRatio,
-		)
-		if err != nil {
-			return types.NewErrorWithStatusCode(
-				err,
-				types.ErrorCodeModelPriceError,
-				http.StatusBadRequest,
-				types.ErrOptionWithSkipRetry(),
-			)
-		}
-	}
-
 	if relayInfo.Billing == nil {
 		return PreConsumeBilling(c, reserveTarget, relayInfo)
 	}
@@ -271,9 +255,8 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 
 	tr, err := billingexpr.ComputeTieredQuotaWithRequest(snap, params, requestInput)
 	if err != nil {
-		// FinalPreConsumedQuota may include a higher prior reservation or the
-		// current organization markup. Return the selected group's frozen base
-		// estimate so callers apply the organization ratio exactly once.
+		// FinalPreConsumedQuota can reflect a higher prior reservation or
+		// a personal ratio. Return the selected group's frozen base estimate.
 		return true, snap.EstimatedQuotaAfterGroup, nil
 	}
 

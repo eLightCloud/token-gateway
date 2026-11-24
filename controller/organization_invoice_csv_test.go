@@ -44,10 +44,8 @@ func TestWriteOrganizationInvoiceCSVUsesConciseAccountFinancialRows(t *testing.T
 				{UserId: 11, GrossAmountUSD: "1.25"},
 				{UserId: 12, GrossAmountUSD: "0.75"},
 			},
-			GrossQuota:       1_000_000,
-			GrossAmountUSD:   "2",
-			Factor:           "0.9900",
-			SettledAmountUSD: "1.98",
+			GrossQuota:     1_000_000,
+			GrossAmountUSD: "2",
 		}},
 		ModelRows: []model.OrganizationInvoiceModelRow{{
 			ModelName: "gpt-4o",
@@ -59,9 +57,8 @@ func TestWriteOrganizationInvoiceCSVUsesConciseAccountFinancialRows(t *testing.T
 			GrossAmountUSD: "2",
 			SharePercent:   "100.0",
 		}},
-		GrossTotalQuota:       1_000_000,
-		GrossTotalAmountUSD:   "2",
-		SettledTotalAmountUSD: "1.98",
+		GrossTotalQuota:     1_000_000,
+		GrossTotalAmountUSD: "2",
 	}
 	exportContext := &model.OrganizationInvoiceExportContext{
 		OrganizationName: "中关村学院",
@@ -90,14 +87,15 @@ func TestWriteOrganizationInvoiceCSVUsesConciseAccountFinancialRows(t *testing.T
 	assert.Equal(t, []string{"组织名称", "中关村学院"}, records[0])
 	assert.Equal(t, []string{"账期", "2026-07-01 ~ 2026-07-31"}, records[1])
 	assert.Equal(t, []string{"币种", "USD"}, records[2])
-	assert.Contains(t, records, []string{"真实姓名", "张宇", "", "", "", ""})
-	assert.Equal(t, []string{"模型类别", "alice", "bob", "折前合计", "结算系数", "结算后金额"}, rows["模型类别"])
-	assert.Equal(t, []string{"用户上期余额", "4.000000", "2.500000", "", "", ""}, rows["用户上期余额"])
-	assert.Equal(t, []string{"用户当期流入金额", "12.500000", "3.000000", "", "", ""}, rows["用户当期流入金额"])
-	assert.Equal(t, []string{"用户当期消费金额", "1.250000", "0.750000", "", "", ""}, rows["用户当期消费金额"])
-	assert.Equal(t, []string{"用户当前余额", "6.250000", "1.500000", "", "", ""}, rows["用户当前余额"])
 	assert.Contains(t, records, []string{"真实姓名", "张宇", "", "", ""})
+	assert.Equal(t, []string{"模型类别", "alice", "bob", "消费合计"}, rows["模型类别"])
+	assert.Equal(t, []string{"用户上期余额", "4.000000", "2.500000", ""}, rows["用户上期余额"])
+	assert.Equal(t, []string{"用户当期流入金额", "12.500000", "3.000000", ""}, rows["用户当期流入金额"])
+	assert.Equal(t, []string{"用户当期消费金额", "1.250000", "0.750000", ""}, rows["用户当期消费金额"])
+	assert.Equal(t, []string{"用户当前余额", "6.250000", "1.500000", ""}, rows["用户当前余额"])
+	assert.Contains(t, records, []string{"真实姓名", "张宇", "", ""})
 	assert.Equal(t, []string{"模型", "alice", "bob", "合计", "占比"}, rows["模型"])
+	assert.Equal(t, []string{"GPT", "1.250000", "0.750000", "2.000000"}, rows["GPT"])
 
 	exported := buffer.String()
 	assert.NotContains(t, exported, "组织 ID")
@@ -121,7 +119,7 @@ func TestWriteOrganizationInvoiceCSVKeepsSubtotalAndUnknownWalletExplicit(t *tes
 		CoveragePeriod:      model.OrganizationInvoicePeriod{StartDate: "2026-09-01", EndDate: "2026-09-15"},
 		ExpenseCoverage:     model.OrganizationInvoiceExpenseCoverage{Status: "incomplete", PendingTasks: 1, PendingSourceRows: 1, WalletIssues: []model.OrganizationInvoiceExpenseIssue{{UserId: 91, TaskId: "funding-pending", Reason: "task_funding_pending"}}, Issues: []model.OrganizationInvoiceExpenseIssue{{UserId: 91, TaskId: "task-pending", Reason: "final_expense_evidence_missing"}, {Reason: "consume_history_cleared"}}},
 		Accounts:            []model.OrganizationInvoiceAccount{{UserId: 91, Username: "account-91", GrossAmountUSD: "0.347618", Financials: model.OrganizationInvoiceAccountFinancials{ReconciliationStatus: "unavailable"}}},
-		GrossTotalAmountUSD: "0.347618", SettledTotalAmountUSD: "0.347618",
+		GrossTotalAmountUSD: "0.347618",
 	}
 	var buffer bytes.Buffer
 	writer := csv.NewWriter(&buffer)
@@ -161,7 +159,7 @@ func TestWriteOrganizationInvoiceCSVOnlyListsUnresolvedProblems(t *testing.T) {
 			invoice := &model.OrganizationInvoice{
 				Period:         model.OrganizationInvoicePeriod{StartDate: "2026-09-01", EndDate: "2026-09-30"},
 				CoveragePeriod: model.OrganizationInvoicePeriod{StartDate: "2026-09-01", EndDate: "2026-09-30"},
-				Currency:       "USD", GrossTotalAmountUSD: "20", SettledTotalAmountUSD: "18",
+				Currency:       "USD", GrossTotalAmountUSD: "20",
 				ExpenseCoverage: model.OrganizationInvoiceExpenseCoverage{Status: tc.status, PendingSourceRows: tc.pending},
 				Accounts:        []model.OrganizationInvoiceAccount{{UserId: 91, Username: "alice", GrossAmountUSD: "20", Financials: model.OrganizationInvoiceAccountFinancials{ReconciliationStatus: "derived", WalletRefundAmountUSD: "0.0000000000"}}},
 			}
@@ -181,7 +179,7 @@ func TestWriteOrganizationInvoiceCSVOnlyListsUnresolvedProblems(t *testing.T) {
 			if tc.refund == "" {
 				assert.NotContains(t, out, "其中退款")
 			} else {
-				assert.Contains(t, out, "其中退款（已含在当期流入中）,80.000000,,,")
+				assert.Contains(t, out, "其中退款（已含在当期流入中）,80.000000,")
 			}
 			if tc.wallet == "" {
 				assert.NotContains(t, out, "# 钱包收支待核对")
@@ -193,7 +191,7 @@ func TestWriteOrganizationInvoiceCSVOnlyListsUnresolvedProblems(t *testing.T) {
 			if tc.problem {
 				assert.Contains(t, out, "# 费用待确认")
 				assert.Contains(t, out, "金额说明,已确认消费小计，仍有费用待核对")
-				assert.Less(t, strings.Index(out, "金额说明"), strings.Index(out, "# 模型归类结算汇总"))
+				assert.Less(t, strings.Index(out, "金额说明"), strings.Index(out, "# 模型分类消费汇总"))
 			} else {
 				assert.NotContains(t, out, "# 费用待确认")
 				assert.NotContains(t, out, "账户ID,任务")
@@ -212,7 +210,7 @@ func TestWriteOrganizationInvoiceCSVRefundBreakdownAndProblemDeduplication(t *te
 		Accounts: []model.OrganizationInvoiceAccount{
 			{UserId: 91, Username: "alice", GrossAmountUSD: "20", Financials: model.OrganizationInvoiceAccountFinancials{TotalInflowAmountUSD: "180", AIWalletDeductionAmountUSD: "100", WalletRefundAmountUSD: "80", ReconciliationStatus: "unavailable"}},
 			{UserId: 92, Username: "bob", GrossAmountUSD: "0", Financials: model.OrganizationInvoiceAccountFinancials{TotalInflowAmountUSD: "0", WalletRefundAmountUSD: "0.0000000000", ReconciliationStatus: "derived"}},
-		}, GrossTotalAmountUSD: "20", SettledTotalAmountUSD: "18",
+		}, GrossTotalAmountUSD: "20",
 	}
 	var buffer bytes.Buffer
 	writer := csv.NewWriter(&buffer)
@@ -221,7 +219,7 @@ func TestWriteOrganizationInvoiceCSVRefundBreakdownAndProblemDeduplication(t *te
 	require.NoError(t, writer.Error())
 	out := buffer.String()
 	assert.Contains(t, out, "实际覆盖,2026-09-01,2026-09-15 12:00:00")
-	assert.Contains(t, out, "其中退款（已含在当期流入中）,80.000000,,,,")
+	assert.Contains(t, out, "其中退款（已含在当期流入中）,80.000000,,")
 	assert.Contains(t, out, "用户当期流入金额,180.000000,0.000000")
 	assert.Contains(t, out, "alice,task-2820,最终费用尚未确认")
 	assert.Equal(t, 1, strings.Count(out, "task-2820"))

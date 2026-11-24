@@ -213,12 +213,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = billingErr
 			break
 		}
-		// 渠道确定后只查请求内存快照映射，不再访问数据库。
-		service.ApplyOrganizationDiscountForChannel(relayInfo, channel.Id)
-		if billingErr := service.PrepareOrganizationDiscountReservation(relayInfo); billingErr != nil {
-			newAPIError = billingErr
-			break
-		}
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			newAPIError = billingErr
 			break

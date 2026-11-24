@@ -598,7 +598,7 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 		{"personal success", "SUCCESS", 2, 2, 0}, {"personal zero", "SUCCESS", 0, 0, 0}, {"personal failure", "FAILURE", 9, 0, 0},
 		{"partial", "SUCCESS", 2, 2, 0}, {"zero", "SUCCESS", 0, 0, 0}, {"larger", "SUCCESS", 6, 6, 0},
 		{"invalid usage", "SUCCESS", -1, 4, 0}, {"expression failure", "SUCCESS", 7, 4, 0}, {"negative result", "SUCCESS", 8, 4, 0}, {"missing usage", "SUCCESS", nil, 4, 0}, {"failed", "FAILURE", 9, 0, 0},
-		{"discount", "SUCCESS", 2, 2, 800000}, {"markup", "SUCCESS", 6, 6, 1500000}, {"discount failed", "FAILURE", 9, 0, 800000},
+		{"retired organization markup", "SUCCESS", 6, 6, 1500000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -624,9 +624,8 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 				require.NoError(t, db.Model(&ch).Updates(map[string]any{"status": common.ChannelStatusEnabled, "models": "document-model", "group": "default"}).Error)
 				agentID = seedPersonalRelayAccount(t, &responsesWSBillingTest{user: &user, channel: &ch}, "0.9", int64(initial), "document-model")
 			}
-			var discountSnapshot *model.OrganizationDiscountSnapshot
 			if tc.discountScaled > 0 {
-				discountSnapshot = seedRelayOrganizationDiscount(t, db, user.Id, ch.Id, tc.discountScaled)
+				seedRetiredOrganizationDiscount(t, db, user.Id, ch.Id, tc.discountScaled)
 			}
 			c := taskSubmissionTestContext()
 			c.Set("group", "default")
@@ -650,9 +649,6 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			require.Nil(t, taskErr)
 			require.NotNil(t, outcome)
 			want := common.QuotaRound(tc.count * 0.01 * common.QuotaPerUnit)
-			if tc.discountScaled > 0 {
-				want = want * tc.discountScaled / 1000000
-			}
 			assert.EqualValues(t, want, outcome.Result.Quota)
 			assert.EqualValues(t, want, info.PriceData.Quota)
 			var stored model.Task
@@ -662,10 +658,7 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 				charged = want * 9 / 10
 			}
 			assert.EqualValues(t, charged, stored.Quota)
-			if discountSnapshot != nil {
-				require.NotNil(t, stored.PrivateData.BillingContext.Discount)
-				assert.Equal(t, &model.TaskBillingDiscount{SnapshotID: discountSnapshot.Id, ChannelId: ch.Id, Ratio: float64(tc.discountScaled) / 1000000}, stored.PrivateData.BillingContext.Discount)
-			}
+			assert.Nil(t, stored.PrivateData.BillingContext.Discount)
 			assert.Equal(t, model.TaskStatus(tc.status), stored.Status)
 			assert.Positive(t, stored.FinishTime)
 			assert.Equal(t, float64(4), info.TieredBillingSnapshot.EstimatedQuotaBeforeGroup/(0.01*common.QuotaPerUnit))
@@ -682,10 +675,8 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			assert.EqualValues(t, charged, logs[0].Quota)
 			var other map[string]any
 			require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
-			if discountSnapshot != nil {
-				discount := other["admin_info"].(map[string]any)["organization_discount"].(map[string]any)
-				assert.EqualValues(t, discountSnapshot.Id, discount["snapshot_id"])
-				assert.Equal(t, float64(tc.discountScaled)/1000000, discount["ratio"])
+			if admin, ok := other["admin_info"].(map[string]any); ok {
+				assert.NotContains(t, admin, "organization_discount")
 			}
 			if tc.status == "SUCCESS" {
 				assert.Equal(t, tc.count, other["usage_facts"].(map[string]any)["units"])

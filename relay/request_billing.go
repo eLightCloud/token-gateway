@@ -49,9 +49,6 @@ func PrepareRequestBilling(c *gin.Context, info *relaycommon.RelayInfo) *types.N
 	if apiErr := service.PreparePersonalRequestPricing(c, info); apiErr != nil {
 		return apiErr
 	}
-	if err := service.LoadRequestOrganizationDiscount(info); err != nil {
-		return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusInternalServerError), types.ErrOptionWithSkipRetry())
-	}
 	if info.PersonalPricing != nil {
 		return nil
 	}

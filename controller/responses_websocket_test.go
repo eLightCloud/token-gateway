@@ -569,6 +569,7 @@ func TestResponsesWebSocketReusesConnectionAndSettlesEachRequest(t *testing.T) {
 		}
 	})
 	client, user, token := fixture.client, fixture.user, fixture.token
+	seedRetiredOrganizationDiscount(t, model.DB, user.Id, fixture.channel.Id, 500000)
 
 	for index, payload := range []string{
 		`{"type":"response.create","model":"ws-billing","input":"first","service_tier":"default"}`,
@@ -621,6 +622,7 @@ func TestResponsesWebSocketReusesConnectionAndSettlesEachRequest(t *testing.T) {
 		assert.Equal(t, fmt.Sprintf("responses-ws-billing-ws-%d", index), logs[index].RequestId)
 		assert.Equal(t, 1000, logs[index].PromptTokens)
 		assert.Equal(t, 10, logs[index].CompletionTokens)
+		assert.NotContains(t, logs[index].Other, "organization_discount")
 	}
 	// Routing decisions are persisted per request: the first create selects a
 	// channel, later creates on the same connection reuse it as a pin.

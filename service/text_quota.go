@@ -200,19 +200,14 @@ func noteQuotaClamp(relayInfo *relaycommon.RelayInfo, clamp *common.QuotaClamp) 
 
 func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaSummary, tieredQuota int, tieredResult *billingexpr.TieredResult) int {
 	if summary.ToolCallSurchargeQuota.IsZero() {
-		quota, clamp := common.QuotaFromDecimalChecked(
-			decimal.NewFromInt(int64(tieredQuota)).Mul(organizationDiscountMultiplier(relayInfo.PriceData)),
-		)
-		noteQuotaClamp(relayInfo, clamp)
-		return quota
+		return tieredQuota
 	}
 
 	if tieredResult != nil {
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			quota, clamp := common.QuotaFromDecimalChecked(decimal.NewFromFloat(tieredResult.ActualQuotaBeforeGroup).
 				Mul(decimal.NewFromFloat(snap.GroupRatio)).
-				Add(summary.ToolCallSurchargeQuota).
-				Mul(organizationDiscountMultiplier(relayInfo.PriceData)))
+				Add(summary.ToolCallSurchargeQuota))
 			noteQuotaClamp(relayInfo, clamp)
 			return quota
 		}
@@ -222,7 +217,7 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 	// MaxQuota and adding the surcharge could push the total past the
 	// single-request quota policy bound.
 	total, clamp := common.QuotaFromDecimalChecked(
-		decimal.NewFromInt(int64(tieredQuota)).Add(summary.ToolCallSurchargeQuota).Mul(organizationDiscountMultiplier(relayInfo.PriceData)),
+		decimal.NewFromInt(int64(tieredQuota)).Add(summary.ToolCallSurchargeQuota),
 	)
 	noteQuotaClamp(relayInfo, clamp)
 	return total
@@ -366,7 +361,6 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(audioInputQuota)
 		quotaCalculateDecimal = relayInfo.PriceData.ApplyOtherRatiosToDecimal(quotaCalculateDecimal)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
-		quotaCalculateDecimal = quotaCalculateDecimal.Mul(organizationDiscountMultiplier(relayInfo.PriceData))
 
 		if !ratio.IsZero() && quotaCalculateDecimal.LessThanOrEqual(decimal.Zero) {
 			quotaCalculateDecimal = decimal.NewFromInt(1)
@@ -379,7 +373,6 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(audioInputQuota)
 		quotaCalculateDecimal = relayInfo.PriceData.ApplyOtherRatiosToDecimal(quotaCalculateDecimal)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
-		quotaCalculateDecimal = quotaCalculateDecimal.Mul(organizationDiscountMultiplier(relayInfo.PriceData))
 		quota, clamp := common.QuotaFromDecimalChecked(quotaCalculateDecimal)
 		summary.Quota = quota
 		noteQuotaClamp(relayInfo, clamp)

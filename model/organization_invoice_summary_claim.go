@@ -59,9 +59,9 @@ func LookupOrganizationInvoiceSummary(
 	includePayload bool,
 ) (*OrganizationInvoicePeriodSummary, error) {
 	var summary OrganizationInvoicePeriodSummary
-	query := DB.Omit("wallet_payload")
+	query := DB.Omit("wallet_payload", "rule_recalc_payload", "legacy_rule_publication")
 	if !includePayload {
-		query = query.Omit("payload", "metrics", "wallet_payload", "rule_recalc_payload")
+		query = query.Omit("payload", "metrics", "wallet_payload", "rule_recalc_payload", "legacy_rule_publication")
 	}
 	err := query.
 		Where(
@@ -162,7 +162,7 @@ func RegisterOrganizationInvoiceSummary(
 		return *summary, false, fmt.Errorf("unknown organization invoice summary status %q", summary.Status)
 	}
 
-	claimed, err := reclaimOrganizationInvoiceSummary(*summary, now)
+	claimed, err := reclaimOrganizationInvoiceSummary(DB, *summary, now)
 	if err != nil {
 		return adoptOrganizationInvoiceRegistration(organizationId, period, err)
 	}
@@ -171,9 +171,10 @@ func RegisterOrganizationInvoiceSummary(
 
 // reclaimOrganizationInvoiceSummary bumps the revision and resets the build
 // state with a conditional update, so a concurrent invalidation or another
-// claimant can never be overwritten by a stale reclaimer. Building rows are
-// never reclaimed here: the persistent worker owns them for their lifetime.
+// claimant can never be overwritten by a stale reclaimer. The worker also
+// uses this to replace building rows carrying the retired recalc input.
 func reclaimOrganizationInvoiceSummary(
+	db *gorm.DB,
 	summary OrganizationInvoicePeriodSummary,
 	now int64,
 ) (OrganizationInvoicePeriodSummary, error) {
@@ -181,29 +182,30 @@ func reclaimOrganizationInvoiceSummary(
 	if now < sourceAsOf {
 		sourceAsOf = now
 	}
-	var evidenceAsOf int64
-	var logHighWatermark *int64
 	finalized := now > summary.PeriodEnd
-	if len(summary.RuleRecalcPayload) > 0 {
-		sourceAsOf, evidenceAsOf = summary.SourceAsOf, summary.EvidenceAsOf
-		logHighWatermark, finalized = summary.LogHighWatermark, summary.Finalized
+	updates := map[string]any{
+		"revision":           summary.Revision + 1,
+		"status":             OrganizationInvoiceSummaryStatusBuilding,
+		"stage":              OrganizationInvoiceStagePending,
+		"failure_kind":       "",
+		"source_as_of":       sourceAsOf,
+		"evidence_as_of":     0,
+		"log_high_watermark": nil,
+		"finalized":          finalized,
+		"payload":            nil,
+		"metrics":            "",
+		"error":              "",
+		"updated_at":         now,
 	}
-	result := DB.Model(&OrganizationInvoicePeriodSummary{}).
+	if len(summary.RuleRecalcPayload) > 0 {
+		// Move the original bytes and fence the old generation atomically.
+		updates["legacy_rule_publication"] = summary.RuleRecalcPayload
+		updates["rule_recalc_payload"] = nil
+		updates["wallet_payload"] = nil
+	}
+	result := db.Model(&OrganizationInvoicePeriodSummary{}).
 		Where("id = ? AND revision = ? AND status = ?", summary.Id, summary.Revision, summary.Status).
-		Updates(map[string]any{
-			"revision":           summary.Revision + 1,
-			"status":             OrganizationInvoiceSummaryStatusBuilding,
-			"stage":              OrganizationInvoiceStagePending,
-			"failure_kind":       "",
-			"source_as_of":       sourceAsOf,
-			"evidence_as_of":     evidenceAsOf,
-			"log_high_watermark": logHighWatermark,
-			"finalized":          finalized,
-			"payload":            nil,
-			"metrics":            "",
-			"error":              "",
-			"updated_at":         now,
-		})
+		Updates(updates)
 	if result.Error != nil {
 		return OrganizationInvoicePeriodSummary{}, result.Error
 	}
@@ -216,10 +218,14 @@ func reclaimOrganizationInvoiceSummary(
 	reclaimed.Stage = OrganizationInvoiceStagePending
 	reclaimed.FailureKind = ""
 	reclaimed.SourceAsOf = sourceAsOf
-	reclaimed.EvidenceAsOf = evidenceAsOf
-	reclaimed.LogHighWatermark = logHighWatermark
+	reclaimed.EvidenceAsOf = 0
+	reclaimed.LogHighWatermark = nil
 	reclaimed.Finalized = finalized
 	reclaimed.Payload = nil
+	if len(summary.RuleRecalcPayload) > 0 {
+		reclaimed.WalletPayload = nil
+	}
+	reclaimed.RuleRecalcPayload = nil
 	reclaimed.Metrics = ""
 	reclaimed.Error = ""
 	reclaimed.UpdatedAt = now
@@ -281,7 +287,7 @@ func ClaimNextOrganizationInvoiceBuild(ctx context.Context, skipOrganizationId i
 	var summaries []OrganizationInvoicePeriodSummary
 	err := organizationStatsRetryDue(DB.WithContext(ctx), common.GetTimestamp()).
 		Where("calculation_version = ? AND (status IN ? OR (status = ? AND (failure_kind IS NULL OR failure_kind <> ?) AND updated_at <= ?))", OrganizationInvoiceSummaryCalculationVersion, []OrganizationInvoiceSummaryStatus{OrganizationInvoiceSummaryStatusBuilding, OrganizationInvoiceSummaryStatusInvalidated}, OrganizationInvoiceSummaryStatusFailed, OrganizationInvoiceFailureKindData, common.GetTimestamp()-int64(organizationInvoiceSummaryFailureBackoff/time.Second)).
-		Omit("payload", "metrics", "wallet_payload").
+		Omit("payload", "metrics", "wallet_payload", "legacy_rule_publication").
 		Order("priority desc, COALESCE(stats_attempted_at,0) asc, period_start asc, updated_at asc, id asc").
 		Limit(64).
 		Find(&summaries).Error
@@ -292,10 +298,21 @@ func ClaimNextOrganizationInvoiceBuild(ctx context.Context, skipOrganizationId i
 	for _, candidate := range summaries {
 		candidateId := candidate.Id
 		var claimErr error
-		switch candidate.Status {
-		case OrganizationInvoiceSummaryStatusInvalidated:
-			candidate, claimErr = reclaimOrganizationInvoiceSummary(candidate, common.GetTimestamp())
-		case OrganizationInvoiceSummaryStatusFailed:
+		switch {
+		case len(candidate.RuleRecalcPayload) > 0:
+			// A pre-cutover claim may hold the previous publication's source
+			// boundary. Start a new generation to capture facts and fence its writer.
+			claimErr = DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := validateHeavyStatsPermitTx(tx, ctx); err != nil {
+					return err
+				}
+				var err error
+				candidate, err = reclaimOrganizationInvoiceSummary(tx, candidate, common.GetTimestamp())
+				return err
+			})
+		case candidate.Status == OrganizationInvoiceSummaryStatusInvalidated:
+			candidate, claimErr = reclaimOrganizationInvoiceSummary(DB, candidate, common.GetTimestamp())
+		case candidate.Status == OrganizationInvoiceSummaryStatusFailed:
 			candidate, claimErr = resumeOrganizationInvoiceSummary(candidate, common.GetTimestamp())
 		}
 		if claimErr != nil {
@@ -306,10 +323,10 @@ func ClaimNextOrganizationInvoiceBuild(ctx context.Context, skipOrganizationId i
 			// Adopt its current building row instead of treating a CAS conflict
 			// as a failed no-progress pass and backing off useful new work.
 			var current OrganizationInvoicePeriodSummary
-			if err := DB.WithContext(ctx).Omit("payload", "metrics", "wallet_payload").Where("id = ? AND calculation_version = ? AND status = ?", candidateId, OrganizationInvoiceSummaryCalculationVersion, OrganizationInvoiceSummaryStatusBuilding).Limit(1).Find(&current).Error; err != nil {
+			if err := DB.WithContext(ctx).Omit("payload", "metrics", "wallet_payload", "legacy_rule_publication").Where("id = ? AND calculation_version = ? AND status = ?", candidateId, OrganizationInvoiceSummaryCalculationVersion, OrganizationInvoiceSummaryStatusBuilding).Limit(1).Find(&current).Error; err != nil {
 				return nil, err
 			}
-			if current.Id == 0 {
+			if current.Id == 0 || len(current.RuleRecalcPayload) > 0 {
 				continue
 			}
 			candidate = current
@@ -404,7 +421,7 @@ func CheckOrganizationInvoiceDependencies(
 		monthEnds = append(monthEnds, month.EndTimestamp)
 	}
 	var summaries []OrganizationInvoicePeriodSummary
-	if err := DB.Omit("payload", "metrics", "wallet_payload").
+	if err := DB.Omit("payload", "metrics", "wallet_payload", "legacy_rule_publication").
 		Where(
 			"organization_id = ? AND calculation_version = ? AND period_start IN ? AND period_end IN ?",
 			organizationId,

@@ -23,9 +23,6 @@ type organizationInvoiceStandardCategoryEntry struct {
 // Exact names take priority, then unambiguous brand/family prefixes are used so
 // established variants such as gpt-4o and glm-5-turbo do not become fallback
 // categories merely because they were omitted from a finance-provided list.
-// The default settlement factor stays OrganizationSettlementFactorScale
-// (1.0000) for every category; finance configures real factors per effective
-// month after release rather than baking reference ratios into code.
 var organizationInvoiceStandardCategories = []organizationInvoiceStandardCategoryEntry{
 	{key: "claude", name: "Claude", sortOrder: 10, models: []string{
 		"claude-fable-5", "claude-sonnet-5", "claude-opus-5",

@@ -178,3 +178,77 @@ func TestGetOrganizationInvoicePublishesConsumptionWithIndependentWalletWarning(
 	assert.Equal(t, model.OrganizationInvoiceSummaryStatusReady, summary.Status)
 	assert.NotEmpty(t, summary.Payload)
 }
+
+func TestGetOrganizationInvoiceRebuildsInconsistentPublication(t *testing.T) {
+	for _, scenario := range []string{"missing total", "missing zero-usage dimensions", "missing cross-tab quota", "inconsistent model total"} {
+		t.Run(scenario, func(t *testing.T) {
+			truncate(t)
+			const orgID, userID = 7081, 7082
+			t.Cleanup(func() {
+				require.NoError(t, model.LOG_DB.Where("user_id = ?", userID).Delete(&model.Log{}).Error)
+			})
+			require.NoError(t, model.DB.Create(&model.Organization{
+				Id: orgID, Name: "invoice publication recovery", Status: model.OrganizationStatusEnabled,
+			}).Error)
+			require.NoError(t, model.DB.Create(&model.User{
+				Id: userID, CreatedAt: 1, Username: "invoice-recovery", Status: common.UserStatusEnabled,
+			}).Error)
+			require.NoError(t, model.DB.Create(&model.OrganizationMember{
+				OrganizationId: orgID, UserId: userID, Role: model.OrganizationRoleMember, JoinedAt: 1, BillingStartAt: 1,
+			}).Error)
+			period, err := model.NewOrganizationInvoicePeriod("2026-09-01", "2026-09-30", time.Now())
+			require.NoError(t, err)
+			require.NoError(t, model.LOG_DB.Create(&model.Log{
+				UserId: userID, CreatedAt: period.StartTimestamp + 1, Type: model.LogTypeConsume, ModelName: "gpt-4o", Quota: 80,
+			}).Error)
+			initial, pending, err := model.RegisterOrganizationInvoiceSummary(orgID, period, false, common.GetTimestamp())
+			require.NoError(t, err)
+			require.True(t, pending)
+			require.NoError(t, model.RunOrganizationInvoiceMonthlyBuild(t.Context(), &model.OrganizationInvoiceBuildItem{Summary: initial, Period: period}))
+			ready, err := model.LookupOrganizationInvoiceSummary(orgID, period, true)
+			require.NoError(t, err)
+			require.NotNil(t, ready)
+			var stored map[string]any
+			require.NoError(t, common.Unmarshal(ready.Payload, &stored))
+			switch scenario {
+			case "missing total":
+				delete(stored, "gross_total_quota")
+			case "missing zero-usage dimensions":
+				stored["gross_total_quota"] = 0
+				delete(stored, "accounts")
+				delete(stored, "category_rows")
+				delete(stored, "model_rows")
+			case "missing cross-tab quota":
+				category := stored["category_rows"].([]any)[0].(map[string]any)
+				cell := category["account_amounts"].([]any)[0].(map[string]any)
+				delete(cell, "gross_quota")
+			case "inconsistent model total":
+				modelRow := stored["model_rows"].([]any)[0].(map[string]any)
+				modelRow["gross_quota"] = 0
+			}
+			payload, err := common.Marshal(stored)
+			require.NoError(t, err)
+			require.NoError(t, model.DB.Model(ready).Update("payload", payload).Error)
+
+			invoice, err := GetOrganizationInvoice(orgID, period, false)
+			require.NoError(t, err)
+			assert.Equal(t, model.OrganizationInvoiceGenerationStatusGenerating, invoice.GenerationStatus)
+			assert.False(t, invoice.PreviousPublication)
+			next, err := model.ClaimNextOrganizationInvoiceBuild(t.Context(), 0)
+			require.NoError(t, err)
+			require.NotNil(t, next)
+			assert.Equal(t, ready.Revision+1, next.Summary.Revision)
+			require.NoError(t, model.RunOrganizationInvoiceMonthlyBuild(t.Context(), next))
+			invoice, err = GetOrganizationInvoice(orgID, period, false)
+			require.NoError(t, err)
+			assert.Equal(t, model.OrganizationInvoiceGenerationStatusReady, invoice.GenerationStatus)
+			assert.Equal(t, int64(80), invoice.GrossTotalQuota)
+			require.Len(t, invoice.Accounts, 1)
+			require.Len(t, invoice.CategoryRows, 1)
+			require.Len(t, invoice.ModelRows, 1)
+			assert.Equal(t, invoice.GrossTotalQuota, invoice.Accounts[0].GrossQuota)
+			assert.Equal(t, invoice.GrossTotalQuota, invoice.CategoryRows[0].GrossQuota)
+			assert.Equal(t, invoice.GrossTotalQuota, invoice.ModelRows[0].GrossQuota)
+		})
+	}
+}

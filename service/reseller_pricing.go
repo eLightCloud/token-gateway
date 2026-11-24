@@ -56,16 +56,11 @@ func PreparePersonalRequestPricing(c *gin.Context, info *relaycommon.RelayInfo) 
 	}
 	info.PersonalPricing = snapshot
 	PinPersonalPricingChannel(c, info)
-	if snapshot != nil && snapshot.Realtime != nil {
-		info.PriceData.DiscountSnapshot = snapshot.Realtime.LegacyDiscount
-		info.PriceData.DiscountSnapshotLoaded = true
-		ApplyOrganizationDiscountForChannel(info, info.ChannelId)
-	}
 	return nil
 }
 
-// PreparePersonalChannelBilling runs after the original group/organization
-// estimate has been selected, and before any outbound attempt.
+// PreparePersonalChannelBilling reserves the selected group's estimate
+// with the effective consumption ratio before any outbound attempt.
 func PreparePersonalChannelBilling(c *gin.Context, info *relaycommon.RelayInfo) *relaytypes.NewAPIError {
 	if info.PersonalPricing == nil {
 		return nil
@@ -83,13 +78,6 @@ func PreparePersonalChannelBilling(c *gin.Context, info *relaycommon.RelayInfo) 
 	base := info.PriceData.QuotaToPreConsume
 	if info.TieredBillingSnapshot != nil {
 		base = info.TieredBillingSnapshot.EstimatedQuotaAfterGroup
-	}
-	if organizationDiscountRatioFloat(info.PriceData) > 1 {
-		target, err := OrganizationDiscountReserveTarget(info.PriceData)
-		if err != nil {
-			return relaytypes.NewError(err, relaytypes.ErrorCodeModelPriceError, relaytypes.ErrOptionWithSkipRetry())
-		}
-		base = max(base, target)
 	}
 	if info.Billing == nil {
 		return PreConsumeBilling(c, base, info)

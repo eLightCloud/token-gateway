@@ -36,7 +36,6 @@ type QuotaInfo struct {
 	ModelPrice    float64
 	ModelRatio    float64
 	GroupRatio    float64
-	DiscountRatio float64
 }
 
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
@@ -53,7 +52,7 @@ func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
 		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 		groupRatio := decimal.NewFromFloat(info.GroupRatio)
 
-		quota := modelPrice.Mul(quotaPerUnit).Mul(groupRatio).Mul(decimal.NewFromFloat(info.DiscountRatio))
+		quota := modelPrice.Mul(quotaPerUnit).Mul(groupRatio)
 		return common.QuotaFromDecimalChecked(quota)
 	}
 
@@ -76,7 +75,7 @@ func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
 	quota = quota.Add(inputAudioTokens.Mul(audioRatio))
 	quota = quota.Add(outputAudioTokens.Mul(audioRatio).Mul(audioCompletionRatio))
 
-	quota = quota.Mul(ratio).Mul(decimal.NewFromFloat(info.DiscountRatio))
+	quota = quota.Mul(ratio)
 
 	// If ratio is not zero and quota is less than or equal to zero, set quota to 1
 	if !ratio.IsZero() && quota.LessThanOrEqual(decimal.Zero) {
@@ -92,8 +91,8 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	if relayInfo != nil && relayInfo.PersonalPricing != nil {
 		return reservePersonalRealtimeUsage(ctx, relayInfo, usage)
 	}
-	if relayInfo == nil || !relayInfo.PriceData.DiscountSnapshotLoaded {
-		return 0, fmt.Errorf("%w: realtime billing started without a resolved request snapshot", ErrOrganizationDiscountLoadFailed)
+	if relayInfo == nil {
+		return 0, fmt.Errorf("realtime billing requires relay info")
 	}
 	if relayInfo.UsePrice {
 		return 0, nil
@@ -138,11 +137,10 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:     modelName,
-		UsePrice:      relayInfo.UsePrice,
-		ModelRatio:    modelRatio,
-		GroupRatio:    actualGroupRatio,
-		DiscountRatio: organizationDiscountRatioFloat(relayInfo.PriceData),
+		ModelName:  modelName,
+		UsePrice:   relayInfo.UsePrice,
+		ModelRatio: modelRatio,
+		GroupRatio: actualGroupRatio,
 	}
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
@@ -203,19 +201,16 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:     modelName,
-		UsePrice:      usePrice,
-		ModelRatio:    modelRatio,
-		GroupRatio:    groupRatio,
-		DiscountRatio: organizationDiscountRatioFloat(relayInfo.PriceData),
+		ModelName:  modelName,
+		UsePrice:   usePrice,
+		ModelRatio: modelRatio,
+		GroupRatio: groupRatio,
 	}
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
 	noteQuotaClamp(relayInfo, clamp)
 	if tieredOk {
-		adjusted, clamp2 := common.QuotaFromFloatChecked(float64(tieredQuota) * organizationDiscountRatioFloat(relayInfo.PriceData))
-		noteQuotaClamp(relayInfo, clamp2)
-		quota = adjusted
+		quota = tieredQuota
 	}
 
 	totalTokens := usage.TotalTokens
@@ -340,19 +335,16 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:     billingModelName,
-		UsePrice:      usePrice,
-		ModelRatio:    modelRatio,
-		GroupRatio:    groupRatio,
-		DiscountRatio: organizationDiscountRatioFloat(relayInfo.PriceData),
+		ModelName:  billingModelName,
+		UsePrice:   usePrice,
+		ModelRatio: modelRatio,
+		GroupRatio: groupRatio,
 	}
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
 	noteQuotaClamp(relayInfo, clamp)
 	if tieredOk {
-		adjusted, clamp2 := common.QuotaFromFloatChecked(float64(tieredQuota) * organizationDiscountRatioFloat(relayInfo.PriceData))
-		noteQuotaClamp(relayInfo, clamp2)
-		quota = adjusted
+		quota = tieredQuota
 	}
 
 	totalTokens := usage.TotalTokens

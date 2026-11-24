@@ -5,32 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/shopspring/decimal"
-
-	"gorm.io/gorm"
 )
 
 const (
 	OrganizationInvoiceTimezone                   = "Asia/Shanghai"
-	OrganizationSettlementFactorScale             = 10000
-	OrganizationSettlementMaxFactorScaled         = 100000
 	organizationInvoiceMaxMonths                  = 24
-	organizationInvoiceCategoryKeyMaxLength       = 96
 	organizationInvoiceFallbackCategoryPrefix     = "model."
 	OrganizationInvoiceGenerationStatusGenerating = "generating"
 	OrganizationInvoiceGenerationStatusReady      = "ready"
 )
 
 var organizationInvoiceLocation = time.FixedZone(OrganizationInvoiceTimezone, 8*60*60)
-var organizationSettlementFactorPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]{1,4})?$`)
 
+// OrganizationBillingSettlementRule preserves the retired settings table for historical audits.
 type OrganizationBillingSettlementRule struct {
 	Id             int    `json:"id"`
 	OrganizationId int    `json:"organization_id" gorm:"not null;uniqueIndex:idx_org_settlement_rule,priority:1"`
@@ -65,28 +58,14 @@ type OrganizationInvoiceAccountAmount struct {
 	GrossAmountUSD string `json:"gross_amount_usd"`
 }
 
-type OrganizationInvoiceFactorSegment struct {
-	PeriodMonth        string `json:"period_month"`
-	Factor             string `json:"factor"`
-	FactorScaled       int    `json:"factor_scaled"`
-	RuleEffectiveMonth string `json:"rule_effective_month,omitempty"`
-	RuleVersion        int    `json:"rule_version"`
-	GrossQuota         int64  `json:"gross_quota"`
-	SettledAmountUSD   string `json:"settled_amount_usd"`
-}
-
 type OrganizationInvoiceCategoryRow struct {
-	CategoryKey      string                             `json:"category_key"`
-	CategoryName     string                             `json:"category_name"`
-	Fallback         bool                               `json:"fallback"`
-	Models           []string                           `json:"models"`
-	AccountAmounts   []OrganizationInvoiceAccountAmount `json:"account_amounts"`
-	GrossQuota       int64                              `json:"gross_quota"`
-	GrossAmountUSD   string                             `json:"gross_amount_usd"`
-	Factor           string                             `json:"factor"`
-	MultipleFactors  bool                               `json:"multiple_factors"`
-	FactorSegments   []OrganizationInvoiceFactorSegment `json:"factor_segments"`
-	SettledAmountUSD string                             `json:"settled_amount_usd"`
+	CategoryKey    string                             `json:"category_key"`
+	CategoryName   string                             `json:"category_name"`
+	Fallback       bool                               `json:"fallback"`
+	Models         []string                           `json:"models"`
+	AccountAmounts []OrganizationInvoiceAccountAmount `json:"account_amounts"`
+	GrossQuota     int64                              `json:"gross_quota"`
+	GrossAmountUSD string                             `json:"gross_amount_usd"`
 }
 
 type OrganizationInvoiceModelRow struct {
@@ -99,24 +78,23 @@ type OrganizationInvoiceModelRow struct {
 }
 
 type OrganizationInvoice struct {
-	RecalculationToken    string                             `json:"recalculation_token,omitempty"`
-	PreviousPublication   bool                               `json:"previous_publication,omitempty"`
-	CoveragePeriod        OrganizationInvoicePeriod          `json:"coverage_period"`
-	ExpenseCoverage       OrganizationInvoiceExpenseCoverage `json:"expense_coverage"`
-	EvidenceAsOf          int64                              `json:"evidence_as_of"`
-	WalletWarning         string                             `json:"wallet_warning,omitempty"`
-	GenerationStatus      string                             `json:"generation_status"`
-	SourceAsOf            int64                              `json:"source_as_of"`
-	CalculationVersion    int                                `json:"calculation_version"`
-	Revision              int                                `json:"revision"`
-	Period                OrganizationInvoicePeriod          `json:"period"`
-	Currency              string                             `json:"currency"`
-	Accounts              []OrganizationInvoiceAccount       `json:"accounts"`
-	CategoryRows          []OrganizationInvoiceCategoryRow   `json:"category_rows"`
-	ModelRows             []OrganizationInvoiceModelRow      `json:"model_rows"`
-	GrossTotalQuota       int64                              `json:"gross_total_quota"`
-	GrossTotalAmountUSD   string                             `json:"gross_total_amount_usd"`
-	SettledTotalAmountUSD string                             `json:"settled_total_amount_usd"`
+	RecalculationToken  string                             `json:"recalculation_token,omitempty"`
+	PreviousPublication bool                               `json:"previous_publication,omitempty"`
+	CoveragePeriod      OrganizationInvoicePeriod          `json:"coverage_period"`
+	ExpenseCoverage     OrganizationInvoiceExpenseCoverage `json:"expense_coverage"`
+	EvidenceAsOf        int64                              `json:"evidence_as_of"`
+	WalletWarning       string                             `json:"wallet_warning,omitempty"`
+	GenerationStatus    string                             `json:"generation_status"`
+	SourceAsOf          int64                              `json:"source_as_of"`
+	CalculationVersion  int                                `json:"calculation_version"`
+	Revision            int                                `json:"revision"`
+	Period              OrganizationInvoicePeriod          `json:"period"`
+	Currency            string                             `json:"currency"`
+	Accounts            []OrganizationInvoiceAccount       `json:"accounts"`
+	CategoryRows        []OrganizationInvoiceCategoryRow   `json:"category_rows"`
+	ModelRows           []OrganizationInvoiceModelRow      `json:"model_rows"`
+	GrossTotalQuota     int64                              `json:"gross_total_quota"`
+	GrossTotalAmountUSD string                             `json:"gross_total_amount_usd"`
 	// Build reports the blocking month, stage, and coarse progress while the
 	// requested snapshot itself is still generating (typically an earlier
 	// dependency month). It is nil on ready responses.
@@ -133,34 +111,6 @@ type OrganizationInvoiceBuildInfo struct {
 	Period   OrganizationInvoicePeriod `json:"period,omitempty"`
 	Progress int                       `json:"progress,omitempty"`
 	Error    string                    `json:"error,omitempty"`
-}
-
-type OrganizationSettlementRuleOption struct {
-	CategoryKey          string   `json:"category_key"`
-	CategoryName         string   `json:"category_name"`
-	Fallback             bool     `json:"fallback"`
-	Models               []string `json:"models"`
-	Factor               string   `json:"factor"`
-	FactorScaled         int      `json:"factor_scaled"`
-	EffectiveMonth       string   `json:"effective_month"`
-	SourceEffectiveMonth string   `json:"source_effective_month,omitempty"`
-	Version              int      `json:"version"`
-	Inherited            bool     `json:"inherited"`
-}
-
-type OrganizationSettlementRuleUpdateResult struct {
-	Rule                 OrganizationBillingSettlementRule
-	Changed              bool
-	PreviousFactorScaled int
-}
-
-type OrganizationSettlementVersionConflictError struct {
-	Expected int
-	Actual   int
-}
-
-func (e *OrganizationSettlementVersionConflictError) Error() string {
-	return fmt.Sprintf("settlement rule version conflict: expected %d, actual %d", e.Expected, e.Actual)
 }
 
 type organizationInvoiceMonthRange struct {
@@ -196,7 +146,6 @@ type organizationInvoiceCategoryAccumulator struct {
 	category      organizationInvoiceCategory
 	models        map[string]struct{}
 	accountQuotas map[int]int64
-	monthQuotas   map[int]int64
 	grossQuota    int64
 }
 
@@ -279,38 +228,6 @@ func FormatOrganizationInvoiceMonth(value int) string {
 	return fmt.Sprintf("%04d-%02d", year, month)
 }
 
-func ParseOrganizationSettlementFactor(value string) (int, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0, errors.New("factor is required")
-	}
-	if !organizationSettlementFactorPattern.MatchString(value) {
-		return 0, errors.New("factor must be a decimal number with at most 4 decimal places")
-	}
-	parsed, err := decimal.NewFromString(value)
-	if err != nil {
-		return 0, errors.New("factor must be a decimal number")
-	}
-	if parsed.IsNegative() || parsed.GreaterThan(decimal.NewFromInt(OrganizationSettlementMaxFactorScaled).Div(decimal.NewFromInt(OrganizationSettlementFactorScale))) {
-		return 0, fmt.Errorf("factor must be between 0.0000 and %.4f", float64(OrganizationSettlementMaxFactorScaled)/OrganizationSettlementFactorScale)
-	}
-	scaled := parsed.Mul(decimal.NewFromInt(OrganizationSettlementFactorScale))
-	if !scaled.Equal(scaled.Truncate(0)) {
-		return 0, errors.New("factor supports at most 4 decimal places")
-	}
-	factorScaled := scaled.IntPart()
-	if factorScaled < 0 || factorScaled > OrganizationSettlementMaxFactorScaled {
-		return 0, errors.New("factor is out of range")
-	}
-	return int(factorScaled), nil
-}
-
-func FormatOrganizationSettlementFactor(value int) string {
-	return decimal.NewFromInt(int64(value)).
-		Div(decimal.NewFromInt(OrganizationSettlementFactorScale)).
-		StringFixed(4)
-}
-
 func organizationInvoiceMonths(period OrganizationInvoicePeriod) ([]organizationInvoiceMonthRange, error) {
 	start := time.Unix(period.StartTimestamp, 0).In(organizationInvoiceLocation)
 	end := time.Unix(period.EndTimestamp, 0).In(organizationInvoiceLocation)
@@ -371,21 +288,6 @@ func organizationInvoiceAmountString(quota int64) string {
 	return organizationInvoiceAmountFromQuota(quota).StringFixed(10)
 }
 
-func loadOrganizationSettlementRules(organizationId int, throughMonth int) (map[string][]OrganizationBillingSettlementRule, error) {
-	return loadOrganizationSettlementRulesFrom(DB, organizationId, throughMonth)
-}
-
-func resolveOrganizationSettlementRule(rules []OrganizationBillingSettlementRule, month int) OrganizationBillingSettlementRule {
-	result := OrganizationBillingSettlementRule{FactorScaled: OrganizationSettlementFactorScale}
-	for _, rule := range rules {
-		if rule.EffectiveMonth > month {
-			break
-		}
-		result = rule
-	}
-	return result
-}
-
 // GetOrganizationInvoice is the uncached historical reference calculator.
 // Production reads and exports use service.GetOrganizationInvoice; this reference
 // retains the old type=2 base only for unaffected-rule comparisons.
@@ -412,14 +314,6 @@ func GetOrganizationInvoiceWithContext(
 	if err != nil {
 		return nil, err
 	}
-	months, err := organizationInvoiceMonths(period)
-	if err != nil {
-		return nil, err
-	}
-	rules, err := loadOrganizationSettlementRules(organizationId, months[len(months)-1].key)
-	if err != nil {
-		return nil, err
-	}
 	accountQuotas, models, categories, grossTotalQuota, err := accumulateOrganizationInvoiceAggregates(aggregates)
 	if err != nil {
 		return nil, err
@@ -433,20 +327,16 @@ func GetOrganizationInvoiceWithContext(
 	if err != nil {
 		return nil, err
 	}
-	categoryRows, settledTotal, err := buildOrganizationInvoiceCategoryRows(categories, accounts, months, rules)
-	if err != nil {
-		return nil, err
-	}
+	categoryRows := buildOrganizationInvoiceCategoryRows(categories, accounts)
 	modelRows := buildOrganizationInvoiceModelRows(models, accounts, grossTotalQuota)
 	return &OrganizationInvoice{
-		Period:                period,
-		Currency:              "USD",
-		Accounts:              accounts,
-		CategoryRows:          categoryRows,
-		ModelRows:             modelRows,
-		GrossTotalQuota:       grossTotalQuota,
-		GrossTotalAmountUSD:   organizationInvoiceAmountString(grossTotalQuota),
-		SettledTotalAmountUSD: settledTotal.StringFixed(10),
+		Period:              period,
+		Currency:            "USD",
+		Accounts:            accounts,
+		CategoryRows:        categoryRows,
+		ModelRows:           modelRows,
+		GrossTotalQuota:     grossTotalQuota,
+		GrossTotalAmountUSD: organizationInvoiceAmountString(grossTotalQuota),
 	}, nil
 }
 
@@ -478,7 +368,6 @@ func accumulateOrganizationInvoiceAggregates(
 				category:      category,
 				models:        make(map[string]struct{}),
 				accountQuotas: make(map[int]int64),
-				monthQuotas:   make(map[int]int64),
 			}
 			categories[category.key] = categoryItem
 		} else if category.fallback && category.name < categoryItem.category.name {
@@ -493,11 +382,6 @@ func accumulateOrganizationInvoiceAggregates(
 			return nil, nil, nil, 0, err
 		}
 		categoryItem.accountQuotas[aggregate.UserId] = categoryAccountQuota
-		categoryMonthQuota := categoryItem.monthQuotas[aggregate.PeriodMonth]
-		if err := addOrganizationInvoiceQuota(&categoryMonthQuota, aggregate.TotalQuota); err != nil {
-			return nil, nil, nil, 0, err
-		}
-		categoryItem.monthQuotas[aggregate.PeriodMonth] = categoryMonthQuota
 
 		modelItem, exists := models[aggregate.ModelName]
 		if !exists {
@@ -583,61 +467,22 @@ func buildOrganizationInvoiceAccountAmounts(quotas map[int]int64, accounts []Org
 func buildOrganizationInvoiceCategoryRows(
 	categories map[string]*organizationInvoiceCategoryAccumulator,
 	accounts []OrganizationInvoiceAccount,
-	months []organizationInvoiceMonthRange,
-	rules map[string][]OrganizationBillingSettlementRule,
-) ([]OrganizationInvoiceCategoryRow, decimal.Decimal, error) {
+) []OrganizationInvoiceCategoryRow {
 	rows := make([]OrganizationInvoiceCategoryRow, 0, len(categories))
-	settledTotal := decimal.Zero
 	for _, item := range categories {
 		modelNames := make([]string, 0, len(item.models))
 		for modelName := range item.models {
 			modelNames = append(modelNames, modelName)
 		}
 		sort.Strings(modelNames)
-		factors := types.NewSet[int]()
-		segments := make([]OrganizationInvoiceFactorSegment, 0, len(months))
-		settledAmount := decimal.Zero
-		for _, month := range months {
-			quota, hasUsage := item.monthQuotas[month.key]
-			if !hasUsage {
-				continue
-			}
-			rule := resolveOrganizationSettlementRule(rules[item.category.key], month.key)
-			factors.Add(rule.FactorScaled)
-			monthSettled := organizationInvoiceAmountFromQuota(quota).
-				Mul(decimal.NewFromInt(int64(rule.FactorScaled))).
-				Div(decimal.NewFromInt(OrganizationSettlementFactorScale))
-			settledAmount = settledAmount.Add(monthSettled)
-			segments = append(segments, OrganizationInvoiceFactorSegment{
-				PeriodMonth:        FormatOrganizationInvoiceMonth(month.key),
-				Factor:             FormatOrganizationSettlementFactor(rule.FactorScaled),
-				FactorScaled:       rule.FactorScaled,
-				RuleEffectiveMonth: FormatOrganizationInvoiceMonth(rule.EffectiveMonth),
-				RuleVersion:        rule.Version,
-				GrossQuota:         quota,
-				SettledAmountUSD:   monthSettled.StringFixed(10),
-			})
-		}
-		if settledAmount.IsNegative() {
-			return nil, decimal.Zero, errors.New("organization invoice settled amount cannot be negative")
-		}
-		settledTotal = settledTotal.Add(settledAmount)
-		factor := "multiple"
-		if factors.Len() == 1 {
-			factor = FormatOrganizationSettlementFactor(factors.Items()[0])
-		}
 		rows = append(rows, OrganizationInvoiceCategoryRow{
-			CategoryKey:      item.category.key,
-			CategoryName:     item.category.name,
-			Fallback:         item.category.fallback,
-			Models:           modelNames,
-			AccountAmounts:   buildOrganizationInvoiceAccountAmounts(item.accountQuotas, accounts),
-			GrossQuota:       item.grossQuota,
-			GrossAmountUSD:   organizationInvoiceAmountString(item.grossQuota),
-			Factor:           factor,
-			MultipleFactors:  factors.Len() > 1,
-			FactorSegments:   segments,
-			SettledAmountUSD: settledAmount.StringFixed(10),
+			CategoryKey:    item.category.key,
+			CategoryName:   item.category.name,
+			Fallback:       item.category.fallback,
+			Models:         modelNames,
+			AccountAmounts: buildOrganizationInvoiceAccountAmounts(item.accountQuotas, accounts),
+			GrossQuota:     item.grossQuota,
+			GrossAmountUSD: organizationInvoiceAmountString(item.grossQuota),
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -651,7 +496,7 @@ func buildOrganizationInvoiceCategoryRows(
 		}
 		return rows[i].CategoryKey < rows[j].CategoryKey
 	})
-	return rows, settledTotal, nil
+	return rows
 }
 
 func buildOrganizationInvoiceModelRows(
@@ -683,230 +528,4 @@ func buildOrganizationInvoiceModelRows(
 		return rows[i].ModelName < rows[j].ModelName
 	})
 	return rows
-}
-
-// requireOrganizationSettlementCategory enforces the save-eligibility contract
-// against the shared basis: positive evidence authorizes, a complete and fresh
-// basis authorizes rejection, and anything else reports the stable wait or
-// failure codes instead of guessing.
-func requireOrganizationSettlementCategory(ctx context.Context, db *gorm.DB, organizationId int, categoryKey string) error {
-	decision, err := judgeOrganizationSettlementCategory(ctx, lockForUpdate(db), organizationId, categoryKey)
-	if err != nil {
-		return err
-	}
-	switch decision {
-	case organizationSettlementCategoryUsed:
-		return nil
-	case organizationSettlementCategoryWaiting:
-		return newOrganizationSettlementDiscoveryError(
-			OrganizationSettlementDiscoveryPreparing,
-			"settlement category basis is updating; retry after the shared preparation completes")
-	case organizationSettlementCategoryDiscoveryFailed:
-		return newOrganizationSettlementDiscoveryError(
-			OrganizationSettlementDiscoveryFailed,
-			"settlement category discovery failed; retry the preparation, then save again")
-	default:
-		// Complete and fresh basis without this category.
-		return errors.New("settlement rule category is not used by this organization")
-	}
-}
-
-func GetOrganizationSettlementRuleOptions(
-	ctx context.Context,
-	organizationId int,
-	effectiveMonth int,
-) ([]OrganizationSettlementRuleOption, OrganizationInvoiceDiscoveryMeta, error) {
-	if err := RegisterOrganizationInvoiceModelPreparation(ctx, organizationId); err != nil {
-		return nil, OrganizationInvoiceDiscoveryMeta{}, err
-	}
-	basis, err := loadOrganizationInvoiceModelBasis(ctx, DB, organizationId)
-	if err != nil {
-		return nil, OrganizationInvoiceDiscoveryMeta{}, err
-	}
-	rules, err := loadOrganizationSettlementRules(organizationId, effectiveMonth)
-	if err != nil {
-		return nil, OrganizationInvoiceDiscoveryMeta{}, err
-	}
-	exactRules := make(map[string]OrganizationBillingSettlementRule)
-	for categoryKey, categoryRules := range rules {
-		for _, rule := range categoryRules {
-			if rule.EffectiveMonth == effectiveMonth {
-				exactRules[categoryKey] = rule
-			}
-		}
-	}
-	categoryMap := organizationInvoiceCategoriesForModels(basis.models)
-	categories := make([]organizationInvoiceCategory, 0, len(categoryMap))
-	for _, category := range categoryMap {
-		sort.Strings(category.models)
-		categories = append(categories, category)
-	}
-	sort.Slice(categories, func(i, j int) bool {
-		if categories[i].sortOrder != categories[j].sortOrder {
-			return categories[i].sortOrder < categories[j].sortOrder
-		}
-		if categories[i].name != categories[j].name {
-			return categories[i].name < categories[j].name
-		}
-		return categories[i].key < categories[j].key
-	})
-	options := make([]OrganizationSettlementRuleOption, 0, len(categories))
-	for _, category := range categories {
-		effectiveRule := resolveOrganizationSettlementRule(rules[category.key], effectiveMonth)
-		exactRule, hasExactRule := exactRules[category.key]
-		options = append(options, OrganizationSettlementRuleOption{
-			CategoryKey:          category.key,
-			CategoryName:         category.name,
-			Fallback:             category.fallback,
-			Models:               category.models,
-			Factor:               FormatOrganizationSettlementFactor(effectiveRule.FactorScaled),
-			FactorScaled:         effectiveRule.FactorScaled,
-			EffectiveMonth:       FormatOrganizationInvoiceMonth(effectiveMonth),
-			SourceEffectiveMonth: FormatOrganizationInvoiceMonth(effectiveRule.EffectiveMonth),
-			Version:              exactRule.Version,
-			Inherited:            !hasExactRule,
-		})
-	}
-	return options, basis.discovery, nil
-}
-
-func UpdateOrganizationSettlementRule(
-	ctx context.Context,
-	organizationId int,
-	categoryKey string,
-	effectiveMonth int,
-	factorScaled int,
-	expectedVersion int,
-) (*OrganizationSettlementRuleUpdateResult, error) {
-	if organizationId <= 0 {
-		return nil, errors.New("invalid organization id")
-	}
-	if categoryKey == "" || len(categoryKey) > organizationInvoiceCategoryKeyMaxLength {
-		return nil, errors.New("invalid settlement rule category")
-	}
-	effectiveMonthText := FormatOrganizationInvoiceMonth(effectiveMonth)
-	if effectiveMonthText == "" {
-		return nil, errors.New("invalid effective month")
-	}
-	effectiveMonthStart, err := time.ParseInLocation("2006-01", effectiveMonthText, organizationInvoiceLocation)
-	if err != nil {
-		return nil, err
-	}
-	if factorScaled < 0 || factorScaled > OrganizationSettlementMaxFactorScaled {
-		return nil, errors.New("settlement factor is out of range")
-	}
-	if expectedVersion < 0 {
-		return nil, errors.New("expected_version cannot be negative")
-	}
-	// Align windows first so a first-time save reports preparing, then enforce
-	// the eligibility contract once before the transaction and once more under
-	// the organization lock (3.6: stale evidence must never authorize a save).
-	if err := RegisterOrganizationInvoiceModelPreparation(ctx, organizationId); err != nil {
-		return nil, err
-	}
-	if err := requireOrganizationSettlementCategory(ctx, DB, organizationId, categoryKey); err != nil {
-		return nil, err
-	}
-
-	result := &OrganizationSettlementRuleUpdateResult{}
-	createAttempted := false
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		if err := lockForUpdate(tx).
-			Select("id").
-			First(&Organization{}, "id = ?", organizationId).Error; err != nil {
-			return err
-		}
-		if err := requireOrganizationSettlementCategory(ctx, tx, organizationId, categoryKey); err != nil {
-			return err
-		}
-		var rule OrganizationBillingSettlementRule
-		err := lockForUpdate(tx).
-			Where("organization_id = ? AND category_key = ? AND effective_month = ?", organizationId, categoryKey, effectiveMonth).
-			First(&rule).Error
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if expectedVersion != 0 {
-				return &OrganizationSettlementVersionConflictError{Expected: expectedVersion, Actual: 0}
-			}
-			previousFactorScaled := OrganizationSettlementFactorScale
-			var previousRule OrganizationBillingSettlementRule
-			previousErr := tx.
-				Where("organization_id = ? AND category_key = ? AND effective_month < ?", organizationId, categoryKey, effectiveMonth).
-				Order("effective_month desc").
-				First(&previousRule).Error
-			if previousErr == nil {
-				previousFactorScaled = previousRule.FactorScaled
-			} else if !errors.Is(previousErr, gorm.ErrRecordNotFound) {
-				return previousErr
-			}
-			rule = OrganizationBillingSettlementRule{
-				OrganizationId: organizationId,
-				CategoryKey:    categoryKey,
-				EffectiveMonth: effectiveMonth,
-				FactorScaled:   factorScaled,
-				Version:        1,
-			}
-			createAttempted = true
-			if err := tx.Create(&rule).Error; err != nil {
-				return err
-			}
-			result.Rule = rule
-			result.Changed = true
-			result.PreviousFactorScaled = previousFactorScaled
-			return invalidateOrganizationInvoiceSummariesForRuleChange(tx, organizationId, effectiveMonthStart.Unix(), "invalidated by settlement rule change")
-		}
-		result.PreviousFactorScaled = rule.FactorScaled
-		if rule.FactorScaled == factorScaled {
-			result.Rule = rule
-			return nil
-		}
-		if rule.Version != expectedVersion {
-			return &OrganizationSettlementVersionConflictError{Expected: expectedVersion, Actual: rule.Version}
-		}
-		nextVersion := rule.Version + 1
-		updatedAt := common.GetTimestamp()
-		update := tx.Model(&OrganizationBillingSettlementRule{}).
-			Where("id = ? AND version = ?", rule.Id, rule.Version).
-			Updates(map[string]interface{}{
-				"factor_scaled": factorScaled,
-				"version":       nextVersion,
-				"updated_at":    updatedAt,
-			})
-		if update.Error != nil {
-			return update.Error
-		}
-		if update.RowsAffected != 1 {
-			return &OrganizationSettlementVersionConflictError{Expected: expectedVersion, Actual: rule.Version}
-		}
-		rule.FactorScaled = factorScaled
-		rule.Version = nextVersion
-		rule.UpdatedAt = updatedAt
-		result.Rule = rule
-		result.Changed = true
-		return invalidateOrganizationInvoiceSummariesForRuleChange(tx, organizationId, effectiveMonthStart.Unix(), "invalidated by settlement rule change")
-	})
-	if err != nil {
-		if createAttempted {
-			var current OrganizationBillingSettlementRule
-			readErr := DB.
-				Where("organization_id = ? AND category_key = ? AND effective_month = ?", organizationId, categoryKey, effectiveMonth).
-				First(&current).Error
-			if readErr == nil {
-				if current.FactorScaled == factorScaled {
-					return &OrganizationSettlementRuleUpdateResult{
-						Rule:                 current,
-						PreviousFactorScaled: current.FactorScaled,
-					}, nil
-				}
-				return nil, &OrganizationSettlementVersionConflictError{
-					Expected: expectedVersion,
-					Actual:   current.Version,
-				}
-			}
-		}
-		return nil, err
-	}
-	return result, nil
 }

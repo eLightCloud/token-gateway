@@ -20,7 +20,6 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -87,10 +86,9 @@ type organizationE2ELog struct {
 }
 
 type organizationE2EResponse struct {
-	Success   bool            `json:"success"`
-	Message   string          `json:"message"`
-	Data      json.RawMessage `json:"data"`
-	Discovery json.RawMessage `json:"discovery"`
+	Success bool            `json:"success"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
 }
 
 type organizationE2EPage[T any] struct {
@@ -316,8 +314,6 @@ func registerOrganizationE2ERoutes(router *gin.Engine) {
 		organizationRoute.GET("/current/invoice", GetCurrentOrganizationInvoice)
 		organizationRoute.POST("/current/invoice/recalculate", RecalculateCurrentOrganizationInvoice)
 		organizationRoute.GET("/current/invoice/export", ExportCurrentOrganizationInvoice)
-		organizationRoute.GET("/current/invoice/settlement-rules", GetCurrentOrganizationSettlementRules)
-		organizationRoute.PUT("/current/invoice/settlement-rules", UpdateCurrentOrganizationSettlementRule)
 	}
 
 	adminOrganizationRoute := router.Group("/api/admin/organizations")
@@ -334,8 +330,6 @@ func registerOrganizationE2ERoutes(router *gin.Engine) {
 		adminOrganizationRoute.GET("/:id/invoice", AdminGetOrganizationInvoice)
 		adminOrganizationRoute.POST("/:id/invoice/recalculate", AdminRecalculateOrganizationInvoice)
 		adminOrganizationRoute.GET("/:id/invoice/export", AdminExportOrganizationInvoice)
-		adminOrganizationRoute.GET("/:id/invoice/settlement-rules", AdminGetOrganizationSettlementRules)
-		adminOrganizationRoute.PUT("/:id/invoice/settlement-rules", AdminUpdateOrganizationSettlementRule)
 	}
 
 	tokenRoute := router.Group("/api/token")
@@ -389,14 +383,6 @@ func decodeOrganizationE2EResponse(t *testing.T, recorder *httptest.ResponseReco
 	var response organizationE2EResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	return response
-}
-
-func decodeOrganizationE2ERulesDiscovery(t *testing.T, response organizationE2EResponse) model.OrganizationInvoiceDiscoveryMeta {
-	t.Helper()
-	require.NotNil(t, response.Discovery)
-	var discovery model.OrganizationInvoiceDiscoveryMeta
-	require.NoError(t, common.Unmarshal(response.Discovery, &discovery))
-	return discovery
 }
 
 func decodeOrganizationE2EData[T any](t *testing.T, response organizationE2EResponse) T {
@@ -1004,7 +990,7 @@ func TestOrganizationE2EBillingStartExportsBackfill(t *testing.T) {
 	assert.NotContains(t, memberFullBody, "primary-openai")
 }
 
-func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
+func TestOrganizationE2EInvoiceUsesConfirmedConsumption(t *testing.T) {
 	previousMaster := common.IsMasterNode
 	common.IsMasterNode = true
 	t.Cleanup(func() {
@@ -1109,9 +1095,19 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	assert.Equal(t, []string{"glm-5-turbo", "glm-5.1", "glm-5.2"}, currentInvoice.CategoryRows[1].Models)
 	assert.Equal(t, "qwen", currentInvoice.CategoryRows[2].CategoryKey)
 	assert.Equal(t, "vector", currentInvoice.CategoryRows[3].CategoryKey)
-	for _, row := range currentInvoice.CategoryRows {
-		assert.Equal(t, "1.0000", row.Factor)
-	}
+	// The existing v10 publication includes actual usage alongside retired fields.
+	summary, err := model.LookupOrganizationInvoiceSummary(organizationId, currentInvoice.Period, true)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	var legacyPayload map[string]any
+	require.NoError(t, common.Unmarshal(summary.Payload, &legacyPayload))
+	legacyPayload["settled_total_amount_usd"] = "0.0013550000"
+	category := legacyPayload["category_rows"].([]any)[1].(map[string]any)
+	category["settled_amount_usd"] = "0.0001750000"
+	category["factor"] = "0.5000"
+	payload, err := common.Marshal(legacyPayload)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(summary).Update("payload", payload).Error)
 
 	adminInvoiceResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
 		t,
@@ -1124,98 +1120,23 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	))
 	adminInvoice := decodeOrganizationE2EData[model.OrganizationInvoice](t, adminInvoiceResponse)
 	assert.Equal(t, currentInvoice.GrossTotalAmountUSD, adminInvoice.GrossTotalAmountUSD)
-
-	rulesResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
-		t,
-		router,
-		fixture,
-		1001,
-		http.MethodGet,
-		"/api/organization/current/invoice/settlement-rules?effective_month=2026-07",
-		nil,
-	))
-	// The first read only registers the shared preparation; the option list
-	// must not present an empty result as complete.
-	firstDiscovery := decodeOrganizationE2ERulesDiscovery(t, rulesResponse)
-	assert.Equal(t, model.OrganizationInvoiceDiscoveryPreparing, firstDiscovery.Status)
-	assert.Empty(t, decodeOrganizationE2EData[[]model.OrganizationSettlementRuleOption](t, rulesResponse))
-	require.NoError(t, model.PrepareOrganizationInvoiceModelSetsNow(context.Background(), organizationId))
-
-	rulesResponse = requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
-		t,
-		router,
-		fixture,
-		1001,
-		http.MethodGet,
-		"/api/organization/current/invoice/settlement-rules?effective_month=2026-07",
-		nil,
-	))
-	assert.Equal(t, model.OrganizationInvoiceDiscoveryReady, decodeOrganizationE2ERulesDiscovery(t, rulesResponse).Status)
-	rules := decodeOrganizationE2EData[[]model.OrganizationSettlementRuleOption](t, rulesResponse)
-	require.Len(t, rules, 4)
-	for _, rule := range rules {
-		assert.Equal(t, "1.0000", rule.Factor)
-		assert.True(t, rule.Inherited)
+	assert.Equal(t, currentInvoice.Revision, adminInvoice.Revision)
+	assert.NotContains(t, string(adminInvoiceResponse.Data), "settled_total_amount_usd")
+	assert.NotContains(t, string(adminInvoiceResponse.Data), "settled_amount_usd")
+	for _, path := range []string{
+		"/api/organization/current/invoice/settlement-rules",
+		fmt.Sprintf("/api/admin/organizations/%d/invoice/settlement-rules", organizationId),
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPut} {
+			assert.Equal(t, http.StatusNotFound, performOrganizationE2ERequest(t, router, fixture, 1000, method, path, nil).Code)
+		}
 	}
+	legacyExport := performOrganizationE2ERequest(t, router, fixture, 1000, http.MethodGet,
+		fmt.Sprintf("/api/admin/organizations/%d/invoice/export?%s", organizationId, invoiceQuery), nil)
+	require.Equal(t, http.StatusOK, legacyExport.Code)
+	assert.Contains(t, legacyExport.Body.String(), "消费合计")
+	assert.NotContains(t, legacyExport.Body.String(), "0.001355")
 
-	updateResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
-		t,
-		router,
-		fixture,
-		1001,
-		http.MethodPut,
-		"/api/organization/current/invoice/settlement-rules",
-		map[string]any{
-			"category_key":     "glm",
-			"factor":           "0.5000",
-			"effective_month":  "2026-07",
-			"expected_version": 0,
-		},
-	))
-	update := decodeOrganizationE2EData[organizationSettlementRuleUpdateResponse](t, updateResponse)
-	assert.True(t, update.Changed)
-	assert.Equal(t, 1, update.Version)
-
-	settledResponse := requireOrganizationE2ESuccess(t, performOrganizationE2ERequest(
-		t,
-		router,
-		fixture,
-		1001,
-		http.MethodGet,
-		"/api/organization/current/invoice?"+invoiceQuery,
-		nil,
-	))
-	assert.Equal(
-		t,
-		model.OrganizationInvoiceGenerationStatusGenerating,
-		decodeOrganizationE2EData[model.OrganizationInvoice](t, settledResponse).GenerationStatus,
-	)
-	settledInvoice := requireOrganizationE2EInvoiceReady(
-		t, router, fixture, 1001, "/api/organization/current/invoice?"+invoiceQuery,
-	)
-	expectedSettled := decimal.NewFromFloat(677.5).
-		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
-		StringFixed(10)
-	assert.Equal(t, expectedSettled, settledInvoice.SettledTotalAmountUSD)
-
-	conflictResponse := performOrganizationE2ERequest(
-		t,
-		router,
-		fixture,
-		1001,
-		http.MethodPut,
-		"/api/organization/current/invoice/settlement-rules",
-		map[string]any{
-			"category_key":     "glm",
-			"factor":           "0.8000",
-			"effective_month":  "2026-07",
-			"expected_version": 0,
-		},
-	)
-	assert.Equal(t, http.StatusConflict, conflictResponse.Code)
-	conflictBody := decodeOrganizationE2EResponse(t, conflictResponse)
-	assert.False(t, conflictBody.Success)
-	assert.Contains(t, conflictBody.Message, "version conflict")
 	rechargeTime := time.Date(2026, 7, 15, 12, 0, 0, 0, time.FixedZone(model.OrganizationInvoiceTimezone, 8*60*60)).Unix()
 	require.NoError(t, model.DB.Create(&[]model.TopUp{
 		{
@@ -1306,12 +1227,12 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	require.Equal(t, http.StatusOK, exportResponse.Code)
 	assert.Contains(t, exportResponse.Header().Get("Content-Disposition"), "organization-7001-invoice-2026-07-01-2026-07-31.csv")
 	assert.Contains(t, exportResponse.Body.String(), "组织名称,"+fixture.Organization.Name)
-	assert.Contains(t, exportResponse.Body.String(), "# 模型归类结算汇总")
+	assert.Contains(t, exportResponse.Body.String(), "# 模型分类消费汇总")
 	assert.Contains(t, exportResponse.Body.String(), "GLM（阿里云）")
 	assert.Contains(t, exportResponse.Body.String(), "Qwen（阿里云）")
 	assert.Contains(t, exportResponse.Body.String(), "向量")
 	assert.Contains(t, exportResponse.Body.String(), "gpt-4o")
-	assert.Contains(t, exportResponse.Body.String(), "0.5000")
+	assert.NotContains(t, exportResponse.Body.String(), "结算系数")
 	assert.Contains(t, exportResponse.Body.String(), "真实姓名")
 	assert.Contains(t, exportResponse.Body.String(), "org-admin display")
 	assert.Contains(t, exportResponse.Body.String(), "org-member display")
@@ -1375,43 +1296,9 @@ func TestOrganizationE2EInvoiceAndSettlementFactor(t *testing.T) {
 	assert.NotContains(t, exportResponse.Body.String(), "时间戳")
 	assert.NotContains(t, exportResponse.Body.String(), "规则明细")
 	assert.NotContains(t, exportResponse.Body.String(), "quota")
-	exportedSettledAmount, err := invoiceCSVAmount(settledInvoice.SettledTotalAmountUSD)
+	exportedConsumption, err := invoiceCSVAmount(exportedInvoice.GrossTotalAmountUSD)
 	require.NoError(t, err)
-	assert.Contains(t, exportResponse.Body.String(), exportedSettledAmount)
-}
-
-func TestOrganizationE2EInvoiceInvalidFactorWritesFailureAudit(t *testing.T) {
-	fixture, router := setupOrganizationE2E(t)
-
-	response := performOrganizationE2ERequest(
-		t,
-		router,
-		fixture,
-		1001,
-		http.MethodPut,
-		"/api/organization/current/invoice/settlement-rules",
-		map[string]any{
-			"category_key":     "gpt",
-			"factor":           "-0.0001",
-			"effective_month":  "2026-07",
-			"expected_version": 0,
-		},
-	)
-	body := decodeOrganizationE2EResponse(t, response)
-	assert.False(t, body.Success)
-	assert.Contains(t, body.Message, "decimal number")
-
-	var audits []model.AuditLog
-	require.NoError(t, model.LOG_DB.
-		Where("category = ?", model.AuditCategoryOperation).
-		Order("id asc").
-		Find(&audits).Error)
-	require.Len(t, audits, 1)
-	assert.Contains(t, audits[0].Content, "Failed to update org")
-	assert.Equal(t, "organization.settlement_rule_update_failed", audits[0].Action)
-	factor, err := common.Marshal(audits[0].Other.Op.Params["factor"])
-	require.NoError(t, err)
-	assert.JSONEq(t, `"-0.0001"`, string(factor))
+	assert.Contains(t, exportResponse.Body.String(), exportedConsumption)
 }
 
 func TestOrganizationE2EUsageSnapshotScopesAndChannelProjection(t *testing.T) {

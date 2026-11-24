@@ -571,23 +571,12 @@ func TestSnapshotTaskBillingContextCopiesMutablePricingState(t *testing.T) {
 	info.PriceData.ModelRatio = 2
 	info.PriceData.GroupRatioInfo.GroupRatio = 1.5
 	info.PriceData.AddOtherRatio("duration", 2)
-	info.PriceData.DiscountSnapshot = &types.OrganizationDiscountSnapshot{
-		SnapshotID:       12,
-		ChannelDiscounts: map[int]float64{15: 0.4},
-	}
-	ApplyOrganizationDiscountForChannel(info, 15)
-	require.InDelta(t, 0.4, info.PriceData.DiscountSnapshot.EffectiveRatio(), 1e-12)
 
 	snapshot := SnapshotTaskBillingContext(info)
 	require.NotNil(t, snapshot)
 	info.PriceData.AddOtherRatio("duration", 3)
-	info.PriceData.DiscountSnapshot.AppliedRatio = 1
 
 	assert.EqualValues(t, 2.0, snapshot.OtherRatios["duration"])
-	require.NotNil(t, snapshot.Discount)
-	assert.EqualValues(t, 12, snapshot.Discount.SnapshotID)
-	assert.EqualValues(t, 15, snapshot.Discount.ChannelId)
-	assert.InDelta(t, 0.4, snapshot.Discount.Ratio, 1e-12)
 }
 
 // ---------------------------------------------------------------------------

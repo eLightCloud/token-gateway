@@ -64,7 +64,7 @@ func GetOrganizationInvoice(
 		requestedKeys[[2]int64{requestedPeriod.StartTimestamp, requestedPeriod.EndTimestamp}] = struct{}{}
 	}
 
-	// Read-only pass: collect the requested ready snapshots and locate the
+	// Collect the requested ready snapshots and locate the
 	// first month that is not a usable ready result. Earlier dependency
 	// months are only checked by status, never decoded.
 	readyInvoices := make([]*model.OrganizationInvoice, 0, len(requestedPeriods))
@@ -89,12 +89,13 @@ func GetOrganizationInvoice(
 				revision = summary.Revision
 			}
 			if requested {
-				invoice, err := model.DecodeOrganizationInvoiceSummary(*summary)
+				invoice, err := readOrganizationInvoicePublication(*summary)
 				if err != nil {
-					if failErr := model.FailOrganizationInvoiceSummary(*summary, err); failErr != nil {
-						common.SysError(fmt.Sprintf("failed to invalidate unreadable organization invoice summary %d: %v", summary.Id, failErr))
-					}
 					return nil, err
+				}
+				if invoice == nil {
+					blockingIndex = index
+					break
 				}
 				readyInvoices = append(readyInvoices, invoice)
 			}
