@@ -1,12 +1,12 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-11-05
+last-reviewed: 2026-11-24
 ---
 
 # 组织管理与组织账单 UI 设计
 
-待实施的组织详情“实时计费折扣”区域见[用户与组织实时模型折扣 UI 设计](./用户与组织实时模型折扣UI设计.md)。该区域与现有组织渠道折扣和 Invoice 结算系数分开，不替换下述现有统计界面。
+组织详情的「优惠」页签提供 Root 使用的实时模型计价编辑器，交互见[用户与组织实时模型折扣 UI 设计](./用户与组织实时模型折扣UI设计.md)。
 
 ## 文档边界
 
@@ -16,7 +16,7 @@ last-reviewed: 2026-11-05
 
 ## 当前状态
 
-基础组织管理、Billing、成员和日志页面已经上线。本次候选版本新增 Invoice 页面和结算系数配置；代码与自动化验证已完成，实际数据库环境与生产规模验证仍是发布前检查项。
+基础组织管理、Billing、成员和日志页面已经上线。候选版本的 Invoice 页面和 CSV 统一显示已确认消费。目标环境的发布检查见[路线图](../50-planning/路线图.md#organization-release)。
 
 ## 设计基础
 
@@ -28,7 +28,7 @@ last-reviewed: 2026-11-05
 - `@/components/ui` 中现有 Button、Input、NativeSelect、Table、Badge、Dialog、Empty 等组件。
 - i18next；所有用户可见文本使用 `useTranslation()` 和 `t()`。
 
-组织 feature 由 `api.ts`、`types.ts`、`index.tsx` 以及独立的 `invoice.tsx`、`invoice-api.ts`、`invoice-types.ts`、`invoice-category.ts`、`beijing-time.ts` 组成，路由文件保持薄层。`invoice-category.ts` 是 Invoice 表格与系数配置 Sheet 共享的标准类别展示入口。
+组织 feature 由 `api.ts`、`types.ts`、`index.tsx` 以及独立的 `invoice.tsx`、`invoice-api.ts`、`invoice-types.ts`、`invoice-category.ts`、`beijing-time.ts` 组成，路由文件保持薄层。`invoice-category.ts` 提供 Invoice 表格的标准类别展示。
 
 ## 信息架构
 
@@ -58,10 +58,10 @@ Organization logs     -> /organization/logs
 /admin/organizations/:id   组织详情
 ```
 
-组织详情保持四个一级 Tab：
+组织详情包含以下页签，Root 可进入「优惠」页签。
 
 ```text
-Members | Billing | Invoice | Logs
+Members | Billing | Invoice | Logs | Discount (Root)
 ```
 
 不增加独立 Overview 或 Settings 页面。名称和状态在设置弹窗中编辑，减少导航层级。
@@ -145,20 +145,20 @@ Billing 页 Export 使用 `billing/export`。完整 CSV 的汇总、用户、模
 
 ```text
 Start date | End date | Current month | Previous month | Apply
-Refresh | Export CSV | Configure factors
+Recalculate | Export CSV
 
-Gross amount | Settled amount | Billing period (Beijing time)
-Model category settlement summary
+Consumption total | Billing period (Beijing time)
+Model category usage summary
 AI model usage summary
 ```
 
 - 默认打开当前北京时间自然月；支持本月、上月和自定义开始/结束日期。
 - 两张交叉表横向滚动，模型/类别列 sticky；零金额单元格显示 `-`。
 - 内置类别名称走 i18n，fallback 直接显示服务端返回的原始模型名。简体中文固定显示 Claude、GPT、Gemini、Deepseek、Minimax（阿里云）、Kimi（阿里云）、GLM（阿里云）、Qwen（阿里云）和向量；其他语言保留 Alibaba Cloud 供应渠道标识。
-- 多月存在多档规则时，系数列展示月份与系数列表。
+- 多月账期累计各月已确认消费。费用待核对时，合计区显示「已确认消费小计」，页面与 CSV 列出待核对事项。
 - Export 使用 Invoice 专用 CSV，不包含日志内容、请求 ID 或上游请求 ID。
-- Configure factors 打开 Sheet，只展示本组织使用过的类别。输入范围 `0.0000` 至 `10.0000`；零系数、恢复默认和历史月份都有明确确认/提示。
-- 查询失败显示可重试错误状态；HTTP 409 后刷新规则版本，避免继续用旧版本提交。
+- 重算需要确认。生成中显示进度，已有可用发布结果时标注正在显示上次结果，并暂停导出，生成结束后可按原筛选下载。
+- 查询失败显示可重试错误。重算版本冲突时刷新快照后再提交。
 
 ## 用户侧页面
 
