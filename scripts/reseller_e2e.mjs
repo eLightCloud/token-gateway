@@ -17,6 +17,7 @@ const library = process.env.RESELLER_PLAYWRIGHT_MODULE;
 if (!library)
   throw new Error("Set RESELLER_PLAYWRIGHT_MODULE to an installed playwright-core module");
 const { chromium } = await import(pathToFileURL(library));
+const activationOnly = process.env.RESELLER_E2E_ACTIVATION_ONLY === "1";
 const results = [],
   mail = [],
   upstreamCalls = [],
@@ -39,6 +40,7 @@ const report = async () =>
     JSON.stringify(
       {
         complete: completed && !failure && !results.some((item) => item.status === "failed"),
+        scope: activationOnly ? "activation" : "all",
         work,
         cases: results,
         upstream_requests: upstreamCalls.length,
@@ -49,7 +51,8 @@ const report = async () =>
       2,
     ),
   );
-async function step(name, fn) {
+async function step(name, fn, activation = false) {
+  if (activationOnly && !activation) return;
   try {
     await fn();
     results.push({ name, status: "passed" });
@@ -375,11 +378,11 @@ try {
   }
   await step("real password and MFA login/root", async () => {
     await login("root");
-  });
+  }, true);
   await step("real HTTP password and MFA login/agent", async () => {
     await login("agent", httpOrigin);
     assert.equal(await sessions.agent.page.evaluate(() => isSecureContext), false);
-  });
+  }, true);
   await step("real password and MFA login/customer", async () => {
     await login("customer");
   });
@@ -460,7 +463,7 @@ try {
     assert.equal(blocked.status, 403);
     assert.equal(blocked.data.code, "MFA_REQUIRED");
     for (const [path, method, body] of [
-      ["/api/user/token/status", "GET"],
+      ["/api/token/", "GET"],
       ["/api/user/self", "DELETE"],
       ["/api/user/self", "PUT", { username: "forbidden-rename" }],
     ]) {
@@ -1074,11 +1077,12 @@ try {
       await eventually(() => assert.equal(Number(procurement().reserved), 0));
     },
   );
-  for (const kind of ["agent", "customer"])
+  for (const scenario of ["agent", "agent-resume", "customer"])
     await step(
-      `new ${kind} uses email setup and the configured MFA policy`,
+      `new ${scenario} uses email setup and the configured MFA policy`,
       async () => {
-        const name = "new-" + kind,
+        const kind = scenario === "customer" ? "customer" : "agent",
+          name = "new-" + scenario,
           owner = kind === "agent" ? "root" : "agent",
           path = kind === "agent" ? "/api/reseller/admin/agents" : "/api/reseller/self/customers";
         const created = await api(owner, path, "POST", {
@@ -1090,7 +1094,7 @@ try {
         assert.equal(created.status, 200, created.text);
         assert.equal(created.data.data.activation_mail_sent, true, created.text);
         uid[name] = created.data.data.user_id;
-        if (kind === "agent") {
+        if (scenario === "agent-resume") {
           const enabled = await api(owner, `${path}/${uid[name]}/enabled`, "PUT", { enabled: true });
           assert.equal(enabled.status, 200, enabled.text);
         }
@@ -1114,6 +1118,89 @@ try {
         const activated = await (await activationPromise).json();
         assert.equal(activated.success, true, JSON.stringify(activated));
         assert.ok(!activated.data.access_token);
+        if (kind === "agent") {
+          assert.equal(activated.data.agent_mfa_required, true);
+          const dialog = page.getByRole("dialog", { name: "Setup Two-Factor Authentication" });
+          await dialog.waitFor();
+          assert.equal(new URL(page.url()).pathname, "/account-activation");
+          assert.notEqual((await page.request.get(origin + "/api/reseller/self/customers")).status(), 200);
+          assert.equal((await page.request.get(origin + "/api/security/agent-activation/mfa")).status(), 403);
+          let parallelPage;
+          let originalSecret;
+          if (scenario === "agent") {
+            originalSecret = await dialog.locator("code").textContent();
+            const parallel = await api(owner, path, "POST", {
+              username: "e2e-parallel-agent",
+              email: "parallel-agent@e2e.invalid",
+              phone: "+8613800138000",
+            });
+            assert.equal(parallel.data?.data?.activation_mail_sent, true);
+            parallelPage = await context.newPage();
+            parallelPage.setDefaultTimeout(15000);
+            await parallelPage.goto(mailLink("parallel-agent@e2e.invalid", "account_activation"));
+            await parallelPage.getByLabel("Password", { exact: true }).fill(password);
+            await parallelPage.getByLabel("Confirm password", { exact: true }).fill(password);
+            await parallelPage.getByRole("button", { name: "Confirm", exact: true }).click();
+            const parallelDialog = parallelPage.getByRole("dialog", { name: "Setup Two-Factor Authentication" });
+            await parallelDialog.waitFor();
+            const parallelSecret = await parallelDialog.locator("code").textContent();
+            assert.ok(parallelSecret !== originalSecret);
+          }
+          if (scenario === "agent-resume") {
+            await context.clearCookies();
+            await page.reload();
+            await page.getByLabel("Email", { exact: true }).fill(name + "@e2e.invalid");
+            await page.getByRole("button", { name: "Request a continuation link" }).click();
+            await page.getByText("If your account can resume activation, you will receive an email.").waitFor();
+            const resumeLink = await eventually(() => mailLink(name + "@e2e.invalid", "security_agent_resume"));
+            await page.goto(resumeLink);
+            await page.getByLabel("Password", { exact: true }).fill(password);
+            await page.getByRole("button", { name: "Continue activation" }).click();
+            await dialog.waitFor();
+          }
+          await page.reload();
+          await dialog.waitFor();
+          const secret = await dialog.locator("code").textContent();
+          if (parallelPage) {
+            assert.ok(secret === originalSecret, "the original tab resumes its own setup");
+            await parallelPage.close();
+          }
+          await dialog.getByRole("button", { name: "Next", exact: true }).click();
+          await dialog.getByRole("button", { name: "Copy all backup codes" }).waitFor();
+          const backupCode = await dialog.getByText(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/).first().textContent();
+          await dialog.getByRole("button", { name: "Next", exact: true }).click();
+          await dialog.getByLabel("Verification Code").fill(totp(secret));
+          await dialog.getByRole("button", { name: "Enable 2FA", exact: true }).click();
+          await page.getByText(scenario === "agent-resume"
+            ? "Reseller account activated."
+            : "Reseller account activated. Waiting for administrator enablement.", { exact: true }).waitFor();
+          assert.equal(new URL(page.url()).pathname, "/account-activation");
+          const state = db.prepare("SELECT activation FROM reseller_identities WHERE user_id = ?").get(uid[name]);
+          assert.equal(state.activation, "active");
+          await page.screenshot({
+            path: join(output, "enrolled-" + scenario + ".png"),
+            fullPage: true,
+            animations: "disabled",
+          });
+          if (scenario === "agent-resume") {
+            await page.getByRole("link", { name: /^Sign in$/i }).click();
+            await page.getByLabel("Username or Email", { exact: true }).fill("e2e-" + name);
+            await page.getByLabel("Password", { exact: true }).fill(password);
+            await page.getByRole("button", { name: "Sign in", exact: true }).click();
+            await page.getByRole("tab", { name: "Authenticator code", exact: true }).click();
+            await page.getByRole("textbox", { name: /Authenticator code/ }).fill(backupCode);
+            const verified = page.waitForResponse(
+              (response) => response.url().includes("/api/user/login/verify") && response.request().method() === "POST",
+            );
+            await page.getByRole("button", { name: "Verify", exact: true }).click();
+            const login = await (await verified).json();
+            assert.equal(login.success, true);
+            assert.ok(login.data.access_token);
+            await page.waitForURL((url) => !url.pathname.includes("sign-in") && url.pathname !== "/security-setup");
+          }
+          await context.close();
+          return;
+        }
         await page.goto(origin + "/sign-in");
         await page.getByLabel("Username or Email", { exact: true }).fill("e2e-" + name);
         await page.getByLabel("Password", { exact: true }).fill(password);
@@ -1124,16 +1211,14 @@ try {
           await page.getByRole("button", { name: "Sign in", exact: true }).click();
           return (await loginPromise).json();
         };
-        if (kind === "customer") {
-          const beforeEnablement = await signIn();
-          assert.equal(beforeEnablement.success, false, JSON.stringify(beforeEnablement));
-          const enabled = await api(owner, `${path}/${uid[name]}/enabled`, "PUT", { enabled: true });
-          assert.equal(enabled.status, 200, enabled.text);
-        }
+        const beforeEnablement = await signIn();
+        assert.equal(beforeEnablement.success, false, JSON.stringify(beforeEnablement));
+        const enabledByOwner = await api(owner, `${path}/${uid[name]}/enabled`, "PUT", { enabled: true });
+        assert.equal(enabledByOwner.status, 200, enabledByOwner.text);
         const loginResult = await signIn();
         assert.equal(loginResult.success, true, JSON.stringify(loginResult));
         sessions[name] = { page, context, token: loginResult.data.access_token, base: origin };
-        const target = kind === "agent" ? "/api/reseller/self/customers" : "/api/token/";
+        const target = "/api/token/";
         await page.waitForURL((url) => url.pathname === "/security-setup");
         const security = await api(name, "/api/security/completion");
         assert.equal(security.data.data.mfa_required, true);
@@ -1179,6 +1264,7 @@ try {
           animations: "disabled",
         });
       },
+      true,
     );
   await step(
     "independent Passkey recovery requires proof, not ordinary admin permission",

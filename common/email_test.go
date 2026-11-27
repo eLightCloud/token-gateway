@@ -780,9 +780,12 @@ func TestEmailDeliveryRejectsUnsafeOrIncompleteRequests(t *testing.T) {
 }
 
 func TestEmailDeliverySMTPSubmissionFailureSemantics(t *testing.T) {
-	for _, scenario := range []struct{ name, reply, status, code string }{
-		{"explicit rejection", "550 message rejected", "failed", "EMAIL_DELIVERY_FAILED"},
-		{"connection lost after DATA", "", "unknown", "EMAIL_DELIVERY_UNKNOWN"},
+	for _, scenario := range []struct {
+		name, reply, status, code string
+		kind                      EmailDeliveryFailureKind
+	}{
+		{"explicit rejection", "550 message rejected", "failed", "EMAIL_DELIVERY_FAILED", EmailDeliveryRejected},
+		{"connection lost after DATA", "", "unknown", "EMAIL_DELIVERY_UNKNOWN", ""},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -839,6 +842,7 @@ func TestEmailDeliverySMTPSubmissionFailureSemantics(t *testing.T) {
 			require.Error(t, err)
 			assert.Equal(t, scenario.status, report.Stages[4].Status)
 			assert.Equal(t, scenario.code, report.Code)
+			assert.Equal(t, scenario.kind, ClassifyEmailDeliveryFailure(err))
 			<-done
 		})
 	}

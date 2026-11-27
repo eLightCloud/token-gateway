@@ -209,6 +209,41 @@ func TestCommittedUserAuthVersionPermanentlyRejectsDelayedCacheFill(t *testing.T
 	assert.EqualValues(t, "2", committed)
 }
 
+func TestAgentActivationPublishesVersionWhenMetadataRefreshFails(t *testing.T) {
+	truncateTables(t)
+	server := useUserCacheMiniRedis(t)
+	user := User{Username: "agent-activation-cache", Status: common.UserStatusEnabled, AuthVersion: 1}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, populateUserCache(user))
+	var version int64
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		version, err = IncrementUserAuthVersionWithTx(tx, user.Id)
+		return err
+	}))
+	const callback = "test:fail_agent_activation_metadata_refresh"
+	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "users" {
+			_ = tx.AddError(errors.New("metadata unavailable"))
+		}
+	}))
+
+	func() {
+		defer func() { require.NoError(t, DB.Callback().Query().Remove(callback)) }()
+		publishAgentActivationAuth(user.Id, version)
+	}()
+	published, err := getUserAuthVersionFloor(user.Id)
+	require.NoError(t, err)
+	require.Equal(t, version, published)
+	server.FastForward(time.Duration(userAuthFenceTTLSeconds()+1) * time.Second)
+	published, err = getUserAuthVersionFloor(user.Id)
+	require.NoError(t, err)
+	assert.Equal(t, version, published)
+	current, err := GetUserCache(user.Id)
+	require.NoError(t, err)
+	assert.Equal(t, version, current.AuthVersion)
+}
+
 func TestUserAuthVersionFenceAndCommittedFloorAreMonotonic(t *testing.T) {
 	truncateTables(t)
 	server := useUserCacheMiniRedis(t)

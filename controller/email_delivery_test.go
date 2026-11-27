@@ -365,16 +365,30 @@ func TestResendDeliversThroughSelectedProvider(t *testing.T) {
 }
 
 func TestResendFailuresDoNotRetryFallbackOrExposeSensitiveContent(t *testing.T) {
-	for _, status := range []int{302, 400, 401, 403, 429, 500} {
-		t.Run(strconv.Itoa(status), func(t *testing.T) {
+	for _, scenario := range []struct {
+		status int
+		name   string
+		kind   common.EmailDeliveryFailureKind
+	}{
+		{302, "", ""}, {400, "validation_error", common.EmailDeliveryRejected},
+		{401, "missing_api_key", common.EmailDeliveryAuthentication},
+		{403, "suspended_api_key", common.EmailDeliveryAuthentication},
+		{403, "restricted_api_key", common.EmailDeliveryAuthentication},
+		{403, "invalid_permission", common.EmailDeliveryAuthentication},
+		{403, "validation_error", common.EmailDeliveryRejected}, {429, "", ""}, {500, "", ""},
+	} {
+		status := scenario.status
+		t.Run(strconv.Itoa(status)+"_"+scenario.name, func(t *testing.T) {
 			configureEmailDelivery(t, map[string]string{"EmailProvider": "resend", "ResendApiKey": "test-key", "ResendFrom": "sender@example.com"})
 			calls := 0
 			http.DefaultTransport = emailHTTPTransport(func(request *http.Request) (*http.Response, error) {
 				calls++
-				return &http.Response{StatusCode: status, Header: http.Header{"Location": []string{"https://untrusted.example/emails"}}, Body: io.NopCloser(strings.NewReader(`{"message":"test-key 123456 reset-token"}`))}, nil
+				body := fmt.Sprintf(`{"name":%q,"message":"test-key 123456 reset-token"}`, scenario.name)
+				return &http.Response{StatusCode: status, Header: http.Header{"Location": []string{"https://untrusted.example/emails"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 			})
 			err := common.SendEmail("verification", "one@example.com", "123456 reset-token")
 			require.EqualError(t, err, "Resend email delivery failed (HTTP "+strconv.Itoa(status)+")")
+			assert.Equal(t, scenario.kind, common.ClassifyEmailDeliveryFailure(err))
 			assert.Equal(t, 1, calls, "do not retry or follow redirects")
 		})
 	}
@@ -514,6 +528,13 @@ func TestResendSettingsChangesKeepActiveDeliveryWorking(t *testing.T) {
 			require.NoError(t, model.SaveResendDeliveryOptions("resend", from, "rotated-key"))
 			require.NoError(t, model.LoadOptionsFromDatabase())
 			assert.Equal(t, "rotated-key", common.OptionMap["ResendApiKey"])
+			t.Setenv("EMAIL_DELIVERY_STORAGE_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32))))
+			require.NoError(t, model.LoadOptionsFromDatabase())
+			err := common.SendEmail("test", "recipient@example.com", "fixture")
+			require.ErrorIs(t, err, common.ErrEmailDeliveryUnavailable)
+			assert.Equal(t, common.EmailDeliveryConfiguration, common.ClassifyEmailDeliveryFailure(err))
+			t.Setenv("EMAIL_DELIVERY_STORAGE_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+			require.NoError(t, model.LoadOptionsFromDatabase())
 			require.NoError(t, model.SaveResendDeliveryOptions("smtp", "", ""))
 			assert.Equal(t, "smtp", common.OptionMap["EmailProvider"])
 			assert.Equal(t, from, common.OptionMap["ResendFrom"])

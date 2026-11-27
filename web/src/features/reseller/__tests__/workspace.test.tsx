@@ -39,6 +39,7 @@ import { I18nextProvider } from 'react-i18next'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { LanguageSwitcher } from '@/components/language-switcher'
+import { Toaster } from '@/components/ui/sonner'
 import * as passwordEncryption from '@/features/auth/lib/password-encryption'
 import { Security } from '@/features/security'
 import { Wallet } from '@/features/wallet'
@@ -53,6 +54,7 @@ import {
   useSystemConfigStore,
 } from '@/stores/system-config-store'
 
+import { useResellerActivationMail } from '../activation-mail'
 import {
   ResellerOwnProcurementRatiosPage,
   ResellerOwnProfile,
@@ -121,7 +123,9 @@ it('shows the localized email conflict on the customer form and accepts a replac
         data: {
           success: false,
           code: 'RESELLER_EMAIL_CONFLICT',
-          message: '操作失败',
+          message_key:
+            'This email address is already in use. Please use a different email address.',
+          data: { field: 'email' },
         },
         statusText: 'Conflict',
         headers: {},
@@ -179,13 +183,134 @@ it('shows the localized email conflict on the customer form and accepts a replac
   )
 })
 
+it.each([
+  [
+    false,
+    'RESELLER_USERNAME_CONFLICT',
+    'Username',
+    'This username is already in use. Please use a different username.',
+  ],
+  [
+    true,
+    'RESELLER_EMAIL_CONFLICT',
+    'Email',
+    'This email address is already in use. Please use a different email address.',
+  ],
+  [
+    false,
+    'EMAIL_ADDRESS_REJECTED',
+    'Email',
+    "This email address is not allowed by the administrator's email policy.",
+  ],
+])(
+  'shows the conflicting account field for admin=%s and code=%s',
+  async (admin, code, field, message) => {
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: {
+        success: false,
+        code,
+        message_key: message,
+        data: { field: field.toLowerCase() },
+      },
+    })
+    render(
+      <ResellerCreateDialog
+        admin={admin}
+        open
+        onOpenChange={() => undefined}
+        onCreated={vi.fn()}
+      />,
+      { wrapper: provider() }
+    )
+    const user = userEvent.setup()
+    const dialog = within(await screen.findByRole('dialog'))
+    await user.type(
+      dialog.getByRole('textbox', { name: 'Username' }),
+      'existing'
+    )
+    await user.type(
+      dialog.getByRole('textbox', { name: 'Email' }),
+      'used@example.invalid'
+    )
+    await user.type(
+      dialog.getByRole('textbox', { name: 'Mobile number' }),
+      '13800138000'
+    )
+    await user.click(dialog.getByRole('button', { name: 'Create' }))
+
+    expect(await dialog.findByRole('alert')).toHaveTextContent(message)
+    expect(dialog.getByRole('textbox', { name: field })).toHaveFocus()
+  }
+)
+
+it('preserves the delivery reason when the newly created customer cannot receive the account email', async () => {
+  const reason = 'Wait a minute between account email requests.'
+  const post = vi.spyOn(api, 'post').mockResolvedValue({
+    data: {
+      success: false,
+      code: 'EMAIL_BINDING_RESEND_WAIT',
+      message_key: reason,
+    },
+  })
+  function CreatedCustomer() {
+    const { sendActivationMail } = useResellerActivationMail(false, 1)
+    return (
+      <button
+        type='button'
+        onClick={() => sendActivationMail({ userID: 2, afterCreate: true })}
+      >
+        Send account email
+      </button>
+    )
+  }
+  render(
+    <>
+      <CreatedCustomer />
+      <Toaster />
+    </>,
+    { wrapper: provider() }
+  )
+  await userEvent
+    .setup()
+    .click(screen.getByRole('button', { name: 'Send account email' }))
+  expect(post).toHaveBeenCalledWith(
+    '/api/reseller/self/customers/2/activation',
+    {}
+  )
+  expect(await screen.findByText(reason)).toBeVisible()
+  expect(
+    screen.getByText(
+      'Customer created, but the account email could not be sent.'
+    )
+  ).toBeVisible()
+})
+
 it('closes the reseller dialog before mail delivery and lets the administrator retry from the row', async () => {
   let failMail: () => void = () => {}
-  const mail = new Promise<Awaited<ReturnType<typeof api.post>>>((resolve) => {
+  const messageKey =
+    'Email delivery is not configured. Configure email delivery in System Settings, then resend the account email.'
+  const mail = new Promise<never>((_, reject) => {
     failMail = () =>
-      resolve({
-        data: { success: false, code: 'EMAIL_BINDING_DELIVERY_FAILED' },
-      } as Awaited<ReturnType<typeof api.post>>)
+      reject(
+        new AxiosError(
+          'Service Unavailable',
+          'ERR_BAD_RESPONSE',
+          undefined,
+          undefined,
+          {
+            status: 503,
+            statusText: 'Service Unavailable',
+            data: {
+              success: false,
+              code: 'EMAIL_DELIVERY_NOT_CONFIGURED',
+              message: messageKey,
+              message_key: messageKey,
+            },
+            headers: {},
+            config: {} as never,
+          }
+        )
+      )
   })
   const post = vi
     .spyOn(api, 'post')
@@ -222,7 +347,13 @@ it('closes the reseller dialog before mail delivery and lets the administrator r
     }),
     history: createMemoryHistory(),
   })
-  render(<RouterProvider router={router} />, { wrapper: provider() })
+  render(
+    <>
+      <RouterProvider router={router} />
+      <Toaster />
+    </>,
+    { wrapper: provider() }
+  )
 
   const user = userEvent.setup()
   await user.click(
@@ -275,7 +406,20 @@ it('closes the reseller dialog before mail delivery and lets the administrator r
     pendingRow.queryByRole('button', { name: 'Send account information' })
   ).not.toBeInTheDocument()
 
-  await act(failMail)
+  await act(async () => {
+    i18next.addResourceBundle('zhCN', 'translation', zh.translation)
+    await i18next.changeLanguage('zhCN')
+    failMail()
+  })
+  expect(
+    await screen.findByText(
+      '尚未配置发信服务。请在系统设置中配置后重发账号信息邮件。'
+    )
+  ).toBeVisible()
+  await act(async () => {
+    await i18next.changeLanguage('en')
+    i18next.removeResourceBundle('zhCN', 'translation')
+  })
   expect(
     pendingRow.queryByRole('button', { name: 'Reset Password' })
   ).not.toBeInTheDocument()
@@ -565,23 +709,53 @@ it('sends a reset email for a configured customer from the customer list', async
 })
 
 it.each([
-  { admin: true, endpoint: 'admin/agents' },
-  { admin: false, endpoint: 'self/customers' },
+  { admin: true, endpoint: 'admin/agents', deliveryFailed: false },
+  { admin: false, endpoint: 'self/customers', deliveryFailed: false },
+  { admin: false, endpoint: 'self/customers', deliveryFailed: true },
+  {
+    admin: false,
+    endpoint: 'self/customers',
+    deliveryFailed: false,
+    correctionRejected: true,
+  },
 ])(
-  'reuses pending-email correction for $endpoint',
-  async ({ admin, endpoint }) => {
+  'handles pending-email correction for $endpoint with deliveryFailed=$deliveryFailed and correctionRejected=$correctionRejected',
+  async ({ admin, endpoint, deliveryFailed, correctionRejected }) => {
     const user = userEvent.setup()
-    const post = vi
-      .spyOn(api, 'post')
-      .mockResolvedValue({ data: { success: true } })
-    vi.spyOn(api, 'get').mockResolvedValue({
+    let savedEmail = 'old@example.invalid'
+    const reason =
+      'Email delivery is not configured. Contact the platform administrator before resending.'
+    const post = vi.spyOn(api, 'post').mockImplementation(async () => {
+      if (correctionRejected) {
+        return {
+          data: {
+            success: false,
+            code: 'EMAIL_ALREADY_TAKEN',
+            message_key: 'This email address is already in use.',
+            data: { field: 'email' },
+          },
+        }
+      }
+      savedEmail = 'new@example.invalid'
+      return {
+        data: deliveryFailed
+          ? {
+              success: false,
+              code: 'EMAIL_DELIVERY_NOT_CONFIGURED',
+              message_key: reason,
+              data: { email_updated: true },
+            }
+          : { success: true },
+      }
+    })
+    vi.spyOn(api, 'get').mockImplementation(async () => ({
       data: {
         success: true,
         data: {
           user: {
             user_id: 2,
             username: 'agent',
-            email: 'old@example.invalid',
+            email: savedEmail,
             activation: 'pending',
             agent_disabled: !admin,
             awaiting_enablement: !admin,
@@ -595,10 +769,14 @@ it.each([
           history: [],
         },
       },
-    })
-    render(<ResellerWorkspacePage userID={2} admin={admin} />, {
-      wrapper: provider(),
-    })
+    }))
+    render(
+      <>
+        <ResellerWorkspacePage userID={2} admin={admin} />
+        {deliveryFailed && <Toaster />}
+      </>,
+      { wrapper: provider() }
+    )
     const send = await screen.findByRole('button', {
       name: 'Send account information',
     })
@@ -636,6 +814,23 @@ it.each([
         email: 'new@example.invalid',
       }
     )
+    if (correctionRejected) {
+      expect(
+        await dialog.findByText('This email address is already in use.')
+      ).toBeVisible()
+      expect(email).toHaveFocus()
+      return
+    }
+    if (deliveryFailed) {
+      expect(
+        await screen.findByText(
+          'Email updated, but the account email could not be sent.'
+        )
+      ).toBeVisible()
+      expect(screen.getByText(reason)).toBeVisible()
+      expect(email).toHaveValue('')
+    }
+    expect(await information.findByText('new@example.invalid')).toBeVisible()
   }
 )
 

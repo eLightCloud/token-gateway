@@ -46,11 +46,15 @@ func deliverConfiguredEmail(ctx context.Context, config EmailDeliveryConfig, sub
 			report.Stages[stage].Status = "failed"
 		}
 		if resultErr != nil {
+			kind := configuredEmailFailureKind(report.Stages[stage].Name, resultErr)
 			resultErr = errors.New("Email delivery failed at " + report.Stages[stage].Name + ". Check saved settings and provider permissions.")
+			if kind != "" {
+				resultErr = emailDeliveryFailure{kind, resultErr}
+			}
 		}
 	}()
 	if err := config.Options.Validate(); err != nil {
-		return report, err
+		return report, emailDeliveryFailure{EmailDeliveryConfiguration, err}
 	}
 	if strings.ContainsAny(subject, "\r\n") {
 		return report, errors.New("invalid email subject")
@@ -65,7 +69,7 @@ func deliverConfiguredEmail(ctx context.Context, config EmailDeliveryConfig, sub
 	if microsoft {
 		stage = 1
 		if config.Options.Microsoft.ClientSecret == "" {
-			return report, errors.New("missing Microsoft credentials")
+			return report, emailDeliveryFailure{EmailDeliveryNotConfigured, errors.New("missing Microsoft credentials")}
 		}
 		token, err := microsoftEmailToken(ctx, config, false)
 		if err != nil {

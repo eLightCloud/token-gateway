@@ -95,18 +95,16 @@ func SaveResendDeliveryOptions(provider, from, replacementKey string) error {
 }
 
 func publishResendDeliveryOptions(values map[string]string) {
+	var credentialUnavailable bool
 	if value, ok := values["ResendApiKey"]; ok {
 		key, err := readResendDeliveryKey(value)
 		if err != nil {
+			credentialUnavailable = true
 			common.SysError("Resend email credentials cannot be decrypted. Check EMAIL_DELIVERY_STORAGE_KEY.")
 		}
 		values["ResendApiKey"] = key
 	}
-	common.OptionMapRWMutex.Lock()
-	defer common.OptionMapRWMutex.Unlock()
-	for key, value := range values {
-		common.OptionMap[key] = value
-	}
+	common.PublishResendDeliveryOptions(values, credentialUnavailable)
 }
 
 func readResendDeliveryKey(value string) (string, error) {

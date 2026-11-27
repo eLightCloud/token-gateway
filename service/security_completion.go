@@ -8,6 +8,9 @@ import (
 )
 
 func SendSecurityCompletionMail(userID int, purpose string, identity *AuthIdentity, lang string) error {
+	if purpose == model.SecurityActivationPurpose {
+		return SendResellerActivationMail(userID, "", lang)
+	}
 	user, err := model.GetUserById(userID, false)
 	if err != nil {
 		return err
@@ -19,9 +22,6 @@ func SendSecurityCompletionMail(userID int, purpose string, identity *AuthIdenti
 	token, err := model.NewSecurityMailFlow(userID, purpose, email, identity)
 	if err != nil {
 		return err
-	}
-	if purpose == model.SecurityActivationPurpose && user.ResellerKind != "" {
-		return deliverSecurityMail(userID, purpose, email, token, user.Username, user.ResellerKind, lang)
 	}
 	return DeliverSecurityMail(userID, purpose, email, token, lang)
 }

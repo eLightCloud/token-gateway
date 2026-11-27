@@ -2690,3 +2690,305 @@ func TestSecurityCompletionAdministrativeEmailChangeNotifiesBothVerifiedAddresse
 	replay := securityEnrollmentRequest("POST", "/api/security/email-change/complete", string(body), "", service.AuthIdentity{}, FinishAdminEmailChange)
 	assert.NotContains(t, replay.Body.String(), `"success":true`)
 }
+
+func TestAgentActivationKeepsMFAInsideOnboarding(t *testing.T) {
+	_, _ = setupSecurityEnrollmentTest(t)
+	db := model.DB
+	require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.LoginEncryptionKey{}, &model.SecurityRecoveryRecord{}))
+	require.NoError(t, model.InitPasswordEncryption())
+	operator := &model.User{Username: "activation-root", AffCode: "reactivation-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(operator).Error)
+	mailbox := newSecurityMailbox(t)
+	previousAddress := system_setting.ServerAddress
+	system_setting.ServerAddress = "https://example.com"
+	t.Cleanup(func() { system_setting.ServerAddress = previousAddress })
+
+	keyID, publicPEM := common.PasswordEncryptionPublicKey()
+	block, _ := pem.Decode([]byte(publicPEM))
+	require.NotNil(t, block)
+	publicKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	require.NoError(t, err)
+	const password = "synthetic agent activation password"
+	encryptedPayload := func(userID int, token, password string) string {
+		t.Helper()
+		encrypted, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey.(*rsa.PublicKey), []byte(password), nil)
+		require.NoError(t, err)
+		payload, err := common.Marshal(map[string]any{
+			"user_id": userID, "token": token,
+			"password_encrypted": base64.StdEncoding.EncodeToString(encrypted), "encryption_key_id": keyID,
+		})
+		require.NoError(t, err)
+		return string(payload)
+	}
+
+	engine := gin.New()
+	engine.POST("/api/security/activation", FinishAccountActivation)
+	engine.GET("/api/security/agent-activation/mfa", GetAgentActivationMFA)
+	engine.POST("/api/security/agent-activation/mfa", FinishAgentActivationMFA)
+	engine.POST("/api/security/agent-activation/resume/complete", CompleteAgentActivationResume)
+	call := func(method, path, body string, cookie *http.Cookie) (*httptest.ResponseRecorder, securityEnrollmentResponse) {
+		t.Helper()
+		req := httptest.NewRequest(method, "https://example.com"+path, strings.NewReader(body))
+		req.Header.Set("Origin", "https://example.com")
+		if cookie != nil {
+			req.AddCookie(cookie)
+			req.Header.Set("X-Agent-Activation", strings.TrimPrefix(cookie.Name, agentActivationCookie+"_"))
+		}
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, req)
+		var result securityEnrollmentResponse
+		require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &result))
+		return rec, result
+	}
+	const activationURL = "/api/security/activation"
+	const mfaURL = "/api/security/agent-activation/mfa"
+	const resumeURL = "/api/security/agent-activation/resume/complete"
+
+	for _, tc := range []struct {
+		name         string
+		enabled      bool
+		resume       bool
+		recoveryRace bool
+	}{{"awaiting-enablement", false, false, false}, {"enabled-and-resumed", true, true, false}, {"recovery-race", false, false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := &model.User{Username: tc.name, AffCode: tc.name, Email: tc.name + "@example.com", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, ResellerKind: "agent", Group: "default", AuthVersion: 1}
+			require.NoError(t, db.Create(user).Error)
+			require.NoError(t, db.Create(&model.ResellerIdentity{UserID: user.Id, Kind: "agent", Activation: "pending"}).Error)
+			require.NoError(t, db.Create(&model.ResellerAccount{UserID: user.Id, Enabled: tc.enabled}).Error)
+			token, err := model.NewSecurityMailFlow(user.Id, model.SecurityActivationPurpose, user.Email, nil)
+			require.NoError(t, err)
+			body := encryptedPayload(user.Id, token, password)
+			rec, result := call(http.MethodPost, activationURL, body, nil)
+			require.True(t, result.Success, result.Message)
+			var issued struct {
+				Required  bool   `json:"agent_mfa_required"`
+				BindingID string `json:"agent_binding_id"`
+			}
+			require.NoError(t, common.Unmarshal(result.Data, &issued))
+			require.True(t, issued.Required)
+			require.NotEmpty(t, issued.BindingID)
+			cookies := rec.Result().Cookies()
+			require.Len(t, cookies, 1)
+			cookie := cookies[0]
+			assert.Equal(t, agentActivationCookie+"_"+issued.BindingID, cookie.Name)
+			assert.True(t, cookie.HttpOnly && cookie.Secure)
+			assert.Equal(t, http.SameSiteStrictMode, cookie.SameSite)
+			assert.Equal(t, mfaURL, cookie.Path)
+			assert.NotContains(t, rec.Body.String(), cookie.Value)
+			mismatched := *cookie
+			mismatched.Name = agentActivationCookie + "_90000000"
+			_, wrongFlow := call(http.MethodGet, mfaURL, "", &mismatched)
+			assert.Equal(t, "AUTH_FLOW_INVALID", wrongFlow.Code)
+			_, replay := call(http.MethodPost, activationURL, body, nil)
+			assert.Equal(t, "AUTH_FLOW_INVALID", replay.Code)
+			_, replay = call(http.MethodPost, activationURL, encryptedPayload(user.Id, cookie.Value, password), nil)
+			assert.Equal(t, "AUTH_FLOW_INVALID", replay.Code)
+
+			state, err := model.GetSecurityCompletion(user.Id)
+			require.NoError(t, err)
+			assert.True(t, state.EmailVerified && state.HasPassword)
+			assert.False(t, state.Complete)
+			if !tc.enabled {
+				assert.ErrorIs(t, model.ResellerLoginAllowed(user.Id), model.ErrResellerForbidden)
+			}
+			_, missing := call(http.MethodGet, mfaURL, "", nil)
+			assert.Equal(t, "AUTH_FLOW_INVALID", missing.Code)
+
+			if tc.resume {
+				require.NoError(t, db.Model(&model.AuthFlow{}).Where("user_id = ? AND expires_at > ? AND consumed_at IS NULL", user.Id, time.Now()).Update("expires_at", time.Now().Add(-time.Minute)).Error)
+				_, expired := call(http.MethodGet, mfaURL, "", cookie)
+				assert.Equal(t, "AUTH_FLOW_INVALID", expired.Code)
+
+				service.SendAgentActivationResumeMail(user.Email, "en")
+				mailbox.mutex.Lock()
+				messages := append([]string(nil), mailbox.mail[user.Email]...)
+				mailbox.mutex.Unlock()
+				require.Len(t, messages, 1)
+				matches := regexp.MustCompile(`href="([^"]+)"`).FindStringSubmatch(messages[0])
+				require.Len(t, matches, 2)
+				link, err := url.Parse(html.UnescapeString(matches[1]))
+				require.NoError(t, err)
+				values, err := url.ParseQuery(link.Fragment)
+				require.NoError(t, err)
+				assert.Equal(t, model.SecurityAgentResumePurpose, values.Get("purpose"))
+				resumeToken := values.Get("token")
+				require.NotEmpty(t, resumeToken)
+				_, denied := call(http.MethodPost, resumeURL, encryptedPayload(user.Id+1, resumeToken, password), nil)
+				assert.Equal(t, "AUTH_FLOW_INVALID", denied.Code)
+				require.NoError(t, db.Model(&model.AuthFlow{}).Where("user_id = ? AND purpose = ?", user.Id, model.SecurityAgentResumePurpose).Update("created_at", time.Now().Add(-2*time.Minute)).Error)
+				replacementToken, err := model.NewAgentActivationResume(user.Id, user.Email)
+				require.NoError(t, err)
+				_, superseded := call(http.MethodPost, resumeURL, encryptedPayload(user.Id, resumeToken, password), nil)
+				assert.Equal(t, "AUTH_FLOW_INVALID", superseded.Code)
+
+				for range common.MaxFailAttempts {
+					_, denied = call(http.MethodPost, resumeURL, encryptedPayload(user.Id, replacementToken, "incorrect password"), nil)
+					assert.Equal(t, "AUTH_FLOW_INVALID", denied.Code)
+				}
+				_, exhausted := call(http.MethodPost, resumeURL, encryptedPayload(user.Id, replacementToken, password), nil)
+				assert.Equal(t, "AUTH_FLOW_INVALID", exhausted.Code)
+				require.NoError(t, db.Model(&model.AuthFlow{}).Where("user_id = ? AND purpose = ?", user.Id, model.SecurityAgentResumePurpose).Update("created_at", time.Now().Add(-2*time.Minute)).Error)
+				resumeToken, err = model.NewAgentActivationResume(user.Id, user.Email)
+				require.NoError(t, err)
+				resumeResponse, resumed := call(http.MethodPost, resumeURL, encryptedPayload(user.Id, resumeToken, password), nil)
+				require.True(t, resumed.Success, resumed.Message)
+				require.Len(t, resumeResponse.Result().Cookies(), 1)
+				priorCookie := cookie
+				cookie = resumeResponse.Result().Cookies()[0]
+				_, oldCredential := call(http.MethodGet, mfaURL, "", priorCookie)
+				assert.Equal(t, "AUTH_FLOW_INVALID", oldCredential.Code)
+				_, replay := call(http.MethodPost, resumeURL, encryptedPayload(user.Id, resumeToken, password), nil)
+				assert.Equal(t, "AUTH_FLOW_INVALID", replay.Code)
+			}
+
+			_, result = call(http.MethodGet, mfaURL, "", cookie)
+			require.True(t, result.Success, result.Message)
+			var setup model.AgentActivationSetup
+			require.NoError(t, common.Unmarshal(result.Data, &setup))
+			require.NotEmpty(t, setup.Secret)
+			require.Len(t, setup.BackupCodes, common.BackupCodeCount)
+			_, restored := call(http.MethodGet, mfaURL, "", cookie)
+			require.True(t, restored.Success, restored.Message)
+			assert.True(t, bytes.Equal(result.Data, restored.Data), "the original setup is restored")
+			require.NoError(t, db.Model(user).Update("status", common.UserStatusDisabled).Error)
+			_, disabled := call(http.MethodGet, mfaURL, "", cookie)
+			assert.Equal(t, "AUTH_FLOW_INVALID", disabled.Code)
+			require.NoError(t, db.Model(user).Update("status", common.UserStatusEnabled).Error)
+			require.NoError(t, db.Model(user).Update("email", "changed-"+user.Email).Error)
+			_, changed := call(http.MethodGet, mfaURL, "", cookie)
+			assert.Equal(t, "AUTH_FLOW_INVALID", changed.Code)
+			require.NoError(t, db.Model(user).Update("email", tc.name+"@example.com").Error)
+
+			existing := &model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}
+			require.NoError(t, db.Create(existing).Error)
+			_, alreadyBound := call(http.MethodGet, mfaURL, "", cookie)
+			assert.Equal(t, "AUTH_FLOW_INVALID", alreadyBound.Code)
+			alreadyBoundCode, err := totp.GenerateCode(setup.Secret, time.Now())
+			require.NoError(t, err)
+			_, alreadyBound = call(http.MethodPost, mfaURL, fmt.Sprintf(`{"code":%q}`, alreadyBoundCode), cookie)
+			assert.Equal(t, "AUTH_FLOW_INVALID", alreadyBound.Code)
+			require.NoError(t, db.Unscoped().Delete(existing).Error)
+
+			if tc.resume {
+				wrong := "000000"
+				for guess := 1; common.ValidateTOTPCode(setup.Secret, wrong); guess++ {
+					wrong = fmt.Sprintf("%06d", guess)
+				}
+				for range common.MaxFailAttempts {
+					_, denied := call(http.MethodPost, mfaURL, fmt.Sprintf(`{"code":%q}`, wrong), cookie)
+					assert.Equal(t, "MFA_CODE_INVALID", denied.Code)
+				}
+				_, exhausted := call(http.MethodGet, mfaURL, "", cookie)
+				assert.Equal(t, "AUTH_FLOW_INVALID", exhausted.Code)
+
+				require.NoError(t, db.Model(&model.AuthFlow{}).Where("user_id = ? AND purpose = ?", user.Id, model.SecurityAgentResumePurpose).Update("created_at", time.Now().Add(-2*time.Minute)).Error)
+				resumeToken, err := model.NewAgentActivationResume(user.Id, user.Email)
+				require.NoError(t, err)
+				resumeResponse, resumed := call(http.MethodPost, resumeURL, encryptedPayload(user.Id, resumeToken, password), nil)
+				require.True(t, resumed.Success)
+				require.Len(t, resumeResponse.Result().Cookies(), 1)
+				cookie = resumeResponse.Result().Cookies()[0]
+				_, result = call(http.MethodGet, mfaURL, "", cookie)
+				require.True(t, result.Success)
+				require.NoError(t, common.Unmarshal(result.Data, &setup))
+			}
+
+			wrong := "000000"
+			for guess := 1; common.ValidateTOTPCode(setup.Secret, wrong); guess++ {
+				wrong = fmt.Sprintf("%06d", guess)
+			}
+			_, denied := call(http.MethodPost, mfaURL, fmt.Sprintf(`{"code":%q}`, wrong), cookie)
+			assert.Equal(t, "MFA_CODE_INVALID", denied.Code)
+			code, err := totp.GenerateCode(setup.Secret, time.Now())
+			require.NoError(t, err)
+			mfaBody := fmt.Sprintf(`{"code":%q}`, code)
+			require.NoError(t, db.Callback().Create().Before("gorm:create").Register("agent_activation_factor_failure", func(tx *gorm.DB) {
+				if tx.Statement.Table == "two_fas" {
+					tx.AddError(errors.New("simulated factor persistence failure"))
+				}
+			}))
+			_, interrupted := call(http.MethodPost, mfaURL, mfaBody, cookie)
+			require.NoError(t, db.Callback().Create().Remove("agent_activation_factor_failure"))
+			assert.Equal(t, "SECURITY_OPERATION_UNAVAILABLE", interrupted.Code)
+			state, err = model.GetSecurityCompletion(user.Id)
+			require.NoError(t, err)
+			assert.False(t, state.MFAEnabled || state.Complete)
+
+			if tc.recoveryRace {
+				start := make(chan struct{})
+				recovery := make(chan error, 1)
+				confirmation := make(chan error, 1)
+				id, err := strconv.ParseInt(issued.BindingID, 10, 64)
+				require.NoError(t, err)
+				go func() {
+					<-start
+					_, err := model.RecoverUserSecurity(operator.Id, user.Id, "activation-race", "Synthetic identity recovery evidence", false)
+					recovery <- err
+				}()
+				go func() {
+					<-start
+					_, _, err := model.FinishAgentActivationMFA(id, cookie.Value, code)
+					confirmation <- err
+				}()
+				close(start)
+				require.NoError(t, <-recovery)
+				err = <-confirmation
+				if err != nil {
+					assert.True(t, errors.Is(err, model.ErrAuthFlowConsumed) || errors.Is(err, model.ErrAuthFlowInvalid), "activation must complete or yield to recovery")
+				}
+				state, err = model.GetSecurityCompletion(user.Id)
+				require.NoError(t, err)
+				assert.False(t, state.MFAEnabled)
+				return
+			}
+
+			confirmations := make(chan *httptest.ResponseRecorder, 2)
+			for range 2 {
+				go func() {
+					req := httptest.NewRequest(http.MethodPost, "https://example.com"+mfaURL, strings.NewReader(mfaBody))
+					req.Header.Set("Origin", "https://example.com")
+					req.AddCookie(cookie)
+					req.Header.Set("X-Agent-Activation", strings.TrimPrefix(cookie.Name, agentActivationCookie+"_"))
+					rec := httptest.NewRecorder()
+					engine.ServeHTTP(rec, req)
+					confirmations <- rec
+				}()
+			}
+			successes := 0
+			for range 2 {
+				completed := <-confirmations
+				var result securityEnrollmentResponse
+				require.NoError(t, common.Unmarshal(completed.Body.Bytes(), &result))
+				if !result.Success {
+					assert.Equal(t, "AUTH_FLOW_INVALID", result.Code)
+					continue
+				}
+				successes++
+				assert.JSONEq(t, fmt.Sprintf(`{"enabled":%t,"notification_warning":false}`, tc.enabled), string(result.Data))
+				require.Len(t, completed.Result().Cookies(), 1)
+				assert.Less(t, completed.Result().Cookies()[0].MaxAge, 0)
+			}
+			assert.Equal(t, 1, successes)
+			_, replay = call(http.MethodPost, mfaURL, mfaBody, cookie)
+			assert.Equal(t, "AUTH_FLOW_INVALID", replay.Code)
+			state, err = model.GetSecurityCompletion(user.Id)
+			require.NoError(t, err)
+			assert.True(t, state.Complete && state.MFAEnabled)
+			if !tc.enabled {
+				assert.ErrorIs(t, model.ResellerLoginAllowed(user.Id), model.ErrResellerForbidden)
+			}
+			var audits []model.AuditLog
+			require.NoError(t, model.LOG_DB.Find(&audits).Error)
+			raw, err := common.Marshal(audits)
+			require.NoError(t, err)
+			assert.Contains(t, string(raw), "security.account.activated")
+			if tc.resume {
+				assert.Contains(t, string(raw), "security.account.activation_resume_failed")
+				assert.NotContains(t, string(raw), "incorrect password")
+			}
+			for _, secret := range []string{password, token, cookie.Value, setup.Secret, setup.BackupCodes[0]} {
+				assert.False(t, strings.Contains(string(raw), secret), "audit contains an activation secret")
+			}
+		})
+	}
+}

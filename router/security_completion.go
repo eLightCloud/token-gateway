@@ -8,6 +8,7 @@ import (
 )
 
 func registerSecurityCompletionRoutes(api *gin.RouterGroup) {
+	registerAgentActivationRoutes(api)
 	api.POST("/security/email-change/complete", middleware.AnonymousRequestBodyLimit(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.FinishAdminEmailChange)
 	api.POST("/security/admin/users/:id/email-change", middleware.AdminAuth(), middleware.RequirePermission(authz.SecurityRecover), middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("account-security"), middleware.DisableCache(), controller.AdminRequestEmailChange)
 	api.POST("/security/password/reset", middleware.AnonymousRequestBodyLimit(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.FinishAccountActivation)

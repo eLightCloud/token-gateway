@@ -26,7 +26,7 @@ func registerResellerRoutes(api *gin.RouterGroup) {
 	admin.POST("/:id/activation", middleware.RequirePermission(authz.ResellerCreate), controller.ResendAccountActivation)
 	admin.POST("/:id/password-reset", middleware.RequirePermission(authz.ResellerCreate), controller.SendResellerAgentPasswordReset)
 	admin.POST("/:id/quota-adjustments", middleware.RequirePermission(authz.ResellerQuota), controller.AdjustResellerQuota)
-	self := api.Group("/reseller/self/customers", middleware.UserAuth(), middleware.DisableCache(), middleware.ResellerWriteRateLimit())
+	self := api.Group("/reseller/self/customers", middleware.ResellerCustomerManagement, middleware.UserAuth(), middleware.DisableCache(), middleware.ResellerWriteRateLimit())
 	self.GET("", controller.ListResellerUsers)
 	self.GET("/:id", controller.GetResellerWorkspace)
 	self.PUT("/:id/config", controller.SaveResellerConfiguration)

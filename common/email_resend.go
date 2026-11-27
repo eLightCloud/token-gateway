@@ -3,7 +3,10 @@ package common
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"maps"
+	"net"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -15,6 +18,18 @@ var resendEmailClient = &http.Client{
 	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
+}
+
+// Protected by OptionMapRWMutex along with the selected provider and credentials.
+var resendCredentialUnavailable bool
+
+func PublishResendDeliveryOptions(values map[string]string, credentialUnavailable bool) {
+	OptionMapRWMutex.Lock()
+	defer OptionMapRWMutex.Unlock()
+	if _, ok := values["ResendApiKey"]; ok {
+		resendCredentialUnavailable = credentialUnavailable
+	}
+	maps.Copy(OptionMap, values)
 }
 
 // ValidateResendConfiguration is shared by provider activation and delivery.
@@ -39,7 +54,11 @@ func ValidateResendConfiguration(apiKey, from string) error {
 // This transport does not change token expiry, single-use or session rules.
 func sendResendEmail(apiKey, from, subject, receiver, content string) error {
 	if err := ValidateResendConfiguration(apiKey, from); err != nil {
-		return err
+		kind := EmailDeliveryConfiguration
+		if strings.TrimSpace(apiKey) == "" || strings.TrimSpace(from) == "" {
+			kind = EmailDeliveryNotConfigured
+		}
+		return emailDeliveryFailure{kind, err}
 	}
 	apiKey = strings.TrimSpace(apiKey)
 	sender, _ := mail.ParseAddress(strings.TrimSpace(from))
@@ -73,20 +92,25 @@ func sendResendEmail(apiKey, from, subject, receiver, content string) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := resendEmailClient.Do(req)
 	if err != nil {
-		SysError(LogText("Resend request failed: error=%q", err))
-		return NewMessage("Resend request failed")
+		failure := NewMessage("Resend request failed")
+		var connection *net.OpError
+		if errors.As(err, &connection) && connection.Op == "dial" {
+			return emailDeliveryFailure{EmailDeliveryConnection, failure}
+		}
+		return failure
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// The reason (unverified domain, invalid key, quota) goes to the server
-		// log only, because the error may reach whoever asked for the email.
-		var failure struct {
-			Name    string `json:"name"`
-			Message string `json:"message"`
+		SysError(LogText("Resend rejected the email: status=%d", resp.StatusCode))
+		failure := NewMessage("Resend email delivery failed (HTTP {{status}})", map[string]any{"status": resp.StatusCode})
+		if resp.StatusCode == http.StatusUnauthorized ||
+			(resp.StatusCode == http.StatusForbidden && resendCredentialRejected(resp.Body)) {
+			return emailDeliveryFailure{EmailDeliveryAuthentication, failure}
 		}
-		_ = DecodeJson(io.LimitReader(resp.Body, 4096), &failure)
-		SysError(LogText("Resend rejected the email: status=%d name=%q message=%q", resp.StatusCode, failure.Name, failure.Message))
-		return NewMessage("Resend email delivery failed (HTTP {{status}})", map[string]any{"status": resp.StatusCode})
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+			return emailDeliveryFailure{EmailDeliveryRejected, failure}
+		}
+		return failure
 	}
 	var result struct {
 		ID string `json:"id"`
@@ -95,4 +119,18 @@ func sendResendEmail(apiKey, from, subject, receiver, content string) error {
 		return NewMessage("Invalid Resend delivery response")
 	}
 	return nil
+}
+
+func resendCredentialRejected(body io.Reader) bool {
+	var diagnostic struct {
+		Name string `json:"name"`
+	}
+	if DecodeJson(io.LimitReader(body, 4096), &diagnostic) != nil {
+		return false
+	}
+	switch diagnostic.Name {
+	case "restricted_api_key", "suspended_api_key", "invalid_permission":
+		return true
+	}
+	return false
 }

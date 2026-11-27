@@ -72,6 +72,7 @@ type AuthFlowCreate struct {
 }
 
 type AuthFlowMatch struct {
+	FlowID    int64
 	Purpose   string
 	Provider  string
 	Intent    string
@@ -126,6 +127,9 @@ func ValidateAuthSessionWithTx(tx *gorm.DB, identity AuthSessionIdentity) error 
 
 func applyAuthFlowMatch(query *gorm.DB, token string, match AuthFlowMatch) *gorm.DB {
 	query = query.Where("token_hash = ? AND purpose = ?", authFlowTokenHash(token), match.Purpose)
+	if match.FlowID > 0 {
+		query = query.Where("id = ?", match.FlowID)
+	}
 	if match.Provider != "" {
 		query = query.Where("provider = ?", match.Provider)
 	}
@@ -243,12 +247,21 @@ func ConsumeAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
 // ConsumeAuthFlowWithAction consumes a flow and runs action in the same
 // database transaction. An action failure rolls the consumption back.
 func ConsumeAuthFlowWithAction(token string, match AuthFlowMatch, action func(tx *gorm.DB, flow *AuthFlow) error) (*AuthFlow, error) {
+	return consumeAuthFlowInTransaction(token, match, nil, action)
+}
+
+func consumeAuthFlowInTransaction(token string, match AuthFlowMatch, before func(*gorm.DB) error, action func(*gorm.DB, *AuthFlow) error) (*AuthFlow, error) {
 	if token == "" || match.Purpose == "" {
 		return nil, ErrAuthFlowInvalid
 	}
 	var consumed AuthFlow
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		// Claim with the first write, rather than upgrading a prior read lock.
+		if before != nil {
+			if err := before(tx); err != nil {
+				return err
+			}
+		}
+		// Claim before reading the flow to avoid upgrading a SQLite read lock.
 		// SQLite cannot reliably upgrade two concurrent deferred read transactions.
 		now := time.Now()
 		result := applyAuthFlowMatch(tx.Model(&AuthFlow{}), token, match).

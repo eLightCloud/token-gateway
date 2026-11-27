@@ -830,8 +830,6 @@ it('shows complete translated 2FA step descriptions and updates every step on la
           secret: 'EXAMPLE',
           qr_code_data: 'otpauth://totp/example',
           backup_codes: ['EXAMPLE-CODE'],
-          flow_token: 'example-flow',
-          expires_at: 1234567890,
         }}
         loading={false}
         initializing={false}

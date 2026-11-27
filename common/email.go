@@ -81,11 +81,15 @@ func sendEmail(subject string, receiver string, content string) error {
 	provider := OptionMap["EmailProvider"]
 	resendKey := OptionMap["ResendApiKey"]
 	resendFrom := OptionMap["ResendFrom"]
+	resendKeyUnavailable := resendCredentialUnavailable
 	OptionMapRWMutex.RUnlock()
 	// One selector controls delivery. Never fall back to a second provider:
 	// a failed response does not prove that the first provider did not send.
 	switch provider {
 	case "resend":
+		if resendKeyUnavailable {
+			return ErrEmailDeliveryUnavailable
+		}
 		return sendResendEmail(resendKey, resendFrom, subject, receiver, content)
 	case "", "smtp": // Preserve existing installations without a selector.
 	default:
@@ -95,18 +99,21 @@ func sendEmail(subject string, receiver string, content string) error {
 		if snapshot.err != nil {
 			return ErrEmailDeliveryUnavailable
 		}
+		if snapshot.config.Options.AuthMode == EmailAuthLegacy && strings.TrimSpace(snapshot.config.Options.Legacy.Host) == "" {
+			return ErrEmailDeliveryNotConfigured
+		}
 		_, err := deliverConfiguredEmail(context.Background(), snapshot.config, subject, receiver, content)
 		return err
+	}
+	if strings.TrimSpace(SMTPServer) == "" {
+		return ErrEmailDeliveryNotConfigured
 	}
 	if SMTPFrom == "" { // for compatibility
 		SMTPFrom = SMTPAccount
 	}
 	id, err2 := generateMessageID()
 	if err2 != nil {
-		return err2
-	}
-	if SMTPServer == "" && SMTPAccount == "" {
-		return NewMessage("SMTP server is not configured")
+		return emailDeliveryFailure{EmailDeliveryConfiguration, err2}
 	}
 	encodedSubject := fmt.Sprintf("=?UTF-8?B?%s?=", base64.StdEncoding.EncodeToString([]byte(subject)))
 	mail := []byte(fmt.Sprintf("To: %s\r\n"+
@@ -122,25 +129,25 @@ func sendEmail(subject string, receiver string, content string) error {
 	var err error
 	client, err := newSMTPClient(addr)
 	if err != nil {
-		return err
+		return emailDeliveryFailure{EmailDeliveryConnection, err}
 	}
 	defer client.Close()
 	if shouldAuthenticateSMTP() {
 		if err = client.Auth(auth); err != nil {
-			return err
+			return emailDeliveryFailure{EmailDeliveryAuthentication, err}
 		}
 	}
 	if err = client.Mail(SMTPFrom); err != nil {
-		return err
+		return classifySMTPSubmissionFailure(err)
 	}
 	for _, receiver := range to {
 		if err = client.Rcpt(receiver); err != nil {
-			return err
+			return classifySMTPSubmissionFailure(err)
 		}
 	}
 	w, err := client.Data()
 	if err != nil {
-		return err
+		return classifySMTPSubmissionFailure(err)
 	}
 	_, err = w.Write(mail)
 	if err != nil {
@@ -148,11 +155,9 @@ func sendEmail(subject string, receiver string, content string) error {
 	}
 	err = w.Close()
 	if err != nil {
-		return err
+		return classifySMTPSubmissionFailure(err)
 	}
-	err = client.Quit()
-	if err != nil {
-		SysError(LogText("failed to send email to %s: %v", receiver, err))
-	}
-	return err
+	// The server accepted the message at the end of DATA.
+	_ = client.Quit()
+	return nil
 }

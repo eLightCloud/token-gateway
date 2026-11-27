@@ -36,7 +36,10 @@ import type { TwoFASetupData } from '../../api'
 
 interface TwoFASetupDialogProps {
   open: boolean
-  setupData: TwoFASetupData | null
+  setupData: Pick<
+    TwoFASetupData,
+    'qr_code_data' | 'secret' | 'backup_codes'
+  > | null
   loading: boolean
   initializing: boolean
   error?: string

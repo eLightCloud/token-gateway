@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func GetSecurityCompletion(c *gin.Context) {
@@ -82,8 +83,15 @@ func FinishAccountActivation(c *gin.Context) {
 	purpose := model.SecurityActivationPurpose
 	if c.Request.URL.Path == "/api/security/password/reset" {
 		purpose = model.SecurityPasswordPurpose
+		err = model.CompleteSecurityMail(input.UserID, purpose, input.Token, password, nil)
+	} else {
+		var handled bool
+		handled, err = completeAccountActivation(c, input.UserID, input.Token, password)
+		if handled {
+			return
+		}
 	}
-	if err := model.CompleteSecurityMail(input.UserID, purpose, input.Token, password, nil); err != nil {
+	if err != nil {
 		writeSecurityCompletionError(c, err)
 		return
 	}
@@ -117,7 +125,7 @@ func ResendAccountActivation(c *gin.Context) {
 		allowed = id != nil && id.Kind == "agent" && authz.Can(operatorID, c.GetInt("role"), authz.ResellerCreate)
 	}
 	if !allowed {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "code": "RESELLER_NOT_FOUND", "message": "Account not found"})
+		writeResellerActivationError(c, gorm.ErrRecordNotFound, false, false)
 		return
 	}
 	var input struct {
@@ -127,19 +135,27 @@ func ResendAccountActivation(c *gin.Context) {
 		resellerResponse(c, nil, model.ErrResellerInvalid)
 		return
 	}
+	emailUpdated := false
+	expectedEmail := ""
 	if input.Email != "" {
 		email, err := service.ValidateAccountEmail(input.Email)
 		if err != nil {
-			writeSecurityCompletionError(c, err)
+			writeResellerActivationError(c, err, true, false)
 			return
 		}
-		if err := model.CorrectPendingActivationEmail(userID, email); err != nil {
-			writeSecurityCompletionError(c, err)
+		expectedEmail = email
+		emailUpdated, err = model.CorrectPendingActivationEmail(userID, email)
+		if err != nil {
+			writeResellerActivationError(c, err, true, false)
 			return
+		}
+		if emailUpdated {
+			recordManageAuditFor(c, userID, "security.activation.email.corrected", nil)
 		}
 	}
-	if err := service.SendSecurityCompletionMail(userID, model.SecurityActivationPurpose, nil, securityMailLanguage(c)); err != nil {
-		writeSecurityCompletionError(c, err)
+	if err := service.SendResellerActivationMail(userID, expectedEmail, securityMailLanguage(c)); err != nil {
+		problem := writeResellerActivationError(c, err, false, emailUpdated)
+		recordResellerActivationFailure(c, userID, problem)
 		return
 	}
 	recordManageAuditFor(c, userID, "security.activation.resent", nil)
@@ -341,6 +357,8 @@ func notifyCompletedSecurityChange(c *gin.Context, userID int, event string, dat
 func writeSecurityCompletionError(c *gin.Context, err error) {
 	status, code, message := http.StatusServiceUnavailable, "SECURITY_OPERATION_UNAVAILABLE", "Please try again later."
 	switch {
+	case errors.Is(err, model.ErrAgentActivationTransport):
+		status, code, message = http.StatusForbidden, "AGENT_ACTIVATION_HTTPS_REQUIRED", "Use the secure HTTPS address to activate the reseller account."
 	case errors.Is(err, model.ErrAuthFlowInvalid), errors.Is(err, model.ErrAuthFlowExpired), errors.Is(err, model.ErrAuthFlowConsumed):
 		status, code, message = http.StatusBadRequest, "AUTH_FLOW_INVALID", "Verification flow expired"
 	case errors.Is(err, common.ErrAccountPasswordLength), errors.Is(err, common.ErrAccountPasswordWeak), errors.Is(err, common.ErrPasswordLegacyLimit):

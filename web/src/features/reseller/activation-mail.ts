@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { handleServerError } from '@/lib/handle-server-error'
-import { getServerErrorSources } from '@/lib/server-error-message'
+import { getServerErrorMessage } from '@/lib/server-error-message'
 
 import { resellerKey, resellerPath, resellerRequest } from './api'
 
@@ -54,34 +54,18 @@ export function useResellerActivationMail(
         t('Account information email submitted to the mail server.')
       ),
     onError: (error, input) => {
-      const deliveryFailed = getServerErrorSources(error).some(
-        (source) => source.code === 'EMAIL_BINDING_DELIVERY_FAILED'
-      )
-      const title =
-        !admin && input.afterCreate
-          ? t('Customer created, but the account email could not be sent.')
-          : t('Failed to send account information email')
+      const fallback = t('Failed to send account information email')
       if (!admin && input.afterCreate) {
+        const title = t(
+          'Customer created, but the account email could not be sent.'
+        )
         handleServerError(error, title, {
           title,
-          description: t(
-            'Resend the account email from the customer list or details.'
-          ),
+          description: getServerErrorMessage(error, fallback),
         })
         return
       }
-      if (deliveryFailed) {
-        handleServerError(error, title, {
-          title,
-          description: admin
-            ? t(
-                'Email delivery is unavailable. Check the saved email configuration.'
-              )
-            : undefined,
-        })
-        return
-      }
-      handleServerError(error, title)
+      handleServerError(error, fallback)
     },
   })
   const sending = useMutationState({

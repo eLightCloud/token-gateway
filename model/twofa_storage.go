@@ -40,6 +40,10 @@ func twoFACipher() (cipher.AEAD, error) {
 }
 
 func encryptTwoFASecret(secret string) (string, error) {
+	return sealMFAData(secret, "totp-secret")
+}
+
+func sealMFAData(value, purpose string) (string, error) {
 	aead, err := twoFACipher()
 	if err != nil {
 		return "", err
@@ -48,7 +52,7 @@ func encryptTwoFASecret(secret string) (string, error) {
 	if _, err = rand.Read(nonce); err != nil {
 		return "", err
 	}
-	return "enc:v1:" + base64.RawStdEncoding.EncodeToString(aead.Seal(nonce, nonce, []byte(secret), []byte("totp-secret"))), nil
+	return "enc:v1:" + base64.RawStdEncoding.EncodeToString(aead.Seal(nonce, nonce, []byte(value), []byte(purpose))), nil
 }
 
 func (factor *TwoFA) BeforeSave(_ *gorm.DB) error {
@@ -70,20 +74,29 @@ func (factor *TwoFA) AfterFind(_ *gorm.DB) error {
 	if !strings.HasPrefix(factor.Secret, "enc:v1:") {
 		return nil
 	}
-	aead, err := twoFACipher()
+	secret, err := openMFAData(factor.Secret, "totp-secret")
 	if err != nil {
 		return err
 	}
-	payload, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(factor.Secret, "enc:v1:"))
-	if err != nil || len(payload) < aead.NonceSize()+aead.Overhead() {
-		return errors.New("invalid encrypted MFA credential")
-	}
-	plain, err := aead.Open(nil, payload[:aead.NonceSize()], payload[aead.NonceSize():], []byte("totp-secret"))
-	if err != nil {
-		return errors.New("MFA credential decryption failed")
-	}
-	factor.Secret = string(plain)
+	factor.Secret = secret
 	return nil
+}
+
+func openMFAData(value, purpose string) (string, error) {
+	aead, err := twoFACipher()
+	if err != nil {
+		return "", err
+	}
+	encoded, ok := strings.CutPrefix(value, "enc:v1:")
+	payload, err := base64.RawStdEncoding.DecodeString(encoded)
+	if !ok || err != nil || len(payload) < aead.NonceSize()+aead.Overhead() {
+		return "", errors.New("invalid encrypted MFA credential")
+	}
+	plain, err := aead.Open(nil, payload[:aead.NonceSize()], payload[aead.NonceSize():], []byte(purpose))
+	if err != nil {
+		return "", errors.New("MFA credential decryption failed")
+	}
+	return string(plain), nil
 }
 
 func (factor *TwoFA) AfterSave(tx *gorm.DB) error { return factor.AfterFind(tx) }

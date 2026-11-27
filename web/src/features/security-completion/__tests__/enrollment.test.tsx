@@ -63,7 +63,7 @@ afterEach(() => {
   window.history.replaceState(null, '', '/')
 })
 
-async function renderPage(activation = false) {
+async function renderPage(activation = false, reactStrictMode = false) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
@@ -92,7 +92,8 @@ async function renderPage(activation = false) {
   render(
     <QueryClientProvider client={client}>
       <RouterProvider router={router} />
-    </QueryClientProvider>
+    </QueryClientProvider>,
+    { reactStrictMode }
   )
 }
 
@@ -223,6 +224,90 @@ describe('Email password setup', () => {
       screen.queryByRole('heading', { name: 'Sign in' })
     ).not.toBeInTheDocument()
   })
+})
+
+it('keeps an ordinary tokenless security link outside reseller continuation', async () => {
+  window.history.replaceState(null, '', '/account-activation')
+  const get = vi.spyOn(api, 'get')
+  await renderPage(true)
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'This link is invalid or has expired. Request a new link.'
+  )
+  expect(
+    screen.queryByRole('button', { name: 'Request a continuation link' })
+  ).not.toBeInTheDocument()
+  expect(get).not.toHaveBeenCalled()
+})
+
+it('loads a fresh MFA request when Strict Mode cancels the first observer', async () => {
+  window.history.replaceState(
+    null,
+    '',
+    '/account-activation?reseller=1&binding=42'
+  )
+  const previousAdapter = api.defaults.adapter
+  api.defaults.adapter = async (config: InternalAxiosRequestConfig) => ({
+    config,
+    headers: {},
+    status: 200,
+    statusText: 'OK',
+    data: {
+      success: true,
+      data: {
+        secret: 'EXAMPLE',
+        qr_code_data: 'otpauth://totp/example',
+        backup_codes: ['EXAMPLE-CODE'],
+      },
+    },
+  })
+  try {
+    await renderPage(true, true)
+    expect(
+      await screen.findByRole('dialog', {
+        name: 'Setup Two-Factor Authentication',
+      })
+    ).toBeVisible()
+  } finally {
+    api.defaults.adapter = previousAdapter
+  }
+})
+
+it('opens login after reseller activation even when another user is signed in', async () => {
+  const auth = useAuthStore.getState().auth
+  auth.setBootstrapState('complete')
+  window.history.replaceState(
+    null,
+    '',
+    '/account-activation?reseller=1&binding=42'
+  )
+  vi.spyOn(api, 'get').mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        secret: 'EXAMPLE',
+        qr_code_data: 'otpauth://totp/example',
+        backup_codes: ['EXAMPLE-CODE'],
+      },
+    },
+  })
+  const post = vi.spyOn(api, 'post').mockResolvedValue({
+    data: { success: true, data: { enabled: true } },
+  })
+  const user = userEvent.setup()
+  await renderPage(true)
+  await screen.findByRole('dialog', { name: 'Setup Two-Factor Authentication' })
+  await user.click(screen.getByRole('button', { name: 'Next' }))
+  await user.click(screen.getByRole('button', { name: 'Next' }))
+  await user.type(screen.getByLabelText('Verification Code'), '123456')
+  await user.click(screen.getByRole('button', { name: 'Enable 2FA' }))
+  await user.click(await screen.findByRole('link', { name: 'Sign In' }))
+  expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
+  expect(post).toHaveBeenCalledWith(
+    '/api/security/agent-activation/mfa',
+    { code: '123456' },
+    expect.objectContaining({ headers: { 'X-Agent-Activation': '42' } })
+  )
+  expect(useAuthStore.getState().auth.user?.id).toBe(42)
 })
 
 it('allows anonymous email-change confirmation without requiring or refreshing a dashboard session', async () => {

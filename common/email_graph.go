@@ -61,6 +61,12 @@ func submitMicrosoftGraphEmail(ctx context.Context, config EmailDeliveryConfig, 
 			if response.StatusCode == http.StatusForbidden {
 				report.Reason = "GRAPH_ACCESS_DENIED"
 			}
+			if response.StatusCode == http.StatusUnauthorized {
+				return emailDeliveryFailure{EmailDeliveryAuthentication, errors.New("Microsoft Graph rejected the credentials")}
+			}
+			if response.StatusCode >= 400 && response.StatusCode < 500 && response.StatusCode != http.StatusTooManyRequests {
+				return emailDeliveryFailure{EmailDeliveryRejected, errors.New("Microsoft Graph rejected the email")}
+			}
 			if response.StatusCode < http.StatusInternalServerError {
 				return errors.New("Microsoft Graph rejected the email")
 			}

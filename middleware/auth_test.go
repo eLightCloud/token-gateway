@@ -665,6 +665,34 @@ func TestResellerS1RejectsPendingAccountsAcrossDashboardCredentials(t *testing.T
 	}
 }
 
+func TestResellerCustomerManagementReportsOperatorState(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.UserSecurityState{}, &model.TwoFA{}, &model.ResellerIdentity{}, &model.ResellerAccount{}))
+	user := createMiddlewarePATUser(t, "agent-operator", "operator-pat")
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("reseller_kind", "agent").Error)
+	require.NoError(t, model.DB.Create(&model.ResellerIdentity{UserID: user.Id, Kind: "agent", Activation: "pending"}).Error)
+	require.NoError(t, model.DB.Create(&model.ResellerAccount{UserID: user.Id}).Error)
+	now := time.Now().Unix()
+	session := &model.UserSession{SID: "agent-operator-session", UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion, Status: model.UserSessionStatusActive, RefreshHash: "agent-operator-refresh", LoginMethod: "password", LastActiveAt: now, ExpiresAt: now + 3600}
+	require.NoError(t, model.CreateUserSession(session))
+	access, _, err := service.IssueAccessToken(service.AuthIdentity{UserID: user.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1})
+	require.NoError(t, err)
+	router := gin.New()
+	router.POST("/api/reseller/self/customers", ResellerCustomerManagement, UserAuth(), func(c *gin.Context) { c.Status(http.StatusCreated) })
+	for _, scenario := range []struct{ activation, code string }{
+		{"pending", "RESELLER_AGENT_NOT_ACTIVATED"},
+		{"active", "RESELLER_OPERATOR_DISABLED"},
+	} {
+		require.NoError(t, model.DB.Model(&model.ResellerIdentity{}).Where("user_id = ?", user.Id).Update("activation", scenario.activation).Error)
+		request := httptest.NewRequest(http.MethodPost, "/api/reseller/self/customers", nil)
+		request.Header.Set("Authorization", "Bearer "+access)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		require.Equal(t, http.StatusForbidden, response.Code)
+		assert.Contains(t, response.Body.String(), scenario.code)
+	}
+}
+
 func TestResellerIdentityDatabaseFailureIsNotAnInvalidKey(t *testing.T) {
 	setupDashboardAuthMiddlewareTest(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.Token{}))

@@ -33,13 +33,9 @@ import {
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  handleServerError,
-  markServerErrorHandled,
-} from '@/lib/handle-server-error'
-import { getServerErrorSources } from '@/lib/server-error-message'
 
 import { resellerPath, resellerRequest } from './api'
+import { showResellerCreateError } from './lib/create-account-error'
 import {
   resellerCreateSchema,
   type ResellerCreateValues,
@@ -73,32 +69,13 @@ export function ResellerCreateDialog(props: ResellerCreateDialogProps) {
         'post',
         values
       ),
-    onError: (error, values) => {
-      if (
-        !props.admin &&
-        getServerErrorSources(error).some(
-          (source) => source.code === 'RESELLER_EMAIL_CONFLICT'
-        )
-      ) {
-        markServerErrorHandled(error)
-        if (
-          form.getValues('email').trim().toLowerCase() ===
-          values.email.toLowerCase()
-        ) {
-          form.setError(
-            'email',
-            {
-              type: 'server',
-              message:
-                'This email address is already in use. Please use a different email address.',
-            },
-            { shouldFocus: true }
-          )
-        }
-        return
-      }
-      handleServerError(error, t('Failed to create account'))
-    },
+    onError: (error, values) =>
+      showResellerCreateError(
+        error,
+        values,
+        form,
+        t('Failed to create account')
+      ),
     onSuccess: (result) => {
       form.reset()
       props.onOpenChange(false)

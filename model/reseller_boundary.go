@@ -58,6 +58,9 @@ func ResellerDashboardAllowed(userID int, path string) error {
 		return nil
 	}
 	if identity.Activation != "active" {
+		if kind == "agent" {
+			return ErrResellerAgentNotActivated
+		}
 		return ErrResellerForbidden
 	}
 	if kind == "agent" {
@@ -70,7 +73,7 @@ func ResellerDashboardAllowed(userID int, path string) error {
 			return err
 		}
 		if !account.Enabled || user.Status != common.UserStatusEnabled {
-			return ErrResellerForbidden
+			return ErrResellerOperatorDisabled
 		}
 		// A receives only dedicated own-customer management, never ordinary admin,
 		// credentials, personal wallet, organization or log endpoints.

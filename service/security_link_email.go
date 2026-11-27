@@ -13,15 +13,10 @@ import (
 )
 
 func DeliverSecurityMail(userID int, purpose, email, token, lang string) error {
-	return deliverSecurityMail(userID, purpose, email, token, "", "", lang)
-}
-
-func deliverSecurityMail(userID int, purpose, email, token, username, accountKind, lang string) error {
 	lang = i18n.ParseAcceptLanguage(lang)
 	if lang == i18n.LangZhTW {
 		lang = i18n.LangZhCN
 	}
-
 	kind, prefix := common.EmailSecuritySetup, "security_mail.setup."
 	if purpose == model.SecurityPasswordPurpose {
 		kind, prefix = common.EmailPasswordRecovery, "security_mail.recovery."
@@ -33,18 +28,6 @@ func deliverSecurityMail(userID int, purpose, email, token, username, accountKin
 	// Fragment tokens stay out of HTTP access logs and Referer headers.
 	link := system_setting.ServerAddress + "/account-activation#" + url.Values{"token": {token}, "user_id": {fmt.Sprint(userID)}, "purpose": {purpose}}.Encode()
 	content := fmt.Sprintf(`<p>%s</p><p>%s</p><p><a href="%s">%s</a></p>`, html.EscapeString(intro), html.EscapeString(expiry), html.EscapeString(link), html.EscapeString(translate(prefix+"action")))
-	if username != "" {
-		subjectKey, enablementKey := "security_mail.agent.subject", "security_mail.agent.activation_required"
-		if accountKind == "agent_customer" {
-			subjectKey, enablementKey = "security_mail.customer.subject", "security_mail.customer.activation_required"
-		}
-		subject = translate(subjectKey)
-		usernameLine := i18n.Translate(lang, "security_mail.agent.username", map[string]any{"Username": username})
-		content = fmt.Sprintf(`<p>%s</p><p><a href="%s">%s</a></p><p>%s</p>`,
-			html.EscapeString(usernameLine),
-			html.EscapeString(system_setting.ServerAddress+"/sign-in"), html.EscapeString(translate("security_mail.agent.sign_in")),
-			html.EscapeString(translate(enablementKey))) + content
-	}
 	copy := common.SecurityLinkEmailCopy{
 		Language:  lang,
 		Label:     translate(prefix + "label"),

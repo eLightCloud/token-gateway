@@ -7,7 +7,7 @@ import (
 
 // CreateResellerAccount enforces platform capabilities before entering the
 // atomic identity workflow. Customer ownership remains a model invariant.
-func CreateResellerAccount(operatorID int, kind string, input model.ResellerCreateInput, sendActivationEmail bool, lang string) (*model.ResellerIdentity, error) {
+func CreateResellerAccount(operatorID int, kind string, input model.ResellerCreateInput, sendActivationEmail bool, lang string) (*ResellerAccountCreation, error) {
 	if kind == "agent" {
 		var operator model.User
 		if err := model.DB.First(&operator, operatorID).Error; err != nil {
@@ -17,11 +17,19 @@ func CreateResellerAccount(operatorID int, kind string, input model.ResellerCrea
 			return nil, model.ErrResellerForbidden
 		}
 	}
-	identity, err := model.CreateResellerUser(operatorID, kind, input)
-	if err == nil && sendActivationEmail {
-		identity.ActivationMailSent = SendSecurityCompletionMail(identity.UserID, model.SecurityActivationPurpose, nil, lang) == nil
+	if _, err := ValidateAccountEmail(input.Email); err != nil {
+		return nil, err
 	}
-	return identity, err
+	identity, err := model.CreateResellerUser(operatorID, kind, input)
+	if err != nil {
+		return nil, err
+	}
+	result := &ResellerAccountCreation{ResellerIdentity: identity}
+	if sendActivationEmail {
+		result.MailError = SendResellerActivationMail(identity.UserID, model.NormalizeEmail(input.Email), lang)
+		identity.ActivationMailSent = result.MailError == nil
+	}
+	return result, nil
 }
 
 // AdjustResellerAccountQuota keeps platform procurement and own-customer

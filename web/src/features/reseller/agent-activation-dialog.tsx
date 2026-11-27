@@ -27,10 +27,15 @@ import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
 import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { handleServerError } from '@/lib/handle-server-error'
+import {
+  handleServerError,
+  markServerErrorHandled,
+} from '@/lib/handle-server-error'
+import { getServerErrorMessage } from '@/lib/server-error-message'
 
 import { sendResellerActivationEmail } from './activation-mail'
 import type { ResellerUser } from './api'
+import { getResellerAccountErrorDetails } from './lib/account-error-details'
 import {
   pendingResellerEmailSchema,
   type PendingResellerEmail,
@@ -67,8 +72,32 @@ export function ResellerAgentActivationDialog(props: {
       form.reset()
       props.onChanged()
     },
-    onError: (error) =>
-      handleServerError(error, t('Failed to send account information email')),
+    onError: (error) => {
+      const failure = getResellerAccountErrorDetails(error)
+      const fallback = t('Failed to send account information email')
+      if (failure?.emailUpdated) {
+        form.reset()
+        props.onChanged()
+        const title = t(
+          'Email updated, but the account email could not be sent.'
+        )
+        handleServerError(error, title, {
+          title,
+          description: getServerErrorMessage(error, fallback),
+        })
+        return
+      }
+      if (failure?.field === 'email') {
+        markServerErrorHandled(error)
+        form.setError(
+          'email',
+          { type: 'server', message: failure.messageKey },
+          { shouldFocus: true }
+        )
+        return
+      }
+      handleServerError(error, fallback)
+    },
   })
 
   return (
@@ -107,7 +136,7 @@ export function ResellerAgentActivationDialog(props: {
               id={id}
               type='email'
               placeholder={props.user.email}
-              disabled={send.isPending}
+              readOnly={send.isPending}
               aria-invalid={!!error}
               aria-describedby={error ? `${id}-error` : undefined}
             />

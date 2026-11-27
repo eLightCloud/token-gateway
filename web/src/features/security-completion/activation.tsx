@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -32,26 +32,91 @@ import {
   authResult,
 } from '@/lib/secure-verification'
 
+import { AgentActivation } from './agent-activation'
 import { confirmSecurityEmail } from './api'
+import {
+  rememberAgentActivation,
+  type ActivationLink,
+} from './lib/agent-activation-location'
 import { PasswordSetupForm } from './password-setup-form'
 
-export function AccountActivation() {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const [link] = useState(() => {
-    const params = new URLSearchParams(window.location.hash.slice(1))
-    window.history.replaceState(null, '', window.location.pathname)
-    return {
-      token: params.get('token') ?? '',
+function readActivationLink() {
+  const params = new URLSearchParams(window.location.hash.slice(1))
+  const search = new URLSearchParams(window.location.search)
+  const token = params.get('token') ?? ''
+  const bindingID = search.get('binding')
+  return {
+    link: {
+      token,
       user_id: Number(params.get('user_id')),
       purpose: params.get('purpose'),
+    },
+    agent:
+      params.get('account') === 'agent' ||
+      params.get('purpose') === 'security_agent_resume' ||
+      (!token && search.get('reseller') === '1'),
+    bindingID:
+      !token && bindingID && /^[1-9][0-9]{0,18}$/.test(bindingID)
+        ? bindingID
+        : undefined,
+  }
+}
+
+export function AccountActivation() {
+  const [{ link, agent, bindingID, revision }, setActivation] = useState(
+    () => ({
+      ...readActivationLink(),
+      revision: 0,
+    })
+  )
+  useEffect(() => {
+    const clearLink = (incoming: ReturnType<typeof readActivationLink>) => {
+      if (incoming.agent) {
+        rememberAgentActivation()
+      } else {
+        window.history.replaceState(
+          window.history.state,
+          '',
+          window.location.pathname
+        )
+      }
     }
-  })
+    if (window.location.hash) clearLink(readActivationLink())
+
+    const handleLink = () => {
+      if (!window.location.hash) return
+      const next = readActivationLink()
+      clearLink(next)
+      setActivation((current) => ({ ...next, revision: current.revision + 1 }))
+    }
+    window.addEventListener('hashchange', handleLink)
+    return () => window.removeEventListener('hashchange', handleLink)
+  }, [])
+
+  if (agent) {
+    return (
+      <AgentActivation
+        key={revision}
+        link={link.token ? link : undefined}
+        bindingID={bindingID}
+      />
+    )
+  }
+  return <SecurityLinkActivation key={revision} link={link} />
+}
+
+function SecurityLinkActivation({ link }: { link: ActivationLink }) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
   const confirmsEmail =
     link.purpose === 'security_email' ||
     link.purpose === 'security_email_change'
   const resetsPassword = link.purpose === 'security_password_reset'
-  const complete = useMutation({
+  const complete = useMutation<
+    AccountSecurityResult & { agent_binding_id?: string },
+    Error,
+    string
+  >({
     meta: { errorToast: false },
     gcTime: 0,
     mutationFn: async (password: string) => {
@@ -67,7 +132,7 @@ export function AccountActivation() {
         )
       }
       const encrypted = await encryptPassword(password)
-      return authResult<AccountSecurityResult>(
+      return authResult<AccountSecurityResult & { agent_binding_id?: string }>(
         api.post(
           resetsPassword
             ? '/api/security/password/reset'
@@ -79,6 +144,10 @@ export function AccountActivation() {
     },
     onSuccess: async (result) => {
       if (confirmsEmail) return
+      if (result?.agent_binding_id) {
+        rememberAgentActivation(result.agent_binding_id)
+        return
+      }
 
       toast.success(
         resetsPassword
@@ -99,6 +168,9 @@ export function AccountActivation() {
       })
     },
   })
+  if (complete.data?.agent_binding_id) {
+    return <AgentActivation bindingID={complete.data.agent_binding_id} />
+  }
   return (
     <main className='mx-auto flex min-h-svh w-full max-w-lg flex-col justify-center gap-4 p-6'>
       <h1 className='text-2xl font-semibold'>
@@ -132,6 +204,13 @@ export function AccountActivation() {
             : t('This link is invalid or has expired. Request a new link.')}
         </p>
       )}
+      {complete.error instanceof AuthOperationError &&
+        complete.error.code === 'AUTH_FLOW_INVALID' &&
+        link.purpose === 'account_activation' && (
+          <a href='/account-activation?reseller=1'>
+            {t('Resume reseller activation')}
+          </a>
+        )}
       {confirmsEmail && complete.isSuccess && (
         <p role='status'>
           {t('Email verified. Continue with security setup.')}

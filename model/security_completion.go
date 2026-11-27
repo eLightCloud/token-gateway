@@ -107,7 +107,10 @@ func setVerifiedEmailWithTx(tx *gorm.DB, userID int, email string) error {
 // NewSecurityMailFlow replaces all outstanding tokens for the same purpose
 // under the user lock. Session identity is mandatory for ordinary enrollment.
 func NewSecurityMailFlow(userID int, purpose, email string, identity *AuthSessionIdentity) (string, error) {
-	if purpose != SecurityActivationPurpose && purpose != SecurityEmailPurpose && purpose != SecurityPasswordPurpose {
+	if purpose == SecurityActivationPurpose {
+		return newResellerActivationMail(userID, email, SecurityActivationPurpose)
+	}
+	if purpose != SecurityEmailPurpose && purpose != SecurityPasswordPurpose {
 		return "", ErrAuthFlowInvalid
 	}
 	var token string
@@ -123,15 +126,7 @@ func NewSecurityMailFlow(userID int, purpose, email string, identity *AuthSessio
 			return ErrAuthFlowInvalid
 		}
 		sid := ""
-		if purpose == SecurityActivationPurpose {
-			id, err := GetResellerIdentity(tx, userID)
-			if err != nil {
-				return err
-			}
-			if id == nil || id.Activation != "pending" || user.Password != "" {
-				return ErrAuthFlowInvalid
-			}
-		} else if purpose == SecurityPasswordPurpose {
+		if purpose == SecurityPasswordPurpose {
 			if user.ResellerKind != "" {
 				id, err := GetResellerIdentity(tx, userID)
 				if err != nil {
@@ -174,8 +169,12 @@ func NewSecurityMailFlow(userID int, purpose, email string, identity *AuthSessio
 }
 
 func CompleteSecurityMail(userID int, purpose, token, password string, identity *AuthSessionIdentity) error {
+	if purpose == SecurityActivationPurpose {
+		_, err := completeResellerActivation(userID, token, password, identity, false, true)
+		return err
+	}
 	hash := ""
-	if purpose == SecurityActivationPurpose || purpose == SecurityPasswordPurpose {
+	if purpose == SecurityPasswordPurpose {
 		if err := common.ValidateSecurityAccountPassword(password); err != nil {
 			return err
 		}
@@ -231,25 +230,10 @@ func CompleteSecurityMail(userID int, purpose, token, password string, identity 
 				return err
 			}
 		}
-		if purpose == SecurityActivationPurpose {
-			id, err := GetResellerIdentity(tx, userID)
-			if err != nil {
-				return err
-			}
-			if id == nil || id.Activation != "pending" || user.Password != "" {
-				return ErrAuthFlowInvalid
-			}
-			if err := tx.Model(&user).Update("password", hash).Error; err != nil {
-				return err
-			}
-			if err := tx.Model(id).Update("activation", resellerPasswordSetupActivation(id.Kind)).Error; err != nil {
-				return err
-			}
-		}
 		if err := setVerifiedEmailWithTx(tx, userID, payload.Email); err != nil {
 			return err
 		}
-		if purpose != SecurityActivationPurpose && user.ResellerKind == "agent_customer" && user.Password != "" {
+		if user.ResellerKind == "agent_customer" && user.Password != "" {
 			if err := promoteVerifiedCustomerActivation(tx, userID); err != nil {
 				return err
 			}
@@ -351,31 +335,4 @@ func recoverUserSecurity(operatorID, userID int, incident, evidence string, revo
 
 func ReplaceOwnSecurityFactor(identity AuthSessionIdentity) error {
 	return disableTwoFAWithAuthVersion(identity.UserID, &identity)
-}
-
-// Only a still-pending invitation can have its destination corrected. Locks and
-// invalidation commit with the address; no old token can activate the new address.
-func CorrectPendingActivationEmail(userID int, email string) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		return withNormalizedEmailLock(tx, email, func(tx *gorm.DB) error {
-			var user User
-			if err := lockForUpdate(tx).First(&user, userID).Error; err != nil {
-				return err
-			}
-			id, err := GetResellerIdentity(tx, userID)
-			if err != nil {
-				return err
-			}
-			if id == nil || id.Activation != "pending" || user.Password != "" {
-				return ErrResellerForbidden
-			}
-			if err := ensureEmailAvailableWithTx(tx, email, userID); err != nil {
-				return err
-			}
-			if err := tx.Model(&AuthFlow{}).Where("user_id = ? AND purpose = ? AND consumed_at IS NULL", userID, SecurityActivationPurpose).Update("consumed_at", time.Now()).Error; err != nil {
-				return err
-			}
-			return tx.Model(&user).Update("email", email).Error
-		})
-	})
 }

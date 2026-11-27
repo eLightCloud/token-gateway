@@ -38,12 +38,8 @@ func allowSecurityCompletion(c *gin.Context, user *model.UserBase, pat bool) boo
 	if c.Request.Method == http.MethodGet && c.FullPath() == "/api/oauth/:provider" {
 		safe = true
 	}
-	if state.Kind == "agent" {
-		var account model.ResellerAccount
-		if err := model.DB.First(&account, "user_id = ?", userID).Error; err != nil || !account.Enabled {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "RESELLER_ACCOUNT_RESTRICTED", "message": "Account is disabled"})
-			return false
-		}
+	if state.Kind == "agent" && !allowAgentDashboardAccount(c, userID, state.Activation) {
+		return false
 	}
 	if !state.Complete && (pat || !safe) {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "code": "SECURITY_COMPLETION_REQUIRED", "message": "Complete account security setup", "data": state})

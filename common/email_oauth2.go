@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -124,7 +125,16 @@ func requestMicrosoftEmailToken(ctx context.Context, config EmailDeliveryConfig)
 	token, err := credentials.Token(ctx)
 	if err != nil || token == nil || token.AccessToken == "" || !strings.EqualFold(token.TokenType, "Bearer") || token.Expiry.IsZero() || time.Until(token.Expiry) <= 0 {
 		// RetrieveError can contain echoed credentials or usable tokens. Never propagate it.
-		return nil, errors.New("Microsoft token request failed. Check application credentials, consent and network access.")
+		safeErr := errors.New("Microsoft token request failed. Check application credentials, consent and network access.")
+		var rejected *oauth2.RetrieveError
+		if errors.As(err, &rejected) && (rejected.ErrorCode == "invalid_client" || rejected.ErrorCode == "unauthorized_client" || rejected.ErrorCode == "invalid_scope") {
+			return nil, emailDeliveryFailure{EmailDeliveryAuthentication, safeErr}
+		}
+		var connection *url.Error
+		if errors.As(err, &connection) {
+			return nil, emailDeliveryFailure{EmailDeliveryConnection, safeErr}
+		}
+		return nil, safeErr
 	}
 	return token, nil
 }

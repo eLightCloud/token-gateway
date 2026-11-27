@@ -4,9 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"net/mail"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	mysqlDriver "github.com/go-sql-driver/mysql"
@@ -158,23 +156,20 @@ func RequireOrdinaryUser(tx *gorm.DB, userID int) error {
 // CreateResellerUser creates only new accounts. Password and MFA setup are
 // separate from the platform’s agent enablement decision.
 func CreateResellerUser(operatorID int, kind string, input ResellerCreateInput) (*ResellerIdentity, error) {
-	input.Username = strings.TrimSpace(input.Username)
-	input.Email = NormalizeEmail(input.Email)
-	address, err := mail.ParseAddress(input.Email)
-	if err != nil || address.Address != input.Email || len(input.Email) > 50 || input.Username == "" || utf8.RuneCountInString(input.Username) > UserNameMaxLength || utf8.RuneCountInString(input.DisplayName) > 20 || (kind != "agent" && kind != "agent_customer") {
+	if kind != "agent" && kind != "agent_customer" {
 		return nil, ErrResellerInvalid
 	}
-	if err := input.normalizeContact(); err != nil {
+	if err := input.normalize(); err != nil {
 		return nil, err
 	}
 	var identity ResellerIdentity
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		var operator User
 		if err := lockForUpdate(tx).First(&operator, operatorID).Error; err != nil {
 			return err
 		}
 		if operator.Status != common.UserStatusEnabled {
-			return ErrResellerForbidden
+			return ErrResellerOperatorDisabled
 		}
 		parent, err := GetResellerIdentity(tx, operatorID)
 		if err != nil {
@@ -186,15 +181,18 @@ func CreateResellerUser(operatorID int, kind string, input ResellerCreateInput) 
 				return ErrResellerForbidden
 			}
 		} else {
-			if parent == nil || parent.Kind != "agent" || parent.Activation != "active" {
+			if parent == nil || parent.Kind != "agent" {
 				return ErrResellerForbidden
+			}
+			if parent.Activation != "active" {
+				return ErrResellerAgentNotActivated
 			}
 			var account ResellerAccount
 			if err := tx.First(&account, "user_id = ?", operatorID).Error; err != nil {
 				return err
 			}
 			if !account.Enabled {
-				return ErrResellerForbidden
+				return ErrResellerOperatorDisabled
 			}
 			agentID = operatorID
 		}
@@ -220,7 +218,7 @@ func CreateResellerUser(operatorID int, kind string, input ResellerCreateInput) 
 			return nil
 		})
 	})
-	return &identity, resellerWriteError(err)
+	return &identity, resellerCreateError(input.Username, resellerWriteError(err))
 }
 
 type ResellerQuotaInput struct {

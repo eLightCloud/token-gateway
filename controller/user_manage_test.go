@@ -4,11 +4,13 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"mime"
 	"net/http"
 	"net/http/httptest"
 	"net/mail"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -704,8 +706,8 @@ func TestResellerActivationEmailLanguageAndLifetime(t *testing.T) {
 		lang, subject, username, action, expiry, footer, otherLanguage string
 		resend                                                         bool
 	}{
-		{"en", "Reseller account information", "Username: ", "Continue security setup", "This link expires in 10 minutes.", "Automated message. Please do not reply.", "安全设置", false},
-		{"zh-CN", "代理商账户信息", "用户名：", "继续安全设置", "此链接将在 10 分钟后失效。", "此邮件由系统自动发送，请勿直接回复。", "Security setup", true},
+		{"en", "Activate your reseller account", "Username: ", "Activate account", "This link expires in 10 minutes.", "Automated message. Please do not reply.", "激活账户", false},
+		{"zh-CN", "激活您的代理账户", "用户名：", "激活账户", "此链接将在 10 分钟后失效。", "此邮件由系统自动发送，请勿直接回复。", "Account activation", true},
 	} {
 		t.Run(tc.lang, func(t *testing.T) {
 			name := "mail-" + strings.ToLower(tc.lang)
@@ -746,11 +748,206 @@ func TestResellerActivationEmailLanguageAndLifetime(t *testing.T) {
 				assert.Contains(t, string(body), want)
 			}
 			assert.NotContains(t, string(body), tc.otherLanguage)
+			assert.NotContains(t, string(body), "/sign-in")
+			assert.NotContains(t, strings.ToLower(string(body)), "security setup")
+			assert.NotContains(t, string(body), "安全设置")
+			assert.Equal(t, 1, strings.Count(string(body), "<a "))
+			assert.Contains(t, string(body), "/account-activation#account=agent")
 			var flow model.AuthFlow
 			require.NoError(t, db.Where("user_id = ? AND purpose = ?", user.Id, model.SecurityActivationPurpose).First(&flow).Error)
 			assert.WithinRange(t, flow.ExpiresAt, before.Add(10*time.Minute), after.Add(10*time.Minute))
 		})
 	}
+}
+
+func TestResellerActivationWithoutEmailDeliveryConfiguration(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}, &model.AuthFlow{}))
+	root := createQuotaTestOperator(t, db, common.RoleRootUser)
+	agent, err := model.CreateResellerUser(root.Id, "agent", model.ResellerCreateInput{
+		Username: "pending-agent", Email: "pending-agent@example.invalid", Phone: "13800138000",
+	})
+	require.NoError(t, err)
+	previousDelivery := common.DefaultEmailDelivery
+	previousServer, previousAccount, previousFrom := common.SMTPServer, common.SMTPAccount, common.SMTPFrom
+	common.DefaultEmailDelivery = &common.EmailDeliveryRuntime{}
+	common.SMTPServer, common.SMTPAccount, common.SMTPFrom = "", "", ""
+	t.Cleanup(func() {
+		common.DefaultEmailDelivery = previousDelivery
+		common.SMTPServer, common.SMTPAccount, common.SMTPFrom = previousServer, previousAccount, previousFrom
+	})
+
+	engine := gin.New()
+	engine.POST("/agents/:id/activation", func(c *gin.Context) {
+		c.Set("id", root.Id)
+		c.Set("role", root.Role)
+		c.Set("reseller_admin", true)
+		ResendAccountActivation(c)
+	})
+	engine.POST("/customers/:id/activation", func(c *gin.Context) {
+		c.Set("id", agent.UserID)
+		ResendAccountActivation(c)
+	})
+	engine.POST("/customers", func(c *gin.Context) {
+		c.Set("id", agent.UserID)
+		CreateResellerCustomer(c)
+	})
+	denied := httptest.NewRecorder()
+	engine.ServeHTTP(denied, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/customers/%d/activation", agent.UserID), strings.NewReader("{}")))
+	require.Equal(t, http.StatusNotFound, denied.Code)
+	assert.NotContains(t, denied.Body.String(), "EMAIL_DELIVERY_NOT_CONFIGURED")
+
+	path := fmt.Sprintf("/agents/%d/activation", agent.UserID)
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")))
+	require.Equal(t, http.StatusServiceUnavailable, response.Code)
+	assert.Contains(t, response.Body.String(), `"code":"EMAIL_DELIVERY_NOT_CONFIGURED"`)
+	assert.Contains(t, response.Body.String(), `"message_key":"Email delivery is not configured. Configure email delivery in System Settings, then resend the account email."`)
+	assert.NotContains(t, response.Body.String(), "pending-agent@example.invalid")
+	var activeFlows int64
+	require.NoError(t, db.Model(&model.AuthFlow{}).Where("user_id = ? AND consumed_at IS NULL", agent.UserID).Count(&activeFlows).Error)
+	assert.Zero(t, activeFlows)
+
+	other, err := model.CreateResellerUser(root.Id, "agent", model.ResellerCreateInput{
+		Username: "second-agent", Email: "second-agent@example.invalid", Phone: "13800138000",
+	})
+	require.NoError(t, err)
+	common.PublishEmailDelivery(common.EmailDeliveryConfig{}, errors.New("internal fixture error"))
+	unavailable := httptest.NewRecorder()
+	engine.ServeHTTP(unavailable, httptest.NewRequest(http.MethodPost, fmt.Sprintf("/agents/%d/activation", other.UserID), strings.NewReader("{}")))
+	require.Equal(t, http.StatusServiceUnavailable, unavailable.Code)
+	assert.Contains(t, unavailable.Body.String(), `"code":"EMAIL_DELIVERY_CONFIG_UNAVAILABLE"`)
+	assert.NotContains(t, unavailable.Body.String(), "internal fixture error")
+
+	customerCreate := `{"username":"pending-customer","email":"pending-customer@example.invalid","phone":"13800138000"}`
+	notActivated := httptest.NewRecorder()
+	engine.ServeHTTP(notActivated, httptest.NewRequest(http.MethodPost, "/customers", strings.NewReader(customerCreate)))
+	require.Equal(t, http.StatusForbidden, notActivated.Code)
+	assert.Contains(t, notActivated.Body.String(), `"code":"RESELLER_AGENT_NOT_ACTIVATED"`)
+	require.NoError(t, db.Model(&model.ResellerIdentity{}).Where("user_id = ?", agent.UserID).Update("activation", "active").Error)
+	disabled := httptest.NewRecorder()
+	engine.ServeHTTP(disabled, httptest.NewRequest(http.MethodPost, "/customers", strings.NewReader(customerCreate)))
+	require.Equal(t, http.StatusForbidden, disabled.Code)
+	assert.Contains(t, disabled.Body.String(), `"code":"RESELLER_OPERATOR_DISABLED"`)
+	require.NoError(t, model.SetResellerEnabled(root.Id, agent.UserID, true, true))
+	customer, err := model.CreateResellerUser(agent.UserID, "agent_customer", model.ResellerCreateInput{
+		Username: "pending-customer", Email: "pending-customer@example.invalid", Phone: "13800138000",
+	})
+	require.NoError(t, err)
+	customerPath := fmt.Sprintf("/customers/%d/activation", customer.UserID)
+	oldLink, err := model.NewSecurityMailFlow(customer.UserID, model.SecurityActivationPurpose, "pending-customer@example.invalid", nil)
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&model.AuthFlow{}).Where("user_id = ?", customer.UserID).Update("created_at", time.Now().Add(-2*time.Minute)).Error)
+	common.DefaultEmailDelivery = &common.EmailDeliveryRuntime{}
+	corrected := httptest.NewRecorder()
+	engine.ServeHTTP(corrected, httptest.NewRequest(http.MethodPost, customerPath, strings.NewReader(`{"email":"updated-customer@example.invalid"}`)))
+	require.Equal(t, http.StatusServiceUnavailable, corrected.Code)
+	assert.Contains(t, corrected.Body.String(), `"code":"EMAIL_DELIVERY_NOT_CONFIGURED"`)
+	assert.Contains(t, corrected.Body.String(), `"email_updated":true`)
+	assert.Contains(t, corrected.Body.String(), "Contact the platform administrator")
+	assert.NotContains(t, corrected.Body.String(), "updated-customer@example.invalid")
+	saved, err := model.GetUserById(customer.UserID, false)
+	require.NoError(t, err)
+	assert.Equal(t, "updated-customer@example.invalid", saved.Email)
+	var audit model.AuditLog
+	require.NoError(t, model.LOG_DB.Where("action = ?", "security.activation.email.corrected").First(&audit).Error)
+	assert.Equal(t, agent.UserID, audit.UserId)
+	assert.NotContains(t, audit.Content, saved.Email)
+	auditDetails, err := common.Marshal(audit.Other)
+	require.NoError(t, err)
+	assert.NotContains(t, string(auditDetails), saved.Email)
+	var failed model.AuditLog
+	require.NoError(t, model.LOG_DB.Where("action = ? AND user_id = ?", "security.activation.delivery.failed", agent.UserID).First(&failed).Error)
+	assert.False(t, failed.Success)
+	assert.Equal(t, http.StatusServiceUnavailable, failed.Status)
+	details, err := common.Marshal(failed.Other)
+	require.NoError(t, err)
+	assert.Contains(t, string(details), "EMAIL_DELIVERY_NOT_CONFIGURED")
+	assert.NotContains(t, string(details), saved.Email)
+	require.ErrorIs(t, service.SendResellerActivationMail(customer.UserID, "pending-customer@example.invalid", "en"), model.ErrResellerActivationAddressChanged)
+	require.ErrorIs(t, model.CompleteSecurityMail(customer.UserID, model.SecurityActivationPurpose, oldLink, "customer-password", nil), model.ErrAuthFlowConsumed)
+	retry := httptest.NewRecorder()
+	engine.ServeHTTP(retry, httptest.NewRequest(http.MethodPost, customerPath, strings.NewReader(`{"email":"updated-customer@example.invalid"}`)))
+	require.Equal(t, http.StatusTooManyRequests, retry.Code)
+	assert.Contains(t, retry.Body.String(), `"code":"EMAIL_BINDING_RESEND_WAIT"`)
+	assert.NotContains(t, retry.Body.String(), "email_updated")
+
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", customer.UserID).Update("password", "fixture-password-hash").Error)
+	ineligible := httptest.NewRecorder()
+	engine.ServeHTTP(ineligible, httptest.NewRequest(http.MethodPost, customerPath, strings.NewReader("{}")))
+	require.Equal(t, http.StatusConflict, ineligible.Code)
+	assert.Contains(t, ineligible.Body.String(), `"code":"RESELLER_ACTIVATION_PASSWORD_SET"`)
+}
+
+func TestResellerActivationFailedDeliveryKeepsLinkUnusable(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerAccount{}))
+	root := createQuotaTestOperator(t, db, common.RoleRootUser)
+	configureEmailDelivery(t, map[string]string{
+		"EmailProvider": "resend", "ResendApiKey": "fixture-key", "ResendFrom": "sender@example.invalid",
+	})
+	var token string
+	var cleanupAttempts int
+	blockCleanup := true
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("fixture-fail-activation-cleanup", func(tx *gorm.DB) {
+		if blockCleanup && token != "" && tx.Statement.Table == "auth_flows" {
+			cleanupAttempts++
+			_ = tx.AddError(errors.New("fixture cleanup write failure"))
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Update().Remove("fixture-fail-activation-cleanup") })
+	http.DefaultTransport = emailHTTPTransport(func(request *http.Request) (*http.Response, error) {
+		defer request.Body.Close()
+		var mail struct {
+			HTML string `json:"html"`
+		}
+		require.NoError(t, common.DecodeJson(request.Body, &mail))
+		_, fragment, found := strings.Cut(mail.HTML, "/account-activation#")
+		require.True(t, found, "activation link missing")
+		query, _, found := strings.Cut(fragment, `"`)
+		require.True(t, found, "activation link is incomplete")
+		values, err := url.ParseQuery(html.UnescapeString(query))
+		require.NoError(t, err)
+		token = values.Get("token")
+		require.NotEmpty(t, token)
+		return nil, errors.New("fixture connection closed after submission")
+	})
+
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Set("id", root.Id)
+	context.Set("role", root.Role)
+	context.Request = httptest.NewRequest(http.MethodPost, "/agents", strings.NewReader(`{"username":"failed-delivery","email":"failed@example.invalid","phone":"13800138000"}`))
+	CreateResellerAgent(context)
+	require.Equal(t, http.StatusOK, response.Code)
+	assert.Contains(t, response.Body.String(), `"success":true`)
+	assert.Contains(t, response.Body.String(), `"activation_mail_sent":false`)
+	assert.Contains(t, response.Body.String(), `"activation_mail_error":{"code":"EMAIL_BINDING_DELIVERY_FAILED"`)
+	assert.NotContains(t, response.Body.String(), "fixture connection")
+	require.NotEmpty(t, token)
+	assert.NotContains(t, response.Body.String(), token)
+	assert.Equal(t, 1, cleanupAttempts)
+	blockCleanup = false
+
+	var user model.User
+	require.NoError(t, db.Where("username = ?", "failed-delivery").First(&user).Error)
+	require.ErrorIs(t, model.CompleteSecurityMail(user.Id, model.SecurityActivationPurpose, token, "customer-password", nil), model.ErrAuthFlowInvalid)
+	require.ErrorIs(t, service.SendResellerActivationMail(user.Id, user.Email, "en"), model.ErrEmailBindingResendWait)
+
+	// Interleave a correction after issuance and before provider acknowledgement.
+	require.NoError(t, db.Model(&model.AuthFlow{}).Where("user_id = ?", user.Id).Update("created_at", time.Now().Add(-2*time.Minute)).Error)
+	http.DefaultTransport = emailHTTPTransport(func(request *http.Request) (*http.Response, error) {
+		defer request.Body.Close()
+		updated, err := model.CorrectPendingActivationEmail(user.Id, "corrected@example.invalid")
+		require.NoError(t, err)
+		require.True(t, updated)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"id":"fixture-accepted"}`))}, nil
+	})
+	require.ErrorIs(t, service.SendResellerActivationMail(user.Id, user.Email, "en"), model.ErrResellerActivationAddressChanged)
+	var redeemable int64
+	require.NoError(t, db.Model(&model.AuthFlow{}).
+		Where("user_id = ? AND purpose = ? AND consumed_at IS NULL", user.Id, model.SecurityActivationPurpose).Count(&redeemable).Error)
+	assert.Zero(t, redeemable)
 }
 
 func TestResellerS1ManagementHandlers(t *testing.T) {
@@ -766,19 +963,30 @@ func TestResellerS1ManagementHandlers(t *testing.T) {
 	engine.POST("/agents/:id/password-reset", func(c *gin.Context) { c.Set("reseller_admin", true); SendResellerAgentPasswordReset(c) })
 	engine.POST("/agents/:id/activation", func(c *gin.Context) { c.Set("reseller_admin", true); ResendAccountActivation(c) })
 	engine.POST("/agents/:id/quota", func(c *gin.Context) { c.Set("reseller_admin", true); AdjustResellerQuota(c) })
-	for _, body := range []string{
-		`{"username":"invalid-agent","phone":"13800138000"}`,
-		`{"username":"invalid-agent","email":" ","phone":"13800138000"}`,
-		`{"username":"invalid-agent","email":"invalid@example.invalid"}`,
-		`{"username":"invalid-agent","email":"invalid@example.invalid","phone":" "}`,
-		`{"username":"invalid-agent","email":"invalid@example.invalid","phone":"123ABC"}`,
-		fmt.Sprintf(`{"username":"invalid-agent","email":"invalid@example.invalid","phone":"13800138000","remark":%q}`, strings.Repeat("长", 256)),
+	for _, test := range []struct{ body, field string }{
+		{`{"username":"invalid-agent","phone":"13800138000"}`, "email"},
+		{`{"username":"invalid-agent","email":" ","phone":"13800138000"}`, "email"},
+		{`{"email":"invalid@example.invalid","phone":"13800138000"}`, "username"},
+		{fmt.Sprintf(`{"username":"invalid-agent","display_name":%q,"email":"invalid@example.invalid","phone":"13800138000"}`, strings.Repeat("长", 21)), "display_name"},
+		{`{"username":"invalid-agent","email":"invalid@example.invalid"}`, "phone"},
+		{`{"username":"invalid-agent","email":"invalid@example.invalid","phone":" "}`, "phone"},
+		{`{"username":"invalid-agent","email":"invalid@example.invalid","phone":"123ABC"}`, "phone"},
+		{fmt.Sprintf(`{"username":"invalid-agent","email":"invalid@example.invalid","phone":"13800138000","remark":%q}`, strings.Repeat("长", 256)), "remark"},
 	} {
 		invalid := httptest.NewRecorder()
-		engine.ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/agents", strings.NewReader(body)))
+		engine.ServeHTTP(invalid, httptest.NewRequest(http.MethodPost, "/agents", strings.NewReader(test.body)))
 		require.Equal(t, http.StatusBadRequest, invalid.Code)
 		assert.Contains(t, invalid.Body.String(), "RESELLER_INVALID_INPUT")
+		assert.Contains(t, invalid.Body.String(), `"field":"`+test.field+`"`)
 	}
+	previousRestriction, previousWhitelist := common.EmailDomainRestrictionEnabled, common.EmailDomainWhitelist
+	common.EmailDomainRestrictionEnabled, common.EmailDomainWhitelist = true, []string{"allowed.example"}
+	restricted := httptest.NewRecorder()
+	engine.ServeHTTP(restricted, httptest.NewRequest(http.MethodPost, "/agents?send_activation_email=false", strings.NewReader(`{"username":"invalid-agent","email":"invalid@example.invalid","phone":"13800138000"}`)))
+	common.EmailDomainRestrictionEnabled, common.EmailDomainWhitelist = previousRestriction, previousWhitelist
+	require.Equal(t, http.StatusBadRequest, restricted.Code)
+	assert.Contains(t, restricted.Body.String(), `"code":"EMAIL_ADDRESS_REJECTED"`)
+	assert.Contains(t, restricted.Body.String(), `"field":"email"`)
 	var invalidCount int64
 	require.NoError(t, db.Model(&model.User{}).Where("username = ?", "invalid-agent").Count(&invalidCount).Error)
 	assert.Zero(t, invalidCount)
@@ -911,6 +1119,15 @@ func TestResellerS1ManagementHandlers(t *testing.T) {
 }
 
 func TestResellerThirdBatch(t *testing.T) {
+	t.Run("unclassified account conflicts have a safe message", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(response)
+		writeResellerCreateResponse(c, nil, fmt.Errorf("private index details: %w", model.ErrResellerDuplicateResource))
+		require.Equal(t, http.StatusConflict, response.Code)
+		assert.Contains(t, response.Body.String(), `"code":"RESELLER_DUPLICATE_RESOURCE"`)
+		assert.Contains(t, response.Body.String(), `"message_key":"Some account information is already in use. Check the details and try again."`)
+		assert.NotContains(t, response.Body.String(), "private index details")
+	})
 	t.Run("public errors classify reasons without exposing private details", func(t *testing.T) {
 		require.NoError(t, i18n.Init())
 		for _, tc := range []struct {
@@ -1047,6 +1264,11 @@ func TestResellerThirdBatch(t *testing.T) {
 		engine := gin.New()
 		engine.Use(func(c *gin.Context) { c.Set("id", root.Id); c.Set("role", root.Role); c.Set("reseller_admin", true) })
 		engine.POST("/agents", CreateResellerAgent)
+		engine.POST("/customers", func(c *gin.Context) {
+			c.Set("id", agent.UserID)
+			c.Set("reseller_admin", false)
+			CreateResellerCustomer(c)
+		})
 		engine.POST("/agents/:id/quota", AdjustResellerQuota)
 		engine.GET("/agents/:id/adjustments", GetResellerAdjustments)
 		for _, tc := range []struct {
@@ -1059,7 +1281,7 @@ func TestResellerThirdBatch(t *testing.T) {
 			{fmt.Sprintf("/agents/%d/quota", agent.UserID), `{"operation_id":"third-op","mode":"add","quota":101,"reason":"allocation"}`, 409, "RESELLER_OPERATION_CONFLICT"},
 			{fmt.Sprintf("/agents/%d/quota", agent.UserID), `{"operation_id":"third-overdraw","mode":"subtract","quota":101,"reason":"withdrawal"}`, 409, "RESELLER_BALANCE_CONFLICT"},
 			{"/agents", `{"username":"third-new-agent","email":"third-quota@example.invalid","phone":"13800138000"}`, 409, "RESELLER_EMAIL_CONFLICT"},
-			{"/agents", `{"username":"third-quota-agent","email":"third-new@example.invalid","phone":"13800138000"}`, 409, "RESELLER_DUPLICATE_RESOURCE"},
+			{"/agents", `{"username":"third-quota-agent","email":"third-new@example.invalid","phone":"13800138000"}`, 409, "RESELLER_USERNAME_CONFLICT"},
 		} {
 			r := httptest.NewRecorder()
 			engine.ServeHTTP(r, httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body)))
@@ -1071,6 +1293,14 @@ func TestResellerThirdBatch(t *testing.T) {
 		var account model.ResellerAccount
 		require.NoError(t, db.First(&account, agent.UserID).Error)
 		assert.EqualValues(t, 100, account.Balance)
+		require.NoError(t, db.Model(&model.ResellerIdentity{}).Where("user_id = ?", agent.UserID).Update("activation", "active").Error)
+		require.NoError(t, model.SetResellerEnabled(root.Id, agent.UserID, true, true))
+		duplicateCustomer := httptest.NewRecorder()
+		engine.ServeHTTP(duplicateCustomer, httptest.NewRequest(http.MethodPost, "/customers?send_activation_email=false", strings.NewReader(`{"username":"third-quota-agent","email":"customer@example.invalid","phone":"13800138000"}`)))
+		require.Equal(t, http.StatusConflict, duplicateCustomer.Code, duplicateCustomer.Body.String())
+		assert.Contains(t, duplicateCustomer.Body.String(), `"code":"RESELLER_USERNAME_CONFLICT"`)
+		assert.Contains(t, duplicateCustomer.Body.String(), `"message_key":"This username is already in use. Please use a different username."`)
+		assert.NotContains(t, duplicateCustomer.Body.String(), "third-quota-agent")
 		pageResponse := httptest.NewRecorder()
 		engine.ServeHTTP(pageResponse, httptest.NewRequest("GET", fmt.Sprintf("/agents/%d/adjustments", agent.UserID), nil))
 		var pagePayload struct {

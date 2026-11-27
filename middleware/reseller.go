@@ -15,6 +15,11 @@ func allowResellerDashboard(c *gin.Context, userID int) bool {
 	if err == nil {
 		return true
 	}
+	var state *model.ResellerOperatorStateError
+	if c.GetBool(resellerCustomerManagementKey) && errors.As(err, &state) {
+		abortWithWebMessage(c, http.StatusForbidden, state.Code, common.NewMessage(state.Message))
+		return false
+	}
 	if errors.Is(err, model.ErrResellerForbidden) {
 		abortWithWebMessage(c, http.StatusForbidden, "RESELLER_ACCOUNT_RESTRICTED", common.NewMessage("Unauthorized, insufficient privileges"))
 		return false

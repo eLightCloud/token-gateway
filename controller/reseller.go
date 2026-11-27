@@ -68,7 +68,7 @@ func CreateResellerAgent(c *gin.Context) {
 	if err == nil {
 		recordManageAuditFor(c, identity.UserID, "reseller.agent.create", map[string]any{"user_id": identity.UserID})
 	}
-	resellerResponse(c, identity, err)
+	writeResellerCreateResponse(c, identity, err)
 }
 
 func CreateResellerCustomer(c *gin.Context) {
@@ -81,7 +81,7 @@ func CreateResellerCustomer(c *gin.Context) {
 	if err == nil {
 		recordManageAuditFor(c, identity.UserID, "reseller.customer.create", map[string]any{"user_id": identity.UserID})
 	}
-	resellerResponse(c, identity, err)
+	writeResellerCreateResponse(c, identity, err)
 }
 
 func AdjustResellerQuota(c *gin.Context) {
