@@ -57,6 +57,7 @@ type TokenBillFilterOptions struct {
 }
 
 type TokenBillSummary struct {
+	HistoricalAmounts     HistoricalBillTotals   `json:"historical_amounts"`
 	Perspective           string                 `json:"perspective"`
 	ConsumeLoggingEnabled bool                   `json:"consume_logging_enabled"`
 	NetQuota              int64                  `json:"net_quota"`
@@ -92,23 +93,24 @@ type TokenBillGroupsPage struct {
 }
 
 type TokenBillEntry struct {
-	Id                int    `json:"id"`
-	UserId            int    `json:"user_id"`
-	TokenId           int    `json:"token_id"`
-	ChannelId         int    `json:"channel_id"`
-	CreatedAt         int64  `json:"created_at"`
-	Type              string `json:"type"`
-	RequestId         string `json:"request_id"`
-	UpstreamRequestId string `json:"upstream_request_id"`
-	OrganizationName  string `json:"organization_name"`
-	Username          string `json:"username"`
-	TokenName         string `json:"token_name"`
-	ModelName         string `json:"model_name"`
-	ChannelName       string `json:"channel_name"`
-	ChannelAPIAddress string `json:"channel_api_address"`
-	PromptTokens      int    `json:"prompt_tokens"`
-	CompletionTokens  int    `json:"completion_tokens"`
-	Quota             int    `json:"quota"`
+	Id                int                   `json:"id"`
+	UserId            int                   `json:"user_id"`
+	TokenId           int                   `json:"token_id"`
+	ChannelId         int                   `json:"channel_id"`
+	CreatedAt         int64                 `json:"created_at"`
+	Type              string                `json:"type"`
+	RequestId         string                `json:"request_id"`
+	UpstreamRequestId string                `json:"upstream_request_id"`
+	OrganizationName  string                `json:"organization_name"`
+	Username          string                `json:"username"`
+	TokenName         string                `json:"token_name"`
+	ModelName         string                `json:"model_name"`
+	ChannelName       string                `json:"channel_name"`
+	ChannelAPIAddress string                `json:"channel_api_address"`
+	PromptTokens      int                   `json:"prompt_tokens"`
+	CompletionTokens  int                   `json:"completion_tokens"`
+	Quota             int                   `json:"quota"`
+	MoneySnapshot     *BillingMoneySnapshot `json:"money_snapshot,omitempty"`
 }
 
 type TokenBillEntriesPage struct {
@@ -271,7 +273,7 @@ func GetTokenBillSummary(filters TokenBillFilters) (*TokenBillSummary, error) {
 		LogTypeRefund:  {Type: LogTypeRefund},
 	}
 	var rows []tokenBillAggregate
-	if err := query.Select("type, count(*) AS record_count, COALESCE(sum(prompt_tokens), 0) AS prompt_tokens, COALESCE(sum(completion_tokens), 0) AS completion_tokens, COALESCE(sum(quota), 0) AS quota").Group("type").Scan(&rows).Error; err != nil {
+	if err := query.Session(&gorm.Session{}).Select("type, count(*) AS record_count, COALESCE(sum(prompt_tokens), 0) AS prompt_tokens, COALESCE(sum(completion_tokens), 0) AS completion_tokens, COALESCE(sum(quota), 0) AS quota").Group("type").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
@@ -295,6 +297,9 @@ func GetTokenBillSummary(filters TokenBillFilters) (*TokenBillSummary, error) {
 	summary.RecordCount = aggregates[LogTypeConsume].RecordCount + aggregates[LogTypeRefund].RecordCount
 	summary.PromptTokens = aggregates[LogTypeConsume].PromptTokens + aggregates[LogTypeRefund].PromptTokens
 	summary.CompletionTokens = aggregates[LogTypeConsume].CompletionTokens + aggregates[LogTypeRefund].CompletionTokens
+	if err := summary.HistoricalAmounts.readLogs(query); err != nil {
+		return nil, err
+	}
 	summary.FilterOptions, err = getTokenBillFilterOptions(filters)
 	if err != nil {
 		return nil, err
@@ -636,6 +641,7 @@ func GetTokenBillEntries(filters TokenBillFilters, page int, pageSize int) (*Tok
 			PromptTokens:      log.PromptTokens,
 			CompletionTokens:  log.CompletionTokens,
 			Quota:             int(tokenBillQuota(log.Type, int64(log.Quota))),
+			MoneySnapshot:     LogMoneySnapshot(log.Other),
 		})
 	}
 	if err := hydrateTokenBillEntries(items, filters.OrganizationId); err != nil {

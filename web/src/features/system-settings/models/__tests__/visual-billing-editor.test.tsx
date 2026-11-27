@@ -923,7 +923,7 @@ test('preserves explicit cache zero in the document form even for an otherwise l
 
 test.each([
   'hour("UTC") >= 9 ? max(p * 2, 100) : tier("off", p * 1)',
-  'v2:tier("base", p * 3 + c * 9)',
+  'v2:tier("base", p * cny_to_usd(7.3) + c * 9)',
 ])(
   'leaves unsupported expressions in raw mode without publishing a default price: %s',
   async (source) => {

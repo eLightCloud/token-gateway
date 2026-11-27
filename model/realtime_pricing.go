@@ -271,10 +271,7 @@ func applyRealtimePricingTx(tx *gorm.DB, user User, snapshots map[string]*types.
 	if err != nil || phase != "active" {
 		return err
 	}
-	modelNames := make([]string, 0, len(snapshots))
-	for name := range snapshots {
-		modelNames = append(modelNames, name)
-	}
+	modelNames := realtimePricingModelNames(snapshots)
 	if len(modelNames) == 0 {
 		return nil
 	}
@@ -306,36 +303,11 @@ func applyRealtimePricingTx(tx *gorm.DB, user User, snapshots map[string]*types.
 		if snapshot == nil {
 			snapshot = &types.PersonalPricingSnapshot{UserID: user.Id, Model: name, Channels: map[int]types.PersonalChannelPrice{}}
 		}
-		oldChannels := snapshot.Channels
-		channels := map[int]types.PersonalChannelPrice{}
-		for _, config := range []struct {
-			config *RealtimePricingConfig
-			source string
-		}{{organization, "organization"}, {personal, "user"}} {
-			for _, item := range config.config.Items {
-				if item.Model != name {
-					continue
-				}
-				if _, err := ParseRealtimePricingRatio(item.Ratio); err != nil {
-					return err
-				}
-				for _, id := range item.ChannelIDs {
-					channels[id] = resolveRealtimeChannel(personal, organization, name, id)
-				}
-			}
+		rule, price, err := effectiveRealtimeModelRule(personal, organization, name)
+		if err != nil {
+			return err
 		}
-		if snapshot.AgentUserID > 0 {
-			for id, old := range oldChannels {
-				price, ok := channels[id]
-				if !ok {
-					price = types.PersonalChannelPrice{CustomerRatio: ResellerRatioScale, Source: "system"}
-				}
-				price.AgentRatio = old.AgentRatio
-				oldChannels[id] = price
-			}
-			channels = oldChannels
-		}
-		snapshot.Channels = channels
+		applyRealtimeModelScope(snapshot, rule, price)
 		snapshot.Realtime = &types.RealtimePricingContext{Version: RealtimePricingVersion, OrganizationID: organizationID, UserRevision: personal.Revision, OrganizationRevision: organization.Revision}
 		snapshots[name] = snapshot
 	}
@@ -388,6 +360,10 @@ func MigrateRealtimePricing(operator int, action string) ([]RealtimeMigrationCon
 			item, exists := groups[key]
 			if row.ModelKey != fmt.Sprintf("%x", sha256.Sum256([]byte(row.Model))) {
 				return ErrResellerDataCorrupt
+			}
+			if row.Ratio == ResellerRatioScale {
+				// Legacy authorization rows cannot distinguish implicit from explicit 1.
+				continue
 			}
 			if _, _, err := RealtimeCustomerQuota(0, row.Ratio, RealtimePricingVersion); err != nil {
 				conflicts = append(conflicts, RealtimeMigrationConflict{UserID: row.UserID, Model: row.Model, ChannelID: row.ChannelID, Ratio: formatPersonalRatio(row.Ratio), Reason: "ratio must be in (0, 5] with at most two decimal places"})

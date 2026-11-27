@@ -912,7 +912,7 @@ it('shows saved authorized procurement ratios and validates the administrator dr
     panel.getByRole('row', { name: /discounted-model.*11.*0\.3/ })
   ).toBeVisible()
   expect(
-    panel.getByRole('row', { name: /full-price-model.*×1$/ })
+    panel.getByRole('row', { name: /full-price-model.*Default \(1×\)$/ })
   ).toBeVisible()
   expect(panel.getByRole('row', { name: /markup-model.*×1\.4/ })).toBeVisible()
   expect(panel.queryByText('candidate-model')).not.toBeInTheDocument()
@@ -1109,7 +1109,7 @@ it('lets an agent update their contact details and view procurement ratios read-
     ratios.getByRole('row', { name: /configured-model.*11.*×0\.8/ })
   ).toBeVisible()
   expect(
-    ratios.getByRole('row', { name: /full-price-model.*×1$/ })
+    ratios.getByRole('row', { name: /full-price-model.*Default \(1×\)$/ })
   ).toBeVisible()
   expect(ratios.getByRole('row', { name: /markup-model.*×1\.4/ })).toBeVisible()
   await user.type(
@@ -1757,32 +1757,74 @@ it('does not offer to discard a draft for an unrelated 409 conflict', async () =
   expect(screen.getByLabelText('Ratio for demo channel 11')).toHaveValue('1.1')
 })
 
-it('formats the authorization impact count without changing its numeric meaning', async () => {
-  vi.spyOn(api, 'post').mockResolvedValue({
-    data: { success: true, data: { affected_customers: 12345 } },
-  })
-  const items = [
-    { model: 'demo', channel_id: 11, authorized: true, ratio: '1' },
-  ]
-  render(
-    <ResellerConfigEditor
-      userID={2}
-      admin
-      config={{ revision: 7, items }}
-      candidates={items}
-      onSuccess={() => undefined}
-      onReload={async () => undefined}
-    />,
-    { wrapper: provider() }
-  )
-  await userEvent.click(
-    screen.getByRole('checkbox', { name: 'Authorize demo channel 11' })
-  )
-  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
-  expect(await screen.findByRole('alertdialog')).toHaveTextContent(
-    '12,345 customers will be affected.'
-  )
-})
+it.each([
+  'change authorization',
+  'set explicit base',
+  'clear explicit base',
+] as const)(
+  'shows the customer impact before saving when asked to %s',
+  async (action) => {
+    const procurement = action !== 'change authorization'
+    const initiallyExplicit = action === 'clear explicit base'
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: { success: true, data: { affected_customers: 12345 } },
+    })
+    const items = [
+      {
+        model: 'demo',
+        channel_id: 11,
+        authorized: true,
+        ratio: '1',
+        ratio_configured: initiallyExplicit || undefined,
+      },
+    ]
+    render(
+      <ResellerConfigEditor
+        userID={2}
+        admin
+        procurement={procurement}
+        config={{ revision: 7, items }}
+        candidates={items}
+        onSuccess={() => undefined}
+        onReload={async () => undefined}
+      />,
+      { wrapper: provider() }
+    )
+    if (procurement) {
+      const ratio = screen.getByLabelText('Ratio for demo channel 11')
+      expect(ratio).toHaveValue(initiallyExplicit ? '1' : '')
+      expect(ratio).toHaveAttribute('placeholder', 'Default (1×)')
+      if (initiallyExplicit) {
+        await userEvent.clear(ratio)
+        expect(ratio).toHaveValue('')
+      } else {
+        await userEvent.type(ratio, '1')
+        expect(ratio).toHaveValue('1')
+      }
+    } else {
+      await userEvent.click(
+        screen.getByRole('checkbox', { name: 'Authorize demo channel 11' })
+      )
+    }
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent(
+      '12,345 customers will be affected.'
+    )
+    if (procurement) {
+      expect(api.post).toHaveBeenCalledWith(
+        expect.stringContaining('/config/preview'),
+        expect.objectContaining({
+          items: [
+            expect.objectContaining({
+              ratio: '1',
+              ratio_configured: !initiallyExplicit,
+            }),
+          ],
+        })
+      )
+    }
+  }
+)
 
 it.each([
   ['0.9', 'Personal price 0.9× (discount)'],

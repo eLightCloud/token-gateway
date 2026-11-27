@@ -51,6 +51,7 @@ import type {
 } from '@/features/pricing/lib/billing-expression/types'
 import { taskPriceLabel } from '@/features/pricing/lib/task-price-display'
 import type { BillingUsageSchema } from '@/features/pricing/types'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
 const DIAGNOSTIC_LABELS: Record<DiagnosticCode, string> = {
   syntax: 'Invalid expression syntax',
@@ -62,6 +63,7 @@ const DIAGNOSTIC_LABELS: Record<DiagnosticCode, string> = {
 }
 
 type RequestSimulationProps = {
+  exchangeRate?: number
   expression: string
   tokens?: BillingSimulationContext['tokens']
   usage?: BillingSimulationContext['usage']
@@ -73,6 +75,10 @@ type RequestSimulationProps = {
 /** Explicitly opting in supplies an empty request; ordinary price displays never do. */
 export function RequestSimulation(props: RequestSimulationProps) {
   const { t, i18n } = useTranslation()
+  const statusRate = useSystemConfigStore(
+    (state) => state.config.currency.usdExchangeRate
+  )
+  const cnyExchangeRate = props.exchangeRate ?? statusRate
   const bodyId = useId()
   const headersId = useId()
   const timeId = useId()
@@ -171,6 +177,7 @@ export function RequestSimulation(props: RequestSimulationProps) {
     }
     return evaluateBillingExpression(props.expression, {
       imageCount: Number(imageCount),
+      cnyExchangeRate,
       tokens: props.tokens,
       usage,
       now,
@@ -182,6 +189,7 @@ export function RequestSimulation(props: RequestSimulationProps) {
   }, [
     open,
     imageCount,
+    cnyExchangeRate,
     body,
     headers,
     timeMode,

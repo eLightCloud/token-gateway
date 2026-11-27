@@ -20,6 +20,17 @@ func PrepareTaskBillingForAttempt(c *gin.Context, relayInfo *relaycommon.RelayIn
 	if relayInfo.Billing == nil {
 		relayInfo.ForcePreConsume = true
 	}
+	if session, ok := relayInfo.Billing.(*BillingSession); ok {
+		if snap := relayInfo.TieredBillingSnapshot; snap != nil && snap.CNYExchangeRate != 0 {
+			money, err := relayMoneySnapshot(relayInfo)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+			}
+			session.mu.Lock()
+			session.moneySnapshot = money
+			session.mu.Unlock()
+		}
+	}
 	if err := PreConsumeBilling(c, targetQuota, relayInfo); err != nil {
 		return err
 	}

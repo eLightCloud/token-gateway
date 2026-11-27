@@ -42,25 +42,25 @@ func isRequestPriceMultiplier(node ast.Node) bool {
 // validateFixedPricingTree enforces one pricing leaf per execution. Without
 // this invariant, adding two tiers or multiplying a fixed price by tokens
 // would make both the request charge and its billing-unit trace ambiguous.
-func validateFixedPricingTree(node ast.Node) error {
+func validateFixedPricingTree(node ast.Node, allowCNY bool) error {
 	switch part := node.(type) {
 	case *ast.ConditionalNode:
 		if containsPricingMarker(part.Cond) {
 			break
 		}
-		if err := validateFixedPricingTree(part.Exp1); err != nil {
+		if err := validateFixedPricingTree(part.Exp1, allowCNY); err != nil {
 			return err
 		}
-		return validateFixedPricingTree(part.Exp2)
+		return validateFixedPricingTree(part.Exp2, allowCNY)
 	case *ast.BinaryNode:
 		if part.Operator != "*" {
 			break
 		}
 		if isRequestPriceMultiplier(part.Right) {
-			return validateFixedPricingTree(part.Left)
+			return validateFixedPricingTree(part.Left, allowCNY)
 		}
 		if isRequestPriceMultiplier(part.Left) {
-			return validateFixedPricingTree(part.Right)
+			return validateFixedPricingTree(part.Right, allowCNY)
 		}
 	case *ast.CallNode:
 		callee, ok := part.Callee.(*ast.IdentifierNode)
@@ -72,8 +72,11 @@ func validateFixedPricingTree(node ast.Node) error {
 		if ok {
 			function, direct := fixed.Callee.(*ast.IdentifierNode)
 			if direct && function.Value == "fixed" && len(fixed.Arguments) == 1 {
+				if allowCNY && isCNYPrice(fixed.Arguments[0]) {
+					return nil
+				}
 				amount, literal := requestRuleNumber(fixed.Arguments[0])
-				if literal && amount >= 0 && !math.IsNaN(amount) && !math.IsInf(amount*1_000_000, 0) {
+				if literal && validFixedUSDPrice(amount) {
 					return nil
 				}
 				return fmt.Errorf("fixed price must be a finite, non-negative numeric literal with a finite v1 value")

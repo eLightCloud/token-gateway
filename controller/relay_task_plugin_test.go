@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
@@ -735,4 +736,32 @@ func TestExecuteTaskSubmissionRefundsWhenFinalReserveFails(t *testing.T) {
 	assert.Equal(t, []string{"reserve", "refund"}, events)
 	assert.Equal(t, 1, billing.refunds)
 	assert.False(t, c.Writer.Written())
+}
+
+func TestRealtimePricingRejectsFixedTaskChannelBeforeSubmission(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	var events []string
+	db := setupTaskSubmissionDatabase(t, true, &events)
+	require.NoError(t, db.AutoMigrate(
+		&model.User{}, &model.Channel{}, &model.ResellerIdentity{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{},
+		&model.RealtimePricingState{}, &model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.OrganizationMember{},
+	))
+	root := model.User{Username: "task-scope-root", AffCode: "task-scope-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&root).Error)
+	require.NoError(t, db.Create(&model.RealtimePricingState{ID: 1, Phase: "active"}).Error)
+	allowed := model.Channel{Id: 2, Models: "plugin-model", Status: common.ChannelStatusEnabled}
+	require.NoError(t, db.Create(&allowed).Error)
+	_, err := model.SaveRealtimePricing(root.Id, "user", root.Id, model.RealtimePricingInput{
+		Items: []model.RealtimePricingItem{{Model: "plugin-model", Ratio: "1", ChannelIDs: []int{allowed.Id}}},
+	})
+	require.NoError(t, err)
+
+	info := taskSubmissionRelayInfo(nil)
+	info.UserId = root.Id
+	outcome, taskErr := executeTaskSubmission(taskSubmissionTestContext(), info)
+	assert.Nil(t, outcome)
+	require.NotNil(t, taskErr)
+	assert.Equal(t, "pricing_channel_unavailable", taskErr.Code)
+	assert.True(t, taskErr.NoRetry)
+	assert.Nil(t, info.Billing)
 }

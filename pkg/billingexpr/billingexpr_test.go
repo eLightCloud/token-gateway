@@ -1196,3 +1196,81 @@ func TestFrontendSimulationContract(t *testing.T) {
 		})
 	}
 }
+
+func TestCNYV2PricesAndFrozenSettlement(t *testing.T) {
+	const expression = `v2:len < 100 ? tier("short", fixed(cny_to_usd(0.73))) : tier("long", p * cny_to_usd(7.30) + c * 4)`
+	request := billingexpr.RequestInput{CNYExchangeRate: 7.3}
+	cost, trace, err := billingexpr.RunExprWithRequest(expression, billingexpr.TokenParams{}, request)
+	require.NoError(t, err)
+	assert.InDelta(t, 100_000, cost, 1e-8)
+	require.NotNil(t, trace.FixedPrice)
+	assert.InDelta(t, 0.1, *trace.FixedPrice, 1e-12)
+
+	snapshot := &billingexpr.BillingSnapshot{
+		ExprString: expression, ExprHash: billingexpr.ExprHashString(expression), ExprVersion: 2,
+		CNYExchangeRate: 7.3, QuotaPerUnit: 500_000, GroupRatio: 1,
+	}
+	request.CNYExchangeRate = 8
+	cost, _, err = billingexpr.RunExprWithRequest(expression, billingexpr.TokenParams{P: 1_000_000, C: 1_000_000, Len: 1_000_000}, request)
+	require.NoError(t, err)
+	assert.Equal(t, 4_912_500.0, cost)
+	settled, err := billingexpr.ComputeTieredQuotaWithRequest(snapshot, billingexpr.TokenParams{}, request)
+	require.NoError(t, err)
+	assert.Equal(t, 50_000, settled.ActualQuotaAfterGroup)
+
+	projected, err := billingexpr.USDPriceExpression(expression, request.CNYExchangeRate)
+	require.NoError(t, err)
+	assert.Contains(t, projected, "fixed(0.09125)")
+	assert.Contains(t, projected, "p * 0.9125")
+
+	count := 3
+	cost, trace, err = billingexpr.RunExprWithRequest(`v2:tier("image", fixed(cny_to_usd(0.73))) * image_count`,
+		billingexpr.TokenParams{}, billingexpr.RequestInput{CNYExchangeRate: 7.3, ImageCount: &count})
+	require.NoError(t, err)
+	assert.InDelta(t, 300_000, cost, 1e-8)
+	require.NotNil(t, trace.FixedPrice)
+	assert.InDelta(t, 0.1, *trace.FixedPrice, 1e-12)
+}
+
+func TestCNYV2RejectsInvalidPricesAndRates(t *testing.T) {
+	for _, expression := range []string{
+		`tier("base", cny_to_usd(1))`,
+		`v3:tier("base", 1)`,
+		`v2:tier("base", cny_to_usd(p))`,
+		`v2:tier("base", fixed(cny_to_usd(-1)))`,
+		`v2:let f = cny_to_usd; tier("base", f(p))`,
+		`v2:tier("base", cny_to_usd(7.3) + $env.cny_to_usd(p))`,
+		`v2:tier("base", $env["cny_to_usd"](1))`,
+	} {
+		_, err := billingexpr.CompileFromCache(expression)
+		assert.Error(t, err, expression)
+	}
+
+	for _, rate := range []float64{0, -1, math.Inf(1), math.NaN(), 1e-308} {
+		_, _, err := billingexpr.RunExprWithRequest(`v2:tier("base", fixed(cny_to_usd(1)))`,
+			billingexpr.TokenParams{}, billingexpr.RequestInput{CNYExchangeRate: rate})
+		assert.Error(t, err, "rate %g", rate)
+	}
+	cost, _, err := billingexpr.RunExprWithRequest(`v2:tier("free", fixed(cny_to_usd(0)))`,
+		billingexpr.TokenParams{}, billingexpr.RequestInput{CNYExchangeRate: 7.3})
+	require.NoError(t, err)
+	assert.Zero(t, cost)
+}
+
+func TestCNYV2KeepsV1LocalBindingsAndValidatesEveryPrice(t *testing.T) {
+	for _, expression := range []string{
+		`let cny_to_usd = p; tier("base", cny_to_usd)`,
+		`let cny_to_usd = abs; tier("base", cny_to_usd(p))`,
+	} {
+		assert.False(t, billingexpr.UsesCNYExchangeRate(expression))
+		cost, _, err := billingexpr.RunExpr(expression, billingexpr.TokenParams{P: 10})
+		require.NoError(t, err)
+		assert.Equal(t, 10.0, cost)
+	}
+
+	expression := `v2:len == 12345 ? tier("overflow", fixed(cny_to_usd(1e304))) : tier("base", fixed(cny_to_usd(0.73)))`
+	_, err := billingexpr.USDPriceExpression(expression, 7.3)
+	require.ErrorContains(t, err, "finite scaled value")
+	_, _, err = billingexpr.RunExprWithRequest(expression, billingexpr.TokenParams{}, billingexpr.RequestInput{CNYExchangeRate: 7.3})
+	require.ErrorContains(t, err, "finite scaled value")
+}

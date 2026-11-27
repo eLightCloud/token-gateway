@@ -670,19 +670,13 @@ func fetchOrganizationBillingExport(organizationId int, filters model.Organizati
 	}, nil
 }
 
-// writeOrganizationBillingCsv 把六张账单表以「# 段名」为标题分段写入同一个 CSV：
-// 表头用中文；实体标识用名称替代数字 ID；金额保持可计算的数值与独立币种列；
-// 日志类型用中文名，时间为可读格式，明细仍沿用管理员级排障字段。
-func writeOrganizationBillingCsv(
-	writer *csv.Writer,
-	data organizationBillingExportData,
-	amountFormatter service.BillingExportAmountFormatter,
-) {
+// writeOrganizationBillingSections 写入分段表头和聚合额度。明细和历史金额
+// 由调用方按导出类型从实时日志或已发布的用量快照写入。
+func writeOrganizationBillingSections(writer *csv.Writer, data organizationBillingExportData) {
 	_ = writer.Write([]string{"# 账单汇总"})
 	_ = writer.Write([]string{"指标", "数值"})
+	_ = writer.Write([]string{"汇总金额口径", "历史金额取逐笔快照，分组保留原始额度"})
 	if data.Summary != nil {
-		_ = writer.Write([]string{"消费金额", amountFormatter.Amount(data.Summary.TotalQuota)})
-		_ = writer.Write([]string{"币种", amountFormatter.Currency})
 		_ = writer.Write([]string{"消费额度(quota)", strconv.FormatInt(data.Summary.TotalQuota, 10)})
 		_ = writer.Write([]string{"请求数", strconv.Itoa(data.Summary.RequestCount)})
 		_ = writer.Write([]string{"输入Token", strconv.Itoa(data.Summary.PromptTokens)})
@@ -698,8 +692,8 @@ func writeOrganizationBillingCsv(
 		_ = writer.Write([]string{
 			model.OrganizationBillingUsername(item.Username, item.UserId),
 			model.MaskOrganizationBillingName(item.DisplayName),
-			amountFormatter.Amount(item.TotalQuota),
-			amountFormatter.Currency,
+			"",
+			"",
 			strconv.FormatInt(item.TotalQuota, 10),
 			strconv.Itoa(item.RequestCount),
 			strconv.Itoa(item.PromptTokens),
@@ -720,8 +714,8 @@ func writeOrganizationBillingCsv(
 		}
 		_ = writer.Write([]string{
 			item.ModelName,
-			amountFormatter.Amount(item.TotalQuota),
-			amountFormatter.Currency,
+			"",
+			"",
 			organizationModelPricingLabel(item.Pricing),
 			strconv.FormatInt(item.TotalQuota, 10),
 			strconv.Itoa(item.RequestCount),
@@ -740,8 +734,8 @@ func writeOrganizationBillingCsv(
 	for _, item := range data.Channels {
 		_ = writer.Write([]string{
 			item.ChannelName,
-			amountFormatter.Amount(item.TotalQuota),
-			amountFormatter.Currency,
+			"",
+			"",
 			strconv.FormatInt(item.TotalQuota, 10),
 			strconv.Itoa(item.RequestCount),
 			strconv.Itoa(item.PromptTokens),
@@ -755,8 +749,8 @@ func writeOrganizationBillingCsv(
 	for _, point := range data.Trend {
 		_ = writer.Write([]string{
 			point.Period,
-			amountFormatter.Amount(point.TotalQuota),
-			amountFormatter.Currency,
+			"",
+			"",
 			strconv.FormatInt(point.TotalQuota, 10),
 			strconv.Itoa(point.RequestCount),
 			strconv.Itoa(point.PromptTokens),
@@ -766,16 +760,18 @@ func writeOrganizationBillingCsv(
 	_ = writer.Write([]string{""})
 
 	_ = writer.Write([]string{"# 消费明细"})
-	_ = writer.Write([]string{"时间", "类型", "用户", "令牌", "模型", "渠道", "消费金额", "币种", "消费额度(quota)", "输入Token", "输出Token", "请求ID", "上游请求ID", "内容"})
-	writeOrganizationBillingDetailRows(writer, data.Logs, amountFormatter)
+	_ = writer.Write([]string{"时间", "类型", "用户", "令牌", "模型", "渠道", "消费金额", "币种", "消费额度(quota)", "输入Token", "输出Token", "请求ID", "上游请求ID", "内容", historicalExchangeRateColumn, historicalAmountColumn, service.HistoricalBillAmountSourceColumn})
 }
 
 func writeOrganizationBillingDetailRows(
 	writer *csv.Writer,
 	logs []*model.Log,
 	amountFormatter service.BillingExportAmountFormatter,
-) {
+) organizationHistoricalTotals {
+	var totals organizationHistoricalTotals
 	for _, item := range logs {
+		amount, rate, cny := historicalOrganizationBillRow(item, amountFormatter)
+		totals.record(cny)
 		_ = writer.Write([]string{
 			time.Unix(item.CreatedAt, 0).Format("2006-01-02 15:04:05"),
 			billingLogTypeLabel(item.Type),
@@ -783,7 +779,7 @@ func writeOrganizationBillingDetailRows(
 			item.TokenName,
 			item.ModelName,
 			item.ChannelName,
-			amountFormatter.Amount(int64(item.Quota)),
+			amount,
 			amountFormatter.Currency,
 			strconv.Itoa(item.Quota),
 			strconv.Itoa(item.PromptTokens),
@@ -791,8 +787,12 @@ func writeOrganizationBillingDetailRows(
 			item.RequestId,
 			item.UpstreamRequestId,
 			item.Content,
+			rate,
+			cny,
+			amountFormatter.HistoricalBillAmountSource(rate),
 		})
 	}
+	return totals
 }
 
 // billingLogTypeLabel 把日志类型数字映射为中文名，便于导出阅读。
@@ -873,6 +873,9 @@ func writeOrganizationBillingDisplayLogsCsvHeader(writer *csv.Writer) {
 		"币种",
 		"提示词 Token",
 		"补全 Token",
+		historicalExchangeRateColumn,
+		historicalAmountColumn,
+		service.HistoricalBillAmountSourceColumn,
 	})
 }
 
@@ -883,6 +886,7 @@ func writeOrganizationBillingDisplayLogsCsvRows(
 	amountFormatter service.BillingExportAmountFormatter,
 ) {
 	for _, item := range logs {
+		amount, rate, cny := historicalOrganizationBillRow(item, amountFormatter)
 		createdAt := "-"
 		if item.CreatedAt > 0 {
 			createdAt = time.Unix(item.CreatedAt, 0).In(location).Format("2006-01-02 15:04:05")
@@ -899,10 +903,13 @@ func writeOrganizationBillingDisplayLogsCsvRows(
 			createdAt,
 			username,
 			modelName,
-			amountFormatter.Amount(int64(item.Quota)),
+			amount,
 			amountFormatter.Currency,
 			strconv.Itoa(item.PromptTokens),
 			strconv.Itoa(item.CompletionTokens),
+			rate,
+			cny,
+			amountFormatter.HistoricalBillAmountSource(rate),
 		})
 	}
 }
@@ -1039,7 +1046,7 @@ func exportOrganizationBilling(c *gin.Context, organizationId int, filters model
 	var preamble bytes.Buffer
 	preamble.WriteString("\xEF\xBB\xBF")
 	preambleWriter := csv.NewWriter(&preamble)
-	writeOrganizationBillingCsv(preambleWriter, data, amountFormatter)
+	writeOrganizationBillingSections(preambleWriter, data)
 	preambleWriter.Flush()
 	if err := preambleWriter.Error(); err != nil {
 		common.ApiError(c, err)
@@ -1047,6 +1054,7 @@ func exportOrganizationBilling(c *gin.Context, organizationId int, filters model
 	}
 
 	const streamBatchSize = 1000
+	var historicalTotals organizationHistoricalTotals
 	started := false
 	writer := csv.NewWriter(c.Writer)
 	startResponse := func() error {
@@ -1077,7 +1085,7 @@ func exportOrganizationBilling(c *gin.Context, organizationId int, filters model
 			if err := startResponse(); err != nil {
 				return err
 			}
-			writeOrganizationBillingDetailRows(writer, logs, amountFormatter)
+			historicalTotals.combine(writeOrganizationBillingDetailRows(writer, logs, amountFormatter))
 			return flush()
 		},
 	)
@@ -1093,6 +1101,7 @@ func exportOrganizationBilling(c *gin.Context, organizationId int, filters model
 		common.SysError(fmt.Sprintf("organization billing export stream failed to start response: %s", err.Error()))
 		return
 	}
+	historicalTotals.write(writer)
 	if err := flush(); err != nil {
 		common.SysError(fmt.Sprintf("organization billing export stream failed to flush response: %s", err.Error()))
 	}

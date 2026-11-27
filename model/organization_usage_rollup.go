@@ -246,8 +246,9 @@ func organizationUsageCoverEntries(cover []OrganizationUsageSlice) []organizatio
 
 // assembleOrganizationUsagePayloadResult builds the materialized rollup for
 // one snapshot from its selected slice cover: summary, trend, member, model
-// and channel regions — all from the same base cells, never from logs. All
-// regions assemble before truncation, so conservation verifies on complete
+// and channel regions from the same base cells. Historical amounts are read
+// from the corresponding scoped logs. Regions assemble before truncation,
+// so conservation verifies on complete
 // sums; the displayed dimension lists are capped afterwards.
 func assembleOrganizationUsagePayloadResult(ctx context.Context, snapshot *OrganizationUsageSnapshot, cover []OrganizationUsageSlice) (*OrganizationUsageSummaryPayload, error) {
 	ctx, finish := observeOrganizationStatsPhase(ctx, "rollup_conservation")
@@ -276,6 +277,15 @@ func assembleOrganizationUsagePayloadResult(ctx context.Context, snapshot *Organ
 	allUsers := types.NewSet[int]()
 	for _, member := range members {
 		allUsers.Add(member.UserId)
+	}
+	historical, err := organizationUsageHistoricalTotals(ctx, snapshot, members, cover)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		common.SysLog(common.LogText("organization usage historical amounts unavailable: %v", err))
+	} else if historical.Recorded+historical.Missing == totals.RequestCount {
+		payload.HistoricalAmounts = historical
 	}
 	payload.MemberCount = allUsers.Len()
 	payload.ActiveMemberCount = int(totals.Users)

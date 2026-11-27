@@ -39,6 +39,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { HistoricalBillAmount } from '@/components/billing/historical-bill-amount'
+import { formatHistoricalCNY } from '@/components/billing/historical-billing'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
@@ -86,7 +88,6 @@ import { USER_ROLE } from '@/features/users/constants'
 import type { User } from '@/features/users/types'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import {
-  formatBillingAmountFromQuota,
   formatNumber,
   formatPercent,
   formatTimestampToDate,
@@ -716,6 +717,7 @@ export function UsageFilters({
 
 function SummaryGrid({ summary }: { summary?: OrganizationSummary }) {
   const { t } = useTranslation()
+  const history = summary?.historical_amounts
   const items = [
     {
       label: t('Requests'),
@@ -725,9 +727,16 @@ function SummaryGrid({ summary }: { summary?: OrganizationSummary }) {
       iconTone: 'chart-1' as IconBadgeTone,
     },
     {
-      label: t('Consumption amount'),
-      value: formatBillingAmountFromQuota(summary?.total_quota ?? 0),
-      description: t('Total billed amount'),
+      label: t('Recorded historical amount'),
+      value:
+        history && (history.recorded > 0 || summary?.request_count === 0)
+          ? formatHistoricalCNY(history.consume_cny)
+          : '—',
+      description: history
+        ? t('Records without a historical exchange rate: {{count}}', {
+            count: history.missing,
+          })
+        : t('Historical exchange rate unavailable'),
       icon: Wallet,
       iconTone: 'primary' as IconBadgeTone,
       emphasis: true,
@@ -838,9 +847,7 @@ function DimensionTable(props: {
         <TableHeader>
           <TableRow>
             <TableHead>{props.nameLabel}</TableHead>
-            <TableHead className='text-right'>
-              {t('Consumption amount')}
-            </TableHead>
+            <TableHead className='text-right'>{t('Billed quota')}</TableHead>
             <TableHead className='text-right'>{t('Share')}</TableHead>
             <TableHead className='text-right'>{t('Requests')}</TableHead>
             <TableHead className='text-right'>{t('Prompt tokens')}</TableHead>
@@ -862,7 +869,7 @@ function DimensionTable(props: {
                   {rowName}
                 </TableCell>
                 <TableCell className='text-right whitespace-nowrap tabular-nums'>
-                  {formatBillingAmountFromQuota(row.total_quota)}
+                  {formatNumber(row.total_quota)}
                 </TableCell>
                 <TableCell className='text-right whitespace-nowrap'>
                   <div className='ml-auto w-16 lg:w-24'>
@@ -921,9 +928,7 @@ function TrendTable({ rows }: { rows?: OrganizationTrendRow[] }) {
       <TableHeader>
         <TableRow>
           <TableHead>{`${t('Date')} (${t('Beijing Time')})`}</TableHead>
-          <TableHead className='text-right'>
-            {t('Consumption amount')}
-          </TableHead>
+          <TableHead className='text-right'>{t('Billed quota')}</TableHead>
           <TableHead className='text-right'>{t('Requests')}</TableHead>
           <TableHead className='text-right'>{t('Tokens')}</TableHead>
         </TableRow>
@@ -938,7 +943,7 @@ function TrendTable({ rows }: { rows?: OrganizationTrendRow[] }) {
               <TableCell className='text-right whitespace-nowrap'>
                 <div className='ml-auto w-20 lg:w-28'>
                   <div className='tabular-nums'>
-                    {formatBillingAmountFromQuota(row.total_quota)}
+                    {formatNumber(row.total_quota)}
                   </div>
                   <div className='mt-1.5'>
                     <ProportionBar value={ratio} fillClassName='bg-chart-1' />
@@ -1112,7 +1117,10 @@ function UsageLogCursorTable(props: {
             </TableCell>
             <TableCell>{row.model_name || '-'}</TableCell>
             <TableCell className='text-right whitespace-nowrap tabular-nums'>
-              {formatBillingAmountFromQuota(row.quota)}
+              <HistoricalBillAmount
+                quota={row.quota}
+                snapshot={row.money_snapshot}
+              />
             </TableCell>
             <TableCell className='text-right whitespace-nowrap tabular-nums'>
               {formatNumber(row.prompt_tokens)}

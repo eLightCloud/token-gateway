@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -807,14 +808,24 @@ export function extractUsage() { return {seconds:2}; }
 		name, perCallPrice, wantCode string
 		expressions                  map[string]string
 		wallet, wantQuota            int
+		exchangeRateAfterAttempt     float64
 		wantSubmitted                []string
 	}{
 		{name: "per-call plugin drops the previous expression", expressions: map[string]string{"retry-a::declared-model": `tier("a", u("seconds") * 0.02)`}, perCallPrice: `{"declared-model":0.04}`, wallet: 1 << 30, wantQuota: 40000, wantSubmitted: []string{"a", "b"}},
 		{name: "pricier plugin is held before submission", expressions: pricier, perCallPrice: `{}`, wallet: 1 << 30, wantQuota: 400000, wantSubmitted: []string{"a", "b"}},
+		{name: "CNY price on the retry uses the initial exchange rate", expressions: map[string]string{
+			"retry-a::declared-model": `v2:tier("a", cny_to_usd(0.73))`,
+			"retry-b::declared-model": `v2:tier("b", cny_to_usd(2.92))`,
+		}, perCallPrice: `{}`, wallet: 1 << 30, wantQuota: 200000, exchangeRateAfterAttempt: 8, wantSubmitted: []string{"a", "b"}},
 		{name: "unaffordable plugin is never submitted", expressions: pricier, perCallPrice: `{}`, wallet: 100000, wantCode: "insufficient_user_quota", wantSubmitted: []string{"a"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			saveBillingConfig(t)
+			if tc.exchangeRateAfterAttempt > 0 {
+				previous := operation_setting.USDExchangeRate
+				operation_setting.USDExchangeRate = 7.3
+				t.Cleanup(func() { operation_setting.USDExchangeRate = previous })
+			}
 			savedPrices := ratio_setting.ModelPrice2JSONString()
 			t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices)) })
 			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(tc.perCallPrice))
@@ -864,6 +875,9 @@ export function extractUsage() { return {seconds:2}; }
 				if attempt == "a" {
 					require.NotNil(t, taskErr)
 					require.Equal(t, http.StatusInternalServerError, taskErr.StatusCode, "the first attempt fails upstream and is retried")
+					if tc.exchangeRateAfterAttempt > 0 {
+						operation_setting.USDExchangeRate = tc.exchangeRateAfterAttempt
+					}
 				}
 			}
 
@@ -883,6 +897,11 @@ export function extractUsage() { return {seconds:2}; }
 			}
 			require.NotNil(t, info.TieredBillingSnapshot)
 			assert.Equal(t, tc.expressions["retry-b::declared-model"], info.TieredBillingSnapshot.ExprString)
+			if tc.exchangeRateAfterAttempt > 0 {
+				settled, _, err := service.EvaluateTaskCompletionUsage(info.TieredBillingSnapshot, map[string]any{"seconds": 3.0})
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantQuota, settled.ActualQuotaAfterGroup)
+			}
 		})
 	}
 }

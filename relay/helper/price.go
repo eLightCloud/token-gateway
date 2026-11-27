@@ -375,6 +375,10 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 		}
 	}
 
+	requestInput.CNYExchangeRate, err = RequestCNYExchangeRate(info, exprStr)
+	if err != nil {
+		return hosttypes.PriceData{}, err
+	}
 	rawCost, trace, err := billingexpr.RunExprByHashWithRequest(exprStr, exprHash, billingexpr.TokenParams{
 		P:   float64(promptTokens),
 		C:   0,
@@ -385,7 +389,8 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 	}
 
 	// Expression coefficients are $/1M tokens prices; convert to quota the same way per-call billing does.
-	quotaBeforeGroup := rawCost / 1_000_000 * common.QuotaPerUnit
+	quotaPerUnit := common.QuotaPerUnit
+	quotaBeforeGroup := rawCost / 1_000_000 * quotaPerUnit
 	// Scale the reservation, preserving the expression's context-length tier
 	// and leaving actual settlement and fixed request prices unchanged.
 	if trace.BillingUnit != billingexpr.BillingUnitRequest {
@@ -405,6 +410,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 	}
 
 	snapshot := &billingexpr.BillingSnapshot{
+		CNYExchangeRate:           requestInput.CNYExchangeRate,
 		EstimatedImageCount:       trace.ImageCount,
 		BillingMode:               billing_setting.BillingModeTieredExpr,
 		ModelName:                 billingModelName,
@@ -419,7 +425,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 		EstimatedTier:             trace.MatchedTier,
 		EstimatedBillingUnit:      trace.BillingUnit,
 		EstimatedFixedPrice:       trace.FixedPrice,
-		QuotaPerUnit:              common.QuotaPerUnit,
+		QuotaPerUnit:              quotaPerUnit,
 		ExprVersion:               billingexpr.ExprVersion(exprStr),
 	}
 	info.TieredBillingSnapshot = snapshot

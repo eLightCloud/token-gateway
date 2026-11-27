@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { validateCNYCall } from './currency'
 import {
   BILLING_FUNCTIONS,
   BILLING_VARIABLES,
@@ -59,6 +60,7 @@ class BillingParser {
   private count = 0
   private depth = 0
   private current: Lexeme
+  readonly version: 1 | 2
 
   constructor(private readonly source: string) {
     if (source.length > 65536) {
@@ -68,12 +70,13 @@ class BillingParser {
       })
     }
     const version = source.match(/^\s*v(\d+):/)
-    if (version && version[1] !== '1') {
+    if (version && !['1', '2'].includes(version[1])) {
       throw new BillingExpressionError({
         code: 'unsupported',
         detail: version[0],
       })
     }
+    this.version = version?.[1] === '2' ? 2 : 1
     if (version) this.cursor = version[0].length
     this.current = this.next()
   }
@@ -412,7 +415,9 @@ function checkExpressionTypes(ast: ExpressionNode): void {
       } else if ((TIME_FUNCTIONS as readonly string[]).includes(node.name)) {
         result = 'number'
       } else if (
-        ['fixed', 'min', 'max', 'abs', 'ceil', 'floor'].includes(node.name)
+        ['fixed', 'cny_to_usd', 'min', 'max', 'abs', 'ceil', 'floor'].includes(
+          node.name
+        )
       ) {
         node.args.forEach((arg) => requireType(arg, 'number'))
         result = 'number'
@@ -467,10 +472,11 @@ function validateFixedPricingTree(
     if (price.kind === 'call' && price.name === 'fixed') {
       const amount = price.args[0]
       if (
-        amount.kind === 'literal' &&
-        typeof amount.value === 'number' &&
-        amount.value >= 0 &&
-        Number.isFinite(amount.value * 1_000_000)
+        (amount.kind === 'call' && amount.name === 'cny_to_usd') ||
+        (amount.kind === 'literal' &&
+          typeof amount.value === 'number' &&
+          amount.value >= 0 &&
+          Number.isFinite(amount.value * 1_000_000))
       ) {
         return
       }
@@ -489,11 +495,13 @@ export function compileBillingExpression(source: string): CompilationResult {
   if (cached) return cached
   let result: CompilationResult
   try {
-    const ast = new BillingParser(source).parse()
+    const parser = new BillingParser(source)
+    const ast = parser.parse()
     checkExpressionTypes(ast)
     const dependencies = expressionDependencies(ast)
     const requestRules: CompiledBillingExpression['requestRules'] = []
     visitExpression(ast, (node) => {
+      validateCNYCall(node, parser.version)
       if (
         node.kind !== 'conditional' ||
         node.yes.kind !== 'literal' ||
@@ -523,7 +531,7 @@ export function compileBillingExpression(source: string): CompilationResult {
     }
     result = {
       status: 'ready',
-      version: 1,
+      version: parser.version,
       source,
       ast,
       ...dependencies,

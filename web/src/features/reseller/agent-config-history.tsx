@@ -38,6 +38,7 @@ import {
   type ConfigSetting,
 } from './api'
 import { formatPersonalRatio } from './format'
+import { hasProcurementRatio } from './lib/procurement-grant'
 import { ResellerQueryStatus, ResellerTimestamp } from './shared'
 
 export function ResellerAgentConfigHistory(props: {
@@ -69,7 +70,9 @@ export function ResellerAgentConfigHistory(props: {
       <span className='flex flex-wrap items-center gap-x-2'>
         {value.authorized ? t('Authorized') : t('Not authorized')}
         <span className='text-muted-foreground tabular-nums'>
-          {formatPersonalRatio(value.ratio, locale)}×
+          {hasProcurementRatio(value)
+            ? `${formatPersonalRatio(value.ratio, locale)}×`
+            : t('Default (1×)')}
         </span>
       </span>
     )

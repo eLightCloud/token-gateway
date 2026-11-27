@@ -78,7 +78,16 @@ import { formatPricingNumber } from './pricing-format'
 import { RequestSimulation } from './request-simulation'
 import { TaskPricingMatrix } from './task-pricing-matrix'
 
+function preserveTaskExpressionVersion(
+  source: string,
+  generated: string
+): string {
+  const prefix = source.trimStart().match(/^v[12]:/)?.[0] ?? ''
+  return generated ? prefix + generated : generated
+}
+
 type TaskUsagePricingEditorProps = {
+  exchangeRate?: number
   currency?: PricingCurrency
   billingExpr: string
   requestRuleExpr: string
@@ -346,11 +355,12 @@ export const TaskUsagePricingEditor = memo(function TaskUsagePricingEditor(
   const publishRows = (nextRows: TaskMatrixRow[]) => {
     setMatrixRows(nextRows)
     props.onBillingExprChange(
-      generateTaskExprFromConfig(
-        {
-          tiers: taskMatrixToTiers({ rows: nextRows }, props.usageSchema),
-        },
-        props.usageSchema
+      preserveTaskExpressionVersion(
+        props.billingExpr,
+        generateTaskExprFromConfig(
+          { tiers: taskMatrixToTiers({ rows: nextRows }, props.usageSchema) },
+          props.usageSchema
+        )
       )
     )
   }
@@ -385,9 +395,12 @@ export const TaskUsagePricingEditor = memo(function TaskUsagePricingEditor(
     props.usageSchema
   )
 
+  const hasCNYPrice = /\bcny_to_usd\s*\(/.test(rawExpr)
+
   const handleModeChange = (nextMode: EditorMode) => {
     if (nextMode === editorMode) return
     if (nextMode === 'visual') {
+      if (hasCNYPrice) return
       setConfirmVisualSwitch(true)
       return
     }
@@ -396,14 +409,18 @@ export const TaskUsagePricingEditor = memo(function TaskUsagePricingEditor(
   }
 
   const handleConfirmVisualSwitch = () => {
+    if (hasCNYPrice) return
     const nextRows = (
       rawMatrix ?? createDefaultTaskMatrixConfig(props.usageSchema)
     ).rows
     setMatrixRows(nextRows)
     props.onBillingExprChange(
-      generateTaskExprFromConfig(
-        { tiers: taskMatrixToTiers({ rows: nextRows }, props.usageSchema) },
-        props.usageSchema
+      preserveTaskExpressionVersion(
+        rawSplit.billingExpr,
+        generateTaskExprFromConfig(
+          { tiers: taskMatrixToTiers({ rows: nextRows }, props.usageSchema) },
+          props.usageSchema
+        )
       )
     )
     props.onRequestRuleExprChange(rawMatrix ? rawSplit.requestRuleExpr : '')
@@ -462,7 +479,9 @@ export const TaskUsagePricingEditor = memo(function TaskUsagePricingEditor(
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false}>
               <SelectGroup>
-                <SelectItem value='visual'>{t('Visual editor')}</SelectItem>
+                <SelectItem value='visual' disabled={hasCNYPrice}>
+                  {t('Visual editor')}
+                </SelectItem>
                 <SelectItem value='raw'>{t('Expression editor')}</SelectItem>
               </SelectGroup>
             </SelectContent>
@@ -655,13 +674,28 @@ export const TaskUsagePricingEditor = memo(function TaskUsagePricingEditor(
                   {t('Functions')}: <code>tier(name, value)</code>,{' '}
                   <code>header(name)</code>, <code>param(path)</code>
                 </div>
-                {!rawMatrix ? (
+                <div>
+                  {t(
+                    'Use cny_to_usd in v2 expressions to convert CNY prices at the system exchange rate.'
+                  )}
+                  <code className='block break-all'>
+                    v2:tier("request", cny_to_usd(0.73))
+                  </code>
+                </div>
+                {hasCNYPrice && (
+                  <div>
+                    {t(
+                      'Use the expression editor for prices that reference the CNY exchange rate.'
+                    )}
+                  </div>
+                )}
+                {!hasCNYPrice && !rawMatrix && (
                   <div>
                     {t(
                       'This expression cannot be represented by the price table. You can switch to visual editing by confirming that the expression will be discarded.'
                     )}
                   </div>
-                ) : null}
+                )}
               </AlertDescription>
             </Alert>
             <Textarea
@@ -701,6 +735,7 @@ export const TaskUsagePricingEditor = memo(function TaskUsagePricingEditor(
         usage={previewSample}
         usageSchema={props.usageSchema}
         currency={props.currency}
+        exchangeRate={props.exchangeRate}
         mode='task'
       />
     </div>

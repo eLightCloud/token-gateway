@@ -6,6 +6,7 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useTranslation } from 'react-i18next'
 
+import { HistoricalBillAmount } from '@/components/billing/historical-bill-amount'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,7 +26,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import dayjs from '@/lib/dayjs'
-import { formatBillingAmountFromQuota } from '@/lib/format'
 
 import type { BillEntriesPage, BillEntry } from '../types'
 
@@ -169,7 +169,10 @@ export function BillEntriesTable(props: {
                 {numberFormatter.format(entry.completion_tokens)}
               </TableCell>
               <TableCell className='text-right font-medium'>
-                {formatBillingAmountFromQuota(entry.quota)}
+                <HistoricalBillAmount
+                  quota={entry.quota}
+                  snapshot={entry.money_snapshot}
+                />
               </TableCell>
             </TableRow>
           ))}

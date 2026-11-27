@@ -228,5 +228,7 @@ func TaskErrorFromAPIError(apiErr *types.NewAPIError) *taskdto.TaskError {
 		Message:    apiErr.Err.Error(),
 		StatusCode: apiErr.StatusCode,
 		Error:      apiErr.Err,
+		NoRetry:    apiErr.GetErrorCode() == PricingChannelUnavailableCode,
+		LocalError: apiErr.GetErrorCode() == PricingChannelUnavailableCode,
 	}
 }

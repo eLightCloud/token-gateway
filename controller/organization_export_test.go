@@ -45,16 +45,17 @@ func TestWriteOrganizationBillingCsvIncludesConsumptionAmountContract(t *testing
 	writer := csv.NewWriter(&buffer)
 	amountFormatter, err := service.NewBillingExportAmountFormatter(6)
 	require.NoError(t, err)
-	writeOrganizationBillingCsv(writer, data, amountFormatter)
+	writeOrganizationBillingSections(writer, data)
+	writeOrganizationBillingDetailRows(writer, data.Logs, amountFormatter).write(writer)
 	writer.Flush()
 	require.NoError(t, writer.Error())
 
 	exported := buffer.String()
-	assert.Contains(t, exported, "消费金额,1.000000")
-	assert.Contains(t, exported, "币种,USD")
+	assert.NotContains(t, exported, "消费金额,1.000000")
+	assert.Contains(t, exported, "历史金额取逐笔快照")
 	assert.Contains(t, exported, "用户名,显示名,消费金额,币种,消费额度(quota)")
 	assert.Contains(t, exported, "模型,消费金额,币种,当前计价规则,消费额度(quota)")
-	assert.Contains(t, exported, "gpt-test,1.000000,USD,固定价格 USD 0.01")
+	assert.Contains(t, exported, "gpt-test,,,固定价格 USD 0.01")
 	assert.Contains(t, exported, "渠道,消费金额,币种,消费额度(quota)")
 	assert.Contains(t, exported, "日期,消费金额,币种,消费额度(quota)")
 	assert.Contains(t, exported, "模型,渠道,消费金额,币种,消费额度(quota)")
@@ -77,14 +78,11 @@ func TestOrganizationBillingCsvPreservesAggregateQuotaAboveInt32(t *testing.T) {
 	data := organizationBillingExportData{
 		Summary: &model.OrganizationBillingSummary{TotalQuota: quotaAboveInt32},
 	}
-	amountFormatter, err := service.NewBillingExportAmountFormatter(6)
-	require.NoError(t, err)
-
 	testCases := []struct {
 		name  string
-		write func(*csv.Writer, organizationBillingExportData, service.BillingExportAmountFormatter)
+		write func(*csv.Writer, organizationBillingExportData)
 	}{
-		{name: "full export", write: writeOrganizationBillingCsv},
+		{name: "full export", write: writeOrganizationBillingSections},
 		{name: "export without channels", write: writeOrganizationBillingCsvWithoutChannels},
 	}
 
@@ -92,12 +90,12 @@ func TestOrganizationBillingCsvPreservesAggregateQuotaAboveInt32(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			var buffer bytes.Buffer
 			writer := csv.NewWriter(&buffer)
-			testCase.write(writer, data, amountFormatter)
+			testCase.write(writer, data)
 			writer.Flush()
 			require.NoError(t, writer.Error())
 
 			exported := buffer.String()
-			assert.Contains(t, exported, "消费金额,4294.967296")
+			assert.NotContains(t, exported, "消费金额,4294.967296")
 			assert.Contains(t, exported, "消费额度(quota),2147483648")
 		})
 	}
@@ -211,6 +209,9 @@ func TestWriteOrganizationBillingDisplayLogsCsvMatchesTableView(t *testing.T) {
 		"币种",
 		"提示词 Token",
 		"补全 Token",
+		historicalExchangeRateColumn,
+		historicalAmountColumn,
+		service.HistoricalBillAmountSourceColumn,
 	}, records[0])
 	assert.Equal(t, []string{
 		"2025-07-15 08:00:00",
@@ -220,6 +221,9 @@ func TestWriteOrganizationBillingDisplayLogsCsvMatchesTableView(t *testing.T) {
 		"USD",
 		"120",
 		"30",
+		"",
+		"",
+		"按导出时的显示配置折算",
 	}, records[1])
 }
 
@@ -256,4 +260,52 @@ func TestInvoiceCSVAmountRejectsInvalidInternalAmount(t *testing.T) {
 	_, err := invoiceCSVAmount("not-an-amount")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid organization invoice amount")
+}
+
+func TestOrganizationBillingExportTotalsUseEachRecordedRate(t *testing.T) {
+	display := operation_setting.GetGeneralSetting()
+	previousDisplay, previousRate := display.QuotaDisplayType, operation_setting.USDExchangeRate
+	t.Cleanup(func() {
+		display.QuotaDisplayType, operation_setting.USDExchangeRate = previousDisplay, previousRate
+	})
+	display.QuotaDisplayType = operation_setting.QuotaDisplayTypeCNY
+	operation_setting.USDExchangeRate = 9
+	formatter, err := service.NewBillingExportAmountFormatter(6)
+	require.NoError(t, err)
+	logs := []*model.Log{
+		{Quota: 50_000, Other: `{"money_snapshot":{"exchange_rate":"7.3","quota_per_unit":"500000","amount":"0.73000000"}}`},
+		{Quota: 50_000, Other: `{"money_snapshot":{"exchange_rate":"8","quota_per_unit":"500000","amount":"0.80000000"}}`},
+		{Quota: 50_000},
+	}
+	var output bytes.Buffer
+	writer := csv.NewWriter(&output)
+	var totals organizationHistoricalTotals
+	totals.combine(writeOrganizationBillingDetailRows(writer, logs[:1], formatter))
+	totals.combine(writeOrganizationBillingDetailRows(writer, logs[1:], formatter))
+	totals.write(writer)
+	writer.Flush()
+	require.NoError(t, writer.Error())
+	assert.Contains(t, output.String(), "已记录金额小计（CNY）,1.5300000000")
+	assert.Contains(t, output.String(), "缺少历史汇率的明细数,1")
+	assert.Contains(t, output.String(), "0.730000,CNY,50000")
+	assert.Contains(t, output.String(), "0.800000,CNY,50000")
+	assert.Contains(t, output.String(), "0.900000,CNY,50000,0,0,,,,")
+
+	for _, tc := range []struct {
+		name string
+		log  *model.Log
+		want string
+	}{
+		{"unknown", logs[2], ""},
+		{"recorded zero", &model.Log{Other: `{"money_snapshot":{"exchange_rate":"8","quota_per_unit":"500000","amount":"0.00000000"}}`}, "0.0000000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var result bytes.Buffer
+			writer := csv.NewWriter(&result)
+			writeOrganizationBillingDetailRows(writer, []*model.Log{tc.log}, formatter).write(writer)
+			writer.Flush()
+			require.NoError(t, writer.Error())
+			assert.Contains(t, result.String(), "已记录金额小计（CNY）,"+tc.want+"\n")
+		})
+	}
 }

@@ -28,17 +28,19 @@ const organizationUsageLogPageSizeDefault = 20
 const organizationUsageLogPageSizeMax = 100
 
 // OrganizationUsageLogItem is the page projection: only the columns the log
-// table renders, never other/content payloads.
+// table renders. The raw metadata is only used to extract the money snapshot.
 type OrganizationUsageLogItem struct {
-	Id               int    `json:"id"`
-	UserId           int    `json:"user_id"`
-	CreatedAt        int64  `json:"created_at"`
-	Type             int    `json:"type"`
-	ModelName        string `json:"model_name"`
-	ChannelId        int    `json:"channel_id"`
-	Quota            int    `json:"quota"`
-	PromptTokens     int    `json:"prompt_tokens"`
-	CompletionTokens int    `json:"completion_tokens"`
+	Id               int                   `json:"id"`
+	UserId           int                   `json:"user_id"`
+	CreatedAt        int64                 `json:"created_at"`
+	Type             int                   `json:"type"`
+	ModelName        string                `json:"model_name"`
+	ChannelId        int                   `json:"channel_id"`
+	Quota            int                   `json:"quota"`
+	PromptTokens     int                   `json:"prompt_tokens"`
+	CompletionTokens int                   `json:"completion_tokens"`
+	MoneySnapshot    *BillingMoneySnapshot `json:"money_snapshot,omitempty" gorm:"-"`
+	Other            string                `json:"-"`
 }
 
 // OrganizationUsageLogPageQuery carries one page request. The cursor is the
@@ -140,6 +142,10 @@ func GetOrganizationUsageLogPage(ctx context.Context, query OrganizationUsageLog
 		merged = merged[:query.Limit]
 		page.HasMore = true
 	}
+	for i := range merged {
+		merged[i].MoneySnapshot = LogMoneySnapshot(merged[i].Other)
+		merged[i].Other = ""
+	}
 	page.Items = merged
 	// Only a page with a continuation carries a cursor: an exhausted scan has
 	// no next position, matching the OrganizationUsageLogPage contract.
@@ -154,7 +160,7 @@ func GetOrganizationUsageLogPage(ctx context.Context, query OrganizationUsageLog
 // under the shared descending cursor predicate.
 func scanOrganizationUsageLogBatch(tx *gorm.DB, batch []OrganizationMember, query OrganizationUsageLogPageQuery, items *[]OrganizationUsageLogItem) error {
 	logQuery := tx.Model(&Log{}).
-		Select("id, user_id, created_at, type, model_name, channel_id, quota, prompt_tokens, completion_tokens").
+		Select("id, user_id, created_at, type, model_name, channel_id, quota, prompt_tokens, completion_tokens, other").
 		Where("type = ?", LogTypeConsume)
 	logQuery = applyOrganizationUsageMemberWindows(logQuery, batch, organizationUsageTile{start: query.RangeStart, end: query.RangeEnd})
 	if query.Scope.ChannelId > 0 {

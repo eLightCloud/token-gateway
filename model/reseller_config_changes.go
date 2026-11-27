@@ -15,8 +15,9 @@ type ResellerConfigChange struct {
 }
 
 type ResellerConfigSetting struct {
-	Authorized bool   `json:"authorized"`
-	Ratio      string `json:"ratio"`
+	Authorized      bool   `json:"authorized"`
+	Ratio           string `json:"ratio"`
+	RatioConfigured bool   `json:"ratio_configured,omitempty"`
 }
 
 type ResellerConfigChangeRevision struct {
@@ -93,7 +94,7 @@ func resellerConfigChanges(before, after []ResellerConfigItem) []ResellerConfigC
 		}
 		byModel[modelChannel{item.Model, item.ChannelID}] = ResellerConfigChange{
 			Model: item.Model, ChannelID: item.ChannelID,
-			Before: &ResellerConfigSetting{Authorized: item.Authorized, Ratio: ratio},
+			Before: &ResellerConfigSetting{Authorized: item.Authorized, Ratio: ratio, RatioConfigured: item.RatioConfigured != nil && *item.RatioConfigured},
 		}
 	}
 	for _, item := range after {
@@ -104,7 +105,7 @@ func resellerConfigChanges(before, after []ResellerConfigItem) []ResellerConfigC
 		if ratio == "" {
 			ratio = "1"
 		}
-		change.After = &ResellerConfigSetting{Authorized: item.Authorized, Ratio: ratio}
+		change.After = &ResellerConfigSetting{Authorized: item.Authorized, Ratio: ratio, RatioConfigured: item.RatioConfigured != nil && *item.RatioConfigured}
 		byModel[key] = change
 	}
 	changes := make([]ResellerConfigChange, 0)

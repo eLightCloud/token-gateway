@@ -81,6 +81,12 @@ describe('usage snapshot state panels', () => {
           slice_total: 0,
           payload: {
             total_quota: 350,
+            historical_amounts: {
+              consume_cny: '0.73',
+              refund_cny: '0',
+              recorded: 2,
+              missing: 1,
+            },
             request_count: 3,
             prompt_tokens: 70,
             completion_tokens: 43,
@@ -102,9 +108,13 @@ describe('usage snapshot state panels', () => {
         },
       })
       expect(screen.getByText('Previous results')).toBeTruthy()
-      expect(screen.getAllByText('Consumption amount').length).toBeGreaterThan(
-        0
-      )
+      expect(screen.getByText('¥0.73')).toBeVisible()
+      expect(
+        screen.getByText('Records without a historical exchange rate: 1')
+      ).toBeVisible()
+      expect(
+        screen.getAllByText('Recorded historical amount').length
+      ).toBeGreaterThan(0)
       expect(screen.getByText('Channel usage')).toBeTruthy()
       expect(view.container.querySelector('[data-slot="skeleton"]')).toBeNull()
       if (status === 'building') {
@@ -134,7 +144,7 @@ describe('usage snapshot state panels', () => {
     })
     expect(screen.getByText('Preparing usage statistics...')).toBeVisible()
     expect(screen.getByText(/Prepared slices: 3\/10/)).toBeTruthy()
-    assert.equal(screen.queryByText('Consumption amount'), null)
+    assert.equal(screen.queryByText('Recorded historical amount'), null)
   })
 
   test('building notice uses production Chinese resources, preserves the published cutoff and disappears when ready', async () => {
@@ -319,7 +329,7 @@ describe('usage snapshot state panels', () => {
       },
     })
     expect(screen.getByText('building capacity reached')).toBeTruthy()
-    assert.equal(screen.queryByText('Consumption amount'), null)
+    assert.equal(screen.queryByText('Recorded historical amount'), null)
   })
 
   test('loading state without data renders the loading placeholder', async () => {

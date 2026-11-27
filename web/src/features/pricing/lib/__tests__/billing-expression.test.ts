@@ -302,7 +302,7 @@ describe('local billing expression evaluation', () => {
   test.each([
     ['globalThis.process', 'unsupported'],
     ['tier("bad", p * 1e999)', 'invalid'],
-    ['v2:tier("base", 1)', 'unsupported'],
+    ['v3:tier("base", 1)', 'unsupported'],
     ['tier("bad", -1)', 'invalid'],
     ['1 / 0', 'invalid'],
     ['tier("base", 1) +', 'invalid'],
@@ -648,5 +648,33 @@ describe('visual billing document', () => {
         'hour("UTC") > 9 ? max(p * 2, 1) : tier("off", p * 1)'
       )
     ).toBeNull()
+  })
+})
+
+test('v2 RMB prices keep the version prefix when request rules are edited', () => {
+  const source = 'v2:tier("request", fixed(cny_to_usd(0.73)))'
+  const rule = '(header("priority") == "fast" ? 2 : 1)'
+  const combined = combineBillingExpr(source, rule)
+  const parts = splitBillingExprAndRequestRules(combined)
+  expect(parts.billingExpr).toBe(source)
+  expect(
+    evaluateBillingExpression(combined, {
+      cnyExchangeRate: 8,
+      request: { headers: { priority: 'fast' } },
+    })
+  ).toMatchObject({ status: 'success', cost: 182500, fixedPrice: 0.09125 })
+})
+
+test('rejects overflow in a CNY fixed tier before selecting a different tier', () => {
+  const expression =
+    'v2:len == 12345 ? tier("overflow", fixed(cny_to_usd(1e304))) : tier("base", fixed(cny_to_usd(0.73)))'
+  expect(
+    evaluateBillingExpression(expression, {
+      cnyExchangeRate: 7.3,
+      tokens: { len: 1 },
+    })
+  ).toMatchObject({
+    status: 'invalid',
+    diagnostic: { code: 'number', detail: 'fixed price' },
   })
 })

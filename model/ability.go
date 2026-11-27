@@ -192,7 +192,7 @@ func filterAbilitiesByConstraints(abilities []Ability, modelName string, filters
 
 	var channels []*Channel
 	if err := DB.Where("id IN ?", channelIds).Find(&channels).Error; err != nil {
-		if identityFilterRequiresKey(filters) {
+		if requiresVerifiedChannel(filters) {
 			return nil
 		}
 		return abilities
@@ -213,9 +213,9 @@ func filterAbilitiesByConstraints(abilities []Ability, modelName string, filters
 	return filtered
 }
 
-func identityFilterRequiresKey(filters []dto.ChannelFilter) bool {
+func requiresVerifiedChannel(filters []dto.ChannelFilter) bool {
 	for _, filter := range filters {
-		if filter.Kind == dto.FilterTaskPluginIdentity && filter.TaskPluginKey != "" {
+		if filter.Kind == dto.FilterPersonalAuthorization || (filter.Kind == dto.FilterTaskPluginIdentity && filter.TaskPluginKey != "") {
 			return true
 		}
 	}

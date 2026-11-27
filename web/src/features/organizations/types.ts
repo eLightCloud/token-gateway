@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { HistoricalAmounts } from '@/components/billing/historical-billing'
+
 export type OrganizationRole = 'admin' | 'member'
 export const ORGANIZATION_STATUS_ENABLED = 1
 export const ORGANIZATION_STATUS_DISABLED = 2
@@ -63,6 +65,7 @@ export interface OrganizationSelf {
 }
 
 export interface OrganizationSummary {
+  historical_amounts?: HistoricalAmounts
   total_quota: number
   request_count: number
   prompt_tokens: number

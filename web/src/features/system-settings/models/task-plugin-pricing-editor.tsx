@@ -28,7 +28,10 @@ import { useTranslation } from 'react-i18next'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import type { ModelPricingPluginVariant } from '@/features/model-pricing/api'
+import type {
+  ModelPricingExchangePreview,
+  ModelPricingPluginVariant,
+} from '@/features/model-pricing/api'
 import type { PricingCurrency } from '@/features/model-pricing/currency'
 import {
   combineBillingExpr,
@@ -42,11 +45,13 @@ import {
 import { PluginIcon } from '@/features/task-plugins/components/plugin-icon'
 
 import { SettingsSwitchField } from '../components/settings-form-layout'
+import { BillingExchangePreview } from './billing-exchange-preview'
 import { TaskUsagePricingEditor } from './task-usage-pricing-editor'
 
 type TaskPluginPricingEditorProps = {
   variants: ModelPricingPluginVariant[]
   expressions: Record<string, string>
+  exchangePreviews?: Record<string, ModelPricingExchangePreview>
   onChange: Dispatch<SetStateAction<Record<string, string>>>
   modelExpression: string
   modelBillingMode?: 'ratio' | 'tiered_expr'
@@ -291,8 +296,12 @@ export function TaskPluginPricingEditor(props: TaskPluginPricingEditorProps) {
                 </AlertDescription>
               </Alert>
             )}
+            {props.exchangePreviews?.[key] && (
+              <BillingExchangePreview preview={props.exchangePreviews[key]} />
+            )}
             {separate ? (
               <TaskUsagePricingEditor
+                exchangeRate={props.exchangePreviews?.[key]?.rate}
                 currency={props.currency}
                 billingExpr={split.billingExpr}
                 requestRuleExpr={split.requestRuleExpr}

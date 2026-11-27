@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { convertCNY, scaleFixedUSD, validateCNYConversion } from './currency'
 import { compileBillingExpression } from './parser'
 import {
   BillingExpressionError,
@@ -422,11 +423,20 @@ class BillingRuntime {
   private call(node: Extract<ExpressionNode, { kind: 'call' }>): RuntimeValue {
     const args = node.args
     switch (node.name) {
+      case 'cny_to_usd':
+        return {
+          value: convertCNY(
+            this.numeric(args[0]).value,
+            this.context.cnyExchangeRate ?? 0,
+            node.start
+          ),
+        }
       case 'fixed': {
         const amount = this.numeric(args[0]).value
+        const scaled = scaleFixedUSD(amount, node.start)
         this.billingUnit = 'request'
         this.fixedPrice = amount
-        return { value: amount * 1_000_000 }
+        return { value: scaled }
       }
       case 'tier': {
         const name = this.string(args[0])
@@ -545,6 +555,9 @@ export function evaluateBillingExpression(
       if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
         throw new BillingExpressionError({ code: 'number', detail: name })
       }
+    }
+    if (compiled.functions.has('cny_to_usd')) {
+      validateCNYConversion(compiled.ast, context.cnyExchangeRate ?? 0)
     }
     const runtime = new BillingRuntime(compiled, context)
     const result = runtime.evaluate(compiled.ast).value

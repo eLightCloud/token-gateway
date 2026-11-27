@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"encoding/csv"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -150,9 +151,52 @@ func TestWriteTokenBillCSVExportsDisplayAmountAndRawSignedQuota(t *testing.T) {
 		"计费额度（退款为负）",
 		"币种",
 		"原始计费额度（quota，退款为负）",
+		"历史汇率（1 USD 对应 CNY）",
+		"历史计费金额（CNY，退款为负）",
+		HistoricalBillAmountSourceColumn,
 	}, records[0][15:])
 	assert.Equal(t, "req-refund", records[1][2])
-	assert.Equal(t, []string{"-0.0001700000", "USD", "-85"}, records[1][15:])
+	assert.Equal(t, []string{"-0.0001700000", "USD", "-85", "", "", "按导出时的显示配置折算"}, records[1][15:])
 	assert.Equal(t, "req-consume", records[2][2])
-	assert.Equal(t, []string{"0.3926560000", "USD", "196328"}, records[2][15:])
+	assert.Equal(t, []string{"0.3926560000", "USD", "196328", "", "", "按导出时的显示配置折算"}, records[2][15:])
+}
+
+func TestTokenBillCSVRetainsHistoricalRateAcrossRateChanges(t *testing.T) {
+	previous := *operation_setting.GetGeneralSetting()
+	previousRate, previousScale := operation_setting.USDExchangeRate, common.QuotaPerUnit
+	t.Cleanup(func() {
+		*operation_setting.GetGeneralSetting() = previous
+		operation_setting.USDExchangeRate, common.QuotaPerUnit = previousRate, previousScale
+		require.NoError(t, model.LOG_DB.Where("1 = 1").Delete(&model.Log{}).Error)
+	})
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeCNY
+	common.QuotaPerUnit = 500_000
+	require.NoError(t, model.LOG_DB.Where("1 = 1").Delete(&model.Log{}).Error)
+	require.NoError(t, model.LOG_DB.Create(&[]model.Log{
+		{CreatedAt: 110, Type: model.LogTypeConsume, Quota: 50_000, RequestId: "cny-old", Other: `{"money_snapshot":{"exchange_rate":"7.3","quota_per_unit":"500000","amount":"0.73000000"}}`},
+		{CreatedAt: 120, Type: model.LogTypeRefund, Quota: 50_000, RequestId: "cny-refund", Other: `{"money_snapshot":{"exchange_rate":"8","quota_per_unit":"500000","amount":"-0.80000000"}}`},
+		{CreatedAt: 130, Type: model.LogTypeConsume, Quota: 500_000, RequestId: "no-rate"},
+	}).Error)
+
+	for _, rate := range []float64{8, 9} {
+		operation_setting.USDExchangeRate = rate
+		formatter, err := NewBillingExportAmountFormatter(10)
+		require.NoError(t, err)
+		var buffer bytes.Buffer
+		filters := model.TokenBillFilters{
+			StartTimestamp: 100, EndTimestamp: 200, Perspective: model.TokenBillPerspectiveCustomer, BillType: model.TokenBillTypeAll,
+		}
+		summary, err := model.GetTokenBillSummary(filters)
+		require.NoError(t, err)
+		assert.Equal(t, "-0.07", summary.HistoricalAmounts.NetCNY().String())
+		assert.EqualValues(t, 2, summary.HistoricalAmounts.Recorded)
+		assert.EqualValues(t, 1, summary.HistoricalAmounts.Missing)
+		require.NoError(t, WriteTokenBillCSV(csv.NewWriter(&buffer), filters, formatter))
+		records, err := csv.NewReader(strings.NewReader(buffer.String())).ReadAll()
+		require.NoError(t, err)
+		require.Len(t, records, 4)
+		assert.Equal(t, []string{fmt.Sprintf("%.10f", rate), "CNY", "500000", "", "", "按导出时的显示配置折算"}, records[1][15:])
+		assert.Equal(t, []string{"-0.8000000000", "CNY", "-50000", "8", "-0.8000000000", "历史快照"}, records[2][15:])
+		assert.Equal(t, []string{"0.7300000000", "CNY", "50000", "7.3", "0.7300000000", "历史快照"}, records[3][15:])
+	}
 }

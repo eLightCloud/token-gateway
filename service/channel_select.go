@@ -328,6 +328,11 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			return nil, "", pinnedChannelUnavailable(pin, http.StatusForbidden, i18n.MsgDistributorChannelDisabled)
 		}
 		if ok, kind := model.ChannelSatisfiesFilters(channel, modelName, constraints.Filters); !ok {
+			if kind == dto.FilterPersonalAuthorization {
+				if scopeErr := pricingScopeSelectionError(c, modelName, channel); scopeErr != nil {
+					return nil, "", scopeErr
+				}
+			}
 			return nil, "", &ChannelSelectError{
 				StatusCode: http.StatusBadRequest, Code: types.ErrorCode(kind), MessageID: i18n.MsgDistributorNoAvailableChannel,
 				Params:     map[string]any{"Group": common.GetContextKeyString(c, constant.ContextKeyUsingGroup), "Model": modelName},
@@ -391,6 +396,9 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 			}
 		}
 		if channel == nil {
+			if scopeErr := pricingScopeSelectionError(c, modelName, nil); scopeErr != nil {
+				return nil, selectGroup, scopeErr
+			}
 			return nil, selectGroup, &ChannelSelectError{
 				StatusCode: http.StatusServiceUnavailable, Code: types.ErrorCodeModelNotFound, MessageID: i18n.MsgDistributorNoAvailableChannel,
 				Params: map[string]any{"Group": usingGroup, "Model": modelName}, NoAvailableChannel: true,

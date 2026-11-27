@@ -10,7 +10,6 @@ import (
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/expr-lang/expr"
-	"github.com/expr-lang/expr/vm"
 )
 
 // RunExpr compiles (with cache) and executes an expression string.
@@ -32,7 +31,7 @@ func RunExprWithRequest(exprStr string, params TokenParams, request RequestInput
 	if err != nil {
 		return 0, TraceResult{}, err
 	}
-	return runProgram(entry.prog, entry.requestRules, entry.usedVars, params, request)
+	return runProgram(entry, params, request)
 }
 
 // RunExprByHash is like RunExpr but accepts a pre-computed hash for the cache
@@ -47,17 +46,21 @@ func RunExprByHashWithRequest(exprStr, hash string, params TokenParams, request 
 	if err != nil {
 		return 0, TraceResult{}, err
 	}
-	return runProgram(entry.prog, entry.requestRules, entry.usedVars, params, request)
+	return runProgram(entry, params, request)
 }
 
-func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, usedVars map[string]bool, params TokenParams, request RequestInput) (float64, TraceResult, error) {
+func runProgram(entry *cachedEntry, params TokenParams, request RequestInput) (float64, TraceResult, error) {
 	trace := TraceResult{
 		BillingUnit:  BillingUnitToken,
-		RequestRules: append([]RequestRuleTrace(nil), requestRules...),
+		RequestRules: append([]RequestRuleTrace(nil), entry.requestRules...),
+	}
+	conversion := currencyConversion{rate: request.CNYExchangeRate}
+	if err := validateCNYPrices(entry.cnyPrices, conversion.rate); err != nil {
+		return 0, trace, err
 	}
 	headers := normalizeHeaders(request.Headers)
 	imageCount := 1
-	if usedVars["image_count"] {
+	if entry.usedVars["image_count"] {
 		if request.ImageCount != nil {
 			imageCount = *request.ImageCount
 		}
@@ -89,7 +92,11 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, usedVars map[
 		"fixed": func(amount float64) float64 {
 			trace.BillingUnit = BillingUnitRequest
 			trace.FixedPrice = &amount
-			return amount * 1_000_000
+			scaled := amount * 1_000_000
+			if !validFixedUSDPrice(amount) {
+				conversion.err = fmt.Errorf("fixed USD price must have a finite scaled value")
+			}
+			return scaled
 		},
 		requestRuleTraceFunction: func(ruleIndex int, matched bool, multiplier float64) float64 {
 			if matched && ruleIndex >= 0 && ruleIndex < len(trace.RequestRules) {
@@ -147,7 +154,13 @@ func runProgram(prog *vm.Program, requestRules []RequestRuleTrace, usedVars map[
 		"floor":   math.Floor,
 	}
 
-	out, err := expr.Run(prog, env)
+	if len(entry.cnyPrices) > 0 {
+		env[cnyToUSD] = conversion.toUSD
+	}
+	out, err := expr.Run(entry.prog, env)
+	if conversion.err != nil {
+		return 0, trace, conversion.err
+	}
 	if err != nil {
 		return 0, trace, fmt.Errorf("expr run error: %w", err)
 	}

@@ -319,7 +319,7 @@ func PersonalRatioRanges(userID int, groups map[string]string) ([]PersonalRatioR
 			ratio := ResellerRatioScale
 			if snapshot != nil {
 				price, ok := snapshot.Channels[ability.ChannelId]
-				if !ok && snapshot.AgentUserID > 0 {
+				if !ok && snapshot.RestrictsChannels() {
 					continue
 				}
 				if ok {

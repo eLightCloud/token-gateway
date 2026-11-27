@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatBillingAmountFromQuota } from '@/lib/format'
+import { formatNumber } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { BILL_DIMENSIONS } from '../constants'
@@ -242,7 +242,7 @@ export function BillGroupsTable(props: {
                     )}
                   </TableCell>
                   <TableCell className='text-right font-medium tabular-nums'>
-                    {formatBillingAmountFromQuota(row.quota)}
+                    {formatNumber(row.quota)}
                   </TableCell>
                   <TableCell className='text-right'>
                     <Button

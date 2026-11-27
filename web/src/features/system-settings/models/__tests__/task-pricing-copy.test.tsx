@@ -351,3 +351,48 @@ it.each(['image', 'video'] as const)(
     }
   }
 )
+
+it('keeps a CNY price in expression mode so a visual switch cannot overwrite it', async () => {
+  const expression = 'v2:tier("request", cny_to_usd(0.73))'
+  const onBillingExprChange = vi.fn()
+  render(
+    <TaskUsagePricingEditor
+      billingExpr={expression}
+      requestRuleExpr=''
+      usageSchema={{}}
+      onBillingExprChange={onBillingExprChange}
+      onRequestRuleExprChange={vi.fn()}
+    />
+  )
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('combobox', { name: 'Editor mode' }))
+  expect(screen.getByRole('option', { name: 'Visual editor' })).toHaveAttribute(
+    'aria-disabled',
+    'true'
+  )
+  await user.keyboard('{Escape}')
+  expect(
+    screen.getByRole('textbox', { name: 'Billing expression' })
+  ).toHaveValue(expression)
+  expect(onBillingExprChange).not.toHaveBeenCalled()
+})
+
+it('keeps the v2 expression version when editing a USD task price', async () => {
+  const user = userEvent.setup()
+  const onChange = vi.fn()
+  render(
+    <TaskPricingDraft
+      expression={`v2:${retiredBranchExpression}`}
+      onChange={onChange}
+    />
+  )
+
+  const price = screen.getByRole('textbox', {
+    name: 'Seconds price: mode: std',
+  })
+  await user.clear(price)
+  await user.type(price, '2')
+
+  expect(onChange.mock.lastCall?.[0]).toMatch(/^v2:/)
+  expect(onChange.mock.lastCall?.[0]).toContain('u("seconds") * 2')
+})

@@ -9,7 +9,7 @@ import (
 )
 
 func registerRealtimePricingRoutes(api *gin.RouterGroup) {
-	group := api.Group("/realtime-pricing", middleware.UserAuth(), middleware.DisableCache(), middleware.ResellerWriteRateLimit())
+	group := api.Group("/realtime-pricing", middleware.UserAuth(), middleware.DisableCache())
 	// Subject authorization is rechecked by the model for every resource.
 	group.Use(func(c *gin.Context) {
 		if c.GetInt("role") >= common.RoleAdminUser {
@@ -17,7 +17,7 @@ func registerRealtimePricingRoutes(api *gin.RouterGroup) {
 		}
 	})
 	group.GET("/:subject/:id", controller.GetRealtimePricing)
-	group.PUT("/:subject/:id", controller.SaveRealtimePricing)
+	group.PUT("/:subject/:id", middleware.ResellerWriteRateLimit(), controller.SaveRealtimePricing)
 	group.POST("/:subject/:id/preview", controller.PreviewRealtimePricing)
 	api.POST("/realtime-pricing-migration", middleware.RootAuth(), middleware.DisableCache(), middleware.ResellerWriteRateLimit(), controller.ChangeRealtimePricingMigration)
 }

@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -61,26 +63,33 @@ func loadPersonalPricings(userID int, modelNames []string, admission bool) (map[
 		if err := tx.First(&head, "user_id = ?", userID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		if user.ResellerKind == "" {
+			for _, name := range modelNames {
+				routingName := ratio_setting.RoutingMatchModelName(name)
+				if routingName == name || routingName == "" {
+					continue
+				}
+				key := fmt.Sprintf("%x", sha256.Sum256([]byte(routingName)))
+				if existing, ok := models[key]; ok {
+					if existing != routingName {
+						return ErrResellerDataCorrupt
+					}
+					continue
+				}
+				models[key] = routingName
+				keys = append(keys, key)
+			}
+		}
 		var own []ResellerModelConfig
 		if err := tx.Where("user_id = ? AND model_key IN ?", userID, keys).Find(&own).Error; err != nil {
 			return err
 		}
-		for _, name := range models {
+		for _, name := range modelNames {
 			snapshots[name] = &types.PersonalPricingSnapshot{UserID: userID, Model: name, Revision: head.Revision, Channels: map[int]types.PersonalChannelPrice{}}
 		}
 		if user.ResellerKind == "" {
-			for _, row := range own {
-				if models[row.ModelKey] != row.Model || row.Ratio < 1 || row.Ratio > maxResellerConsumptionRatio {
-					return ErrResellerDataCorrupt
-				}
-				if row.Ratio != ResellerRatioScale {
-					snapshots[row.Model].Channels[row.ChannelID] = types.PersonalChannelPrice{CustomerRatio: row.Ratio, AgentRatio: ResellerRatioScale}
-				}
-			}
-			for name, snapshot := range snapshots {
-				if len(snapshot.Channels) == 0 {
-					snapshots[name] = nil
-				}
+			if err := applyLegacyUserPricing(snapshots, own, models); err != nil {
+				return err
 			}
 			return applyRealtimePricingTx(tx, user, snapshots)
 		}
@@ -119,13 +128,17 @@ func loadPersonalPricings(userID int, modelNames []string, admission bool) (map[
 			snapshot.AgentUserID, snapshot.AgentRevision = identity.AgentUserID, head.Revision
 		}
 		var grants []ResellerModelConfig
-		if err := tx.Where("user_id = ? AND model_key IN ? AND authorized = ?", identity.AgentUserID, keys, true).Find(&grants).Error; err != nil {
+		if err := tx.Where("user_id = ? AND model_key IN ?", identity.AgentUserID, keys).Find(&grants).Error; err != nil {
 			return err
 		}
+		procurementScope := configuredResellerChannels(grants, true)
 		parentRows := map[string]map[int]ResellerModelConfig{}
 		for _, row := range grants {
-			if models[row.ModelKey] != row.Model {
+			if models[row.ModelKey] != row.Model || row.Ratio < 1 || row.Ratio > maxResellerProcurementRatio {
 				return ErrResellerDataCorrupt
+			}
+			if !row.Authorized {
+				continue
 			}
 			if parentRows[row.Model] == nil {
 				parentRows[row.Model] = map[int]ResellerModelConfig{}
@@ -137,15 +150,30 @@ func loadPersonalPricings(userID int, modelNames []string, admission bool) (map[
 				return ErrResellerDataCorrupt
 			}
 			grant, ok := parentRows[row.Model][row.ChannelID]
-			if !row.Authorized || !ok {
+			scope := procurementScope[row.Model]
+			if !row.Authorized || !ok || (len(scope) > 0 && !scope[row.ChannelID]) {
 				continue
 			}
-			if row.Ratio < 1 || row.Ratio > maxResellerConsumptionRatio || grant.Ratio < 1 || grant.Ratio > maxResellerProcurementRatio {
+			if row.Ratio < 1 || row.Ratio > maxResellerConsumptionRatio {
 				return ErrResellerDataCorrupt
 			}
 			snapshots[row.Model].Channels[row.ChannelID] = types.PersonalChannelPrice{CustomerRatio: row.Ratio, AgentRatio: grant.Ratio}
 		}
-		return applyRealtimePricingTx(tx, user, snapshots)
+		if err := applyRealtimePricingTx(tx, user, snapshots); err != nil {
+			return err
+		}
+		for name, scope := range configuredResellerChannels(own, false) {
+			snapshot := snapshots[name]
+			if snapshot.Realtime != nil {
+				continue
+			}
+			for id := range snapshot.Channels {
+				if !scope[id] {
+					delete(snapshot.Channels, id)
+				}
+			}
+		}
+		return nil
 	}, options)
 	return snapshots, err
 }

@@ -194,6 +194,7 @@ type RelayInfo struct {
 	// and again before settlement. Non-nil only when billing mode is "tiered_expr".
 	TieredBillingSnapshot *billingexpr.BillingSnapshot
 	BillingRequestInput   *billingexpr.RequestInput
+	CNYExchangeRate       float64 // Request-scoped across task attempts.
 	BillingImageCount     *int
 	// ImageRequestCount is the effective quantity sent on the current attempt;
 	// ImageQuotaBeforeGroup is the frozen legacy estimate before request ratios.

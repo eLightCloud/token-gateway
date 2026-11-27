@@ -655,7 +655,7 @@ try {
     const count = upstreamCalls.length;
     const hidden = await consume("customer", "synthetic", false, "hidden-demo");
     assert.equal(hidden.status, 503, hidden.text);
-    assert.equal(JSON.parse(hidden.text).error.code, "model_not_found");
+    assert.equal(JSON.parse(hidden.text).error.code, "pricing_channel_unavailable");
     assert.equal(upstreamCalls.length, count);
     const models = await api("customer", "/api/user/models");
     assert.equal(models.status, 200, models.text);

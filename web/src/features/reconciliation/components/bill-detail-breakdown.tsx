@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatBillingAmountFromQuota } from '@/lib/format'
+import { formatNumber } from '@/lib/format'
 
 import type { BillDimension, BillGroupRow, BillGroupsPage } from '../types'
 
@@ -108,7 +108,7 @@ export function BillDetailBreakdown(props: {
                 )}
               </TableCell>
               <TableCell className='text-right font-medium tabular-nums'>
-                {formatBillingAmountFromQuota(row.quota)}
+                {formatNumber(row.quota)}
               </TableCell>
             </TableRow>
           ))}

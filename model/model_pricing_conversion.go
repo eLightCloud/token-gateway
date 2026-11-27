@@ -29,9 +29,11 @@ type ModelPricingConversion struct {
 // ModelPricingDescription is shared by previews, conversions and snapshot
 // entries. It describes effective prices without adding persisted settings.
 type ModelPricingDescription struct {
-	Effective      PricingValues        `json:"effective,omitempty"`
-	CacheWriteMode CacheWriteMode       `json:"cache_write_mode,omitempty"`
-	BillingDetails LegacyBillingDetails `json:"billing_details"`
+	PluginExchangePreviews map[string]*ModelPricingExchangePreview `json:"plugin_exchange_previews,omitempty"`
+	ExchangePreview        *ModelPricingExchangePreview            `json:"exchange_preview,omitempty"`
+	Effective              PricingValues                           `json:"effective,omitempty"`
+	CacheWriteMode         CacheWriteMode                          `json:"cache_write_mode,omitempty"`
+	BillingDetails         LegacyBillingDetails                    `json:"billing_details"`
 }
 
 func legacyInputPricePerMillion(ratio float64) (decimal.Decimal, error) {

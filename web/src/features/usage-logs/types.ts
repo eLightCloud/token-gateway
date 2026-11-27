@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 /**
  * Type definitions for usage logs
  */
+import type { BillMoneySnapshot } from '@/components/billing/historical-bill-amount'
 import type { RequestRuleTrace } from '@/features/pricing/lib/billing-expr'
 import type { PolicyEvent } from '@/features/system-settings/request-policies/api'
 import type { LocalizedTextValue } from '@/lib/localized-text'
@@ -310,6 +311,7 @@ export interface LogOtherData {
   billing_mode?: string
   billing_unit?: 'token' | 'request'
   fixed_price?: number
+  money_snapshot?: BillMoneySnapshot
   image_count?: number
   expr_b64?: string
   matched_tier?: string

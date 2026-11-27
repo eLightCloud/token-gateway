@@ -1393,14 +1393,15 @@ func TestResellerFinalContracts(t *testing.T) {
 
 func TestRealtimePricingManagementAPI(t *testing.T) {
 	db := setupManageUserTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.Organization{}, &model.OrganizationMember{}, &model.ResellerIdentity{}, &model.ResellerAccount{}, &model.Channel{}))
+	require.NoError(t, db.AutoMigrate(&model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.Organization{}, &model.OrganizationMember{}, &model.ResellerIdentity{}, &model.ResellerAccount{}, &model.Channel{}, &model.Ability{}))
 	root := createQuotaTestOperator(t, db, common.RoleRootUser)
 	admin := model.User{Username: "rt-api-admin", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, AffCode: "rt-api-admin"}
 	require.NoError(t, db.Create(&admin).Error)
 	org := model.Organization{Name: "rt-api-org", Status: model.OrganizationStatusEnabled}
 	require.NoError(t, db.Create(&org).Error)
-	channel := model.Channel{Name: "rt-api-channel", Models: "A", Status: common.ChannelStatusEnabled, Key: "synthetic-private-channel-key"}
+	channel := model.Channel{Name: "rt-api-channel", Models: "A", Group: "default", Status: common.ChannelStatusEnabled, Key: "synthetic-private-channel-key"}
 	require.NoError(t, db.Create(&channel).Error)
+	require.NoError(t, channel.AddAbilities(db))
 	require.NoError(t, db.Create(&model.RealtimePricingState{ID: 1, Phase: "active"}).Error)
 	operator := root.Id
 	engine := gin.New()

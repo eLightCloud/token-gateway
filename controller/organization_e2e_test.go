@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -1305,6 +1306,13 @@ func TestOrganizationE2EInvoiceUsesConfirmedConsumption(t *testing.T) {
 func TestOrganizationE2EUsageSnapshotScopesAndChannelProjection(t *testing.T) {
 	fixture, router := setupOrganizationE2E(t)
 	const billingWindow = "start_timestamp=1782864000&end_timestamp=1783511999"
+	var originalLog model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ? AND created_at >= ? AND created_at < ?", 1001, model.LogTypeConsume, 1782864000, 1783511999).First(&originalLog).Error)
+	money, err := (model.BillingMoneySnapshot{ExchangeRate: "7.3", QuotaPerUnit: "500000"}).WithQuota(int64(originalLog.Quota))
+	require.NoError(t, err)
+	other := model.NewLogOther()
+	other.SetPublic("money_snapshot", money)
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("id = ?", originalLog.Id).Update("other", other.JSONString()).Error)
 	buildRegisteredUsageSnapshots := func() {
 		for {
 			snapshot, owner, err := model.ClaimNextOrganizationUsageBuild(context.Background(), 0)
@@ -1450,6 +1458,13 @@ func TestOrganizationE2EUsageSnapshotScopesAndChannelProjection(t *testing.T) {
 	exportResponse := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, exportURL, nil)
 	require.Equal(t, "text/csv; charset=utf-8", exportResponse.Header().Get("Content-Type"))
 	assert.Contains(t, exportResponse.Body.String(), "消费额度(quota),420")
+	assert.Contains(t, exportResponse.Body.String(), "已记录金额小计（CNY）,"+money.Amount+"00")
+	assert.Contains(t, exportResponse.Body.String(), "缺少历史汇率的明细数,2")
+	previousRate := operation_setting.USDExchangeRate
+	t.Cleanup(func() { operation_setting.USDExchangeRate = previousRate })
+	operation_setting.USDExchangeRate = 9
+	afterRateChange := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, exportURL, nil)
+	assert.Equal(t, exportResponse.Body.String(), afterRateChange.Body.String())
 	wrongGeneration := performOrganizationE2ERequest(t, router, fixture, 1001, http.MethodGet, exportURL+"0", nil)
 	assert.False(t, decodeOrganizationE2EResponse(t, wrongGeneration).Success)
 	wrongScope := performOrganizationE2ERequest(t, router, fixture, 1002, http.MethodGet, exportURL, nil)

@@ -41,6 +41,7 @@ type OrganizationUsageTrendPoint struct {
 // snapshot. Field names match the legacy per-endpoint responses so the
 // frontend keeps its rendering components.
 type OrganizationUsageSummaryPayload struct {
+	HistoricalAmounts  *HistoricalBillTotals          `json:"historical_amounts,omitempty"`
 	TotalQuota         int64                          `json:"total_quota"`
 	RequestCount       int64                          `json:"request_count"`
 	PromptTokens       int64                          `json:"prompt_tokens"`

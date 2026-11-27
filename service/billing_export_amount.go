@@ -27,7 +27,7 @@ func NewBillingExportAmountFormatter(scale int32) (BillingExportAmountFormatter,
 	switch operation_setting.GetQuotaDisplayType() {
 	case operation_setting.QuotaDisplayTypeCNY:
 		currency = "CNY"
-		rate = operation_setting.USDExchangeRate
+		rate = operation_setting.CurrentUSDExchangeRate()
 	case operation_setting.QuotaDisplayTypeCustom:
 		symbol := strings.TrimSpace(operation_setting.GetGeneralSetting().CustomCurrencySymbol)
 		if symbol == "" {

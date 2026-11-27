@@ -51,13 +51,17 @@ export type ConfigItem = {
   channel_id: number
   authorized: boolean
   ratio: string
+  ratio_configured?: boolean
 }
 export type Config = { revision: number; items: ConfigItem[] }
 export type ResellerOwnAccount = {
   user: ResellerUser
   procurement_ratios: ConfigItem[]
 }
-export type ConfigSetting = Pick<ConfigItem, 'authorized' | 'ratio'>
+export type ConfigSetting = Pick<
+  ConfigItem,
+  'authorized' | 'ratio' | 'ratio_configured'
+>
 export type ConfigChangePage = {
   items: {
     revision: number

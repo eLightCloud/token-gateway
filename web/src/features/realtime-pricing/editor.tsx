@@ -53,6 +53,8 @@ import {
   type PricingRule,
   type PricingWorkspace,
 } from './api'
+import { GroupPricingPreview } from './group-pricing-preview'
+import { unavailablePricingScopes } from './group-pricing-status'
 import { PricingHistory } from './history'
 import { PersonalPricingModelPicker } from './personal-rule-editor'
 import { PricingRuleDialog } from './rule-dialog'
@@ -159,6 +161,21 @@ function PricingDraft(props: {
       if (!personal) return refresh
     },
   })
+  const [pendingRules, setPendingRules] = useState<PricingRule[] | null>(null)
+  const savePreview = useMutation({
+    mutationFn: async (rules: PricingRule[]) => ({
+      rules,
+      preview: await previewPricing(props.subject, props.subjectID, rules),
+    }),
+    meta: { errorToast: false },
+    onSuccess: ({ rules, preview }) => {
+      if (unavailablePricingScopes(preview).length) {
+        setPendingRules(rules)
+      } else {
+        save.mutate(rules)
+      }
+    },
+  })
   const migration = useMutation({
     mutationFn: (action: string) => migratePricing(action),
     meta: { errorToast: false },
@@ -248,13 +265,13 @@ function PricingDraft(props: {
       <h3 className='font-medium'>{t('Realtime model pricing')}</h3>
       <p className='text-muted-foreground text-sm'>
         {t(
-          'One ratio per model. Selected channels define the discount scope. Routing is unchanged.'
+          'A model with an enabled pricing rule can only use the channels selected in that rule.'
         )}
         {props.subject === 'user' && (
           <>
             {' '}
             {t(
-              'Enabled personal rules take priority on selected channels. Disabled rules keep their settings and inherit pricing.'
+              'An enabled personal rule sets the channel scope and price for the whole model. Disabling it restores inherited pricing and routing.'
             )}
           </>
         )}
@@ -389,24 +406,53 @@ function PricingDraft(props: {
         desc={
           props.subject === 'user'
             ? t(
-                'Removing this rule restores organization or system pricing on its channels. Changes take effect after saving.'
+                'After saving, this model inherits the organization rule if one exists. Otherwise it uses default pricing and routing.'
               )
-            : t('The organization default discount is removed after saving.')
+            : t(
+                'After saving, members without a personal rule for this model use default pricing and routing.'
+              )
         }
         handleConfirm={() => {
           setItems((old) => old.filter((r) => r.model !== deleting))
           setDeleting(null)
         }}
       />
+      <ConfirmDialog
+        open={pendingRules !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRules(null)
+        }}
+        title={t('Confirm changes')}
+        desc={t(
+          'No eligible channels for {{models}}. You can still save these rules.',
+          {
+            models: unavailablePricingScopes(savePreview.data?.preview).join(
+              ', '
+            ),
+          }
+        )}
+        handleConfirm={() => {
+          if (pendingRules) save.mutate(pendingRules)
+          setPendingRules(null)
+        }}
+      />
+      {savePreview.isError && (
+        <ResellerQueryStatus
+          pending={false}
+          error
+          retry={() => savePreview.mutate(draft)}
+        />
+      )}
       <Button
         disabled={
           blocked ||
           !dirty ||
           save.isPending ||
+          savePreview.isPending ||
           editing !== null ||
           (personal && !personalRule.isValid)
         }
-        onClick={() => save.mutate(draft)}
+        onClick={() => savePreview.mutate(draft)}
       >
         {save.isPending ? t('Saving...') : t('Save changes')}
       </Button>
@@ -490,6 +536,12 @@ function PricingDraft(props: {
                     cell: (r) => `${formatNumber(Number(r.ratio), locale)}×`,
                   },
                   {
+                    id: 'availability',
+                    header: t('Effective status'),
+                    cell: (r) =>
+                      r.unavailable ? t('Unavailable') : t('Effective'),
+                  },
+                  {
                     id: 'source',
                     header: t('Pricing source'),
                     cell: (r) => {
@@ -498,6 +550,7 @@ function PricingDraft(props: {
                   },
                 ]}
               />
+              <GroupPricingPreview groups={preview.data.group_status} />
             </>
           )}
         </section>

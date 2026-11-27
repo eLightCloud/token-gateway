@@ -59,14 +59,15 @@ type ResellerQuotaAdjustment struct {
 // Digest keys keep composite indexes within MySQL 5.7 utf8mb4 limits.
 // Readers must also compare the full original model name before using a row.
 type ResellerModelConfig struct {
-	ID         int64  `gorm:"primaryKey"`
-	UserID     int    `gorm:"uniqueIndex:reseller_config_key"`
-	ModelKey   string `gorm:"size:64;uniqueIndex:reseller_config_key"`
-	Model      string `gorm:"type:text;not null"`
-	ChannelID  int    `gorm:"uniqueIndex:reseller_config_key"`
-	Authorized bool
-	Ratio      int64 `gorm:"not null"` // millionths, bounded by the subject's pricing rule
-	Revision   int64
+	ID                             int64  `gorm:"primaryKey"`
+	UserID                         int    `gorm:"uniqueIndex:reseller_config_key"`
+	ModelKey                       string `gorm:"size:64;uniqueIndex:reseller_config_key"`
+	Model                          string `gorm:"type:text;not null"`
+	ChannelID                      int    `gorm:"uniqueIndex:reseller_config_key"`
+	Authorized                     bool
+	Ratio                          int64 `gorm:"not null"` // millionths, bounded by the subject's pricing rule
+	ProcurementBaseRatioConfigured *bool // NULL on legacy rows
+	Revision                       int64
 }
 
 type ResellerConfigRevision struct {

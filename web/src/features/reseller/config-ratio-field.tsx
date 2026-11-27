@@ -23,11 +23,13 @@ import { Field, FieldError } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 
 import type { ConfigItem } from './api'
+import { hasProcurementRatio } from './lib/procurement-grant'
 
 export function ResellerRatioField(props: {
   item: ConfigItem
   invalid: boolean
   maxRatio: number
+  procurement?: boolean
   disabled: boolean
   onChange: (value: string) => void
 }) {
@@ -46,7 +48,12 @@ export function ResellerRatioField(props: {
         aria-describedby={invalid ? errorID : undefined}
         className='max-w-28'
         inputMode='decimal'
-        value={props.item.ratio}
+        value={
+          props.procurement && !hasProcurementRatio(props.item)
+            ? ''
+            : props.item.ratio
+        }
+        placeholder={props.procurement ? t('Default (1×)') : undefined}
         disabled={props.disabled}
         onChange={(event) => props.onChange(event.target.value)}
       />

@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -133,6 +134,15 @@ func PreviewRealtimePricing(c *gin.Context) {
 		resellerResponse(c, nil, model.ErrResellerInvalid)
 		return
 	}
-	result, err := model.PreviewRealtimePricing(c.GetInt("id"), c.Param("subject"), id, input.Items)
+	result, err := model.PreviewRealtimePricing(c.GetInt("id"), c.Param("subject"), id, input.Items, func(group string) []string {
+		usable := service.GetUserUsableGroups(group)
+		groups := make([]string, 0, len(usable))
+		for group := range usable {
+			if group != "auto" {
+				groups = append(groups, group)
+			}
+		}
+		return groups
+	})
 	resellerResponse(c, result, err)
 }

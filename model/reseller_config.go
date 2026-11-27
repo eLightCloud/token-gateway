@@ -41,10 +41,11 @@ type ResellerConfigHead struct {
 	Revision int64 `json:"revision"`
 }
 type ResellerConfigItem struct {
-	Model      string `json:"model"`
-	ChannelID  int    `json:"channel_id"`
-	Authorized bool   `json:"authorized"`
-	Ratio      string `json:"ratio"`
+	Model           string `json:"model"`
+	ChannelID       int    `json:"channel_id"`
+	Authorized      bool   `json:"authorized"`
+	Ratio           string `json:"ratio"`
+	RatioConfigured *bool  `json:"ratio_configured,omitempty"`
 }
 type ResellerConfigInput struct {
 	ExpectedRevision int64                `json:"expected_revision"`
@@ -124,7 +125,7 @@ func readResellerConfig(tx *gorm.DB, userID int, maxRatio int64) (*ResellerConfi
 		if row.ModelKey != fmt.Sprintf("%x", sha256.Sum256([]byte(row.Model))) || row.Ratio < 1 || row.Ratio > maxRatio {
 			return nil, ErrResellerDataCorrupt
 		}
-		view.Items = append(view.Items, ResellerConfigItem{Model: row.Model, ChannelID: row.ChannelID, Authorized: row.Authorized, Ratio: formatPersonalRatio(row.Ratio)})
+		view.Items = append(view.Items, ResellerConfigItem{Model: row.Model, ChannelID: row.ChannelID, Authorized: row.Authorized, Ratio: formatPersonalRatio(row.Ratio), RatioConfigured: row.ProcurementBaseRatioConfigured})
 	}
 	return view, nil
 }
@@ -182,10 +183,11 @@ func SaveResellerConfig(operatorID, userID int, admin bool, input ResellerConfig
 		seen := map[string]bool{}
 		normalized := make([]ResellerConfigItem, 0, len(input.Items))
 		for _, item := range input.Items {
-			if item.Ratio == "" {
-				item.Ratio = "1"
+			value := item.Ratio
+			if value == "" {
+				value = "1"
 			}
-			ratio, err := parseResellerRatio(item.Ratio, maxRatio)
+			ratio, err := parseResellerRatio(value, maxRatio)
 			if err != nil || item.Model == "" || len(item.Model) > 512 || item.ChannelID <= 0 {
 				return ErrResellerInvalid
 			}
@@ -195,12 +197,23 @@ func SaveResellerConfig(operatorID, userID int, admin bool, input ResellerConfig
 			}
 			seen[key] = true
 			prior, existed := old[key]
+			configured, err := procurementBaseRatioConfigured(item, ratio, prior.hasConfiguredProcurementBaseRatio(), maxRatio == maxResellerProcurementRatio)
+			if err != nil {
+				return err
+			}
+			item.RatioConfigured = nil
+			if configured {
+				item.RatioConfigured = &configured
+			}
 			if !admin && item.Authorized && !parent[key] && (!existed || !prior.Authorized || prior.Ratio != ratio) {
 				return ErrResellerForbidden
 			}
 			var channel Channel
 			if err := tx.First(&channel, item.ChannelID).Error; err != nil {
-				if !existed || item.Authorized != prior.Authorized || ratio != prior.Ratio {
+				if !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+				if !existed || !canRetainMissingResellerChannel(prior, item.Authorized, ratio, configured, maxRatio == maxResellerProcurementRatio) {
 					return ErrResellerInvalid
 				}
 			} else if !existed && !strings.Contains(","+channel.Models+",", ","+item.Model+",") {
@@ -208,7 +221,7 @@ func SaveResellerConfig(operatorID, userID int, admin bool, input ResellerConfig
 			}
 			item.Ratio = formatPersonalRatio(ratio)
 			normalized = append(normalized, item)
-			rows = append(rows, ResellerModelConfig{UserID: userID, ModelKey: fmt.Sprintf("%x", sha256.Sum256([]byte(item.Model))), Model: item.Model, ChannelID: item.ChannelID, Authorized: item.Authorized, Ratio: ratio, Revision: input.ExpectedRevision + 1})
+			rows = append(rows, ResellerModelConfig{UserID: userID, ModelKey: fmt.Sprintf("%x", sha256.Sum256([]byte(item.Model))), Model: item.Model, ChannelID: item.ChannelID, Authorized: item.Authorized, Ratio: ratio, ProcurementBaseRatioConfigured: item.RatioConfigured, Revision: input.ExpectedRevision + 1})
 		}
 		if err := tx.Where("user_id = ?", userID).Delete(&ResellerModelConfig{}).Error; err != nil {
 			return err

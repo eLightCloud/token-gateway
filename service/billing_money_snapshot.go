@@ -44,5 +44,12 @@ func requestMoneySnapshot(info *relaycommon.RelayInfo) (*model.BillingMoneySnaps
 	if session, ok := info.Billing.(*BillingSession); ok {
 		return session.moneySnapshot, nil
 	}
+	return relayMoneySnapshot(info)
+}
+
+func relayMoneySnapshot(info *relaycommon.RelayInfo) (*model.BillingMoneySnapshot, error) {
+	if snap := info.TieredBillingSnapshot; snap != nil && snap.CNYExchangeRate != 0 {
+		return model.BillingMoneySnapshotForPricing(snap.CNYExchangeRate, snap.QuotaPerUnit)
+	}
 	return model.CurrentBillingMoneySnapshot()
 }

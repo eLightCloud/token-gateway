@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/types"
 	"gorm.io/gorm"
 )
 
@@ -55,37 +54,25 @@ func RealtimePricingCandidates(tx *gorm.DB, operator int) ([]RealtimePricingCand
 	return result, nil
 }
 
-func resolveRealtimeChannel(personal, organization *RealtimePricingConfig, model string, channel int) types.PersonalChannelPrice {
-	for _, entry := range []struct {
-		config *RealtimePricingConfig
-		source string
-	}{{personal, "user"}, {organization, "organization"}} {
-		for _, item := range entry.config.Items {
-			if !item.Disabled && item.Model == model && slices.Contains(item.ChannelIDs, channel) {
-				ratio, _ := ParseRealtimePricingRatio(item.Ratio)
-				return types.PersonalChannelPrice{CustomerRatio: ratio, AgentRatio: ResellerRatioScale, Source: entry.source, Revision: entry.config.Revision}
-			}
-		}
-	}
-	return types.PersonalChannelPrice{CustomerRatio: ResellerRatioScale, AgentRatio: ResellerRatioScale, Source: "system"}
-}
-
 type RealtimePricingPreviewRow struct {
-	Model     string `json:"model"`
-	ChannelID int    `json:"channel_id"`
-	Ratio     string `json:"ratio"`
-	Source    string `json:"source"`
+	Model       string `json:"model"`
+	ChannelID   int    `json:"channel_id"`
+	Ratio       string `json:"ratio"`
+	Source      string `json:"source"`
+	Unavailable bool   `json:"unavailable,omitempty"`
 }
 type RealtimePricingPreview struct {
-	Rows                 []RealtimePricingPreviewRow `json:"rows"`
-	UserRevision         int64                       `json:"user_revision"`
-	OrganizationRevision int64                       `json:"organization_revision"`
-	OrganizationID       int                         `json:"organization_id"`
-	UserID               int                         `json:"user_id"`
-	GeneratedAt          int64                       `json:"generated_at"`
+	GroupStatus          []RealtimePricingGroupStatus `json:"group_status,omitempty"`
+	Rows                 []RealtimePricingPreviewRow  `json:"rows"`
+	UnavailableModels    []string                     `json:"unavailable_models,omitempty"`
+	UserRevision         int64                        `json:"user_revision"`
+	OrganizationRevision int64                        `json:"organization_revision"`
+	OrganizationID       int                          `json:"organization_id"`
+	UserID               int                          `json:"user_id"`
+	GeneratedAt          int64                        `json:"generated_at"`
 }
 
-func PreviewRealtimePricing(operator int, subject string, id int, items []RealtimePricingItem) (*RealtimePricingPreview, error) {
+func PreviewRealtimePricing(operator int, subject string, id int, items []RealtimePricingItem, userGroups func(string) []string) (*RealtimePricingPreview, error) {
 	if len(items) > 10000 {
 		return nil, ErrResellerInvalid
 	}
@@ -154,6 +141,26 @@ func PreviewRealtimePricing(operator int, subject string, id int, items []Realti
 				return err
 			}
 		}
+		var groups []string
+		if userID > 0 && userGroups != nil {
+			groups = userGroups(customer.Group)
+		}
+		channelIDs := make([]int, 0, len(candidates))
+		for _, ch := range candidates {
+			channelIDs = append(channelIDs, ch.ID)
+		}
+		availability, err := loadPricingChannelAvailability(tx, channelIDs, groups)
+		if err != nil {
+			return err
+		}
+		blocked := make(map[string]bool)
+		for _, config := range []*RealtimePricingConfig{personal, organization} {
+			for _, item := range config.Items {
+				if !item.Disabled {
+					blocked[item.Model] = true
+				}
+			}
+		}
 		allowed := map[string]bool{}
 		if customer.ResellerKind == "agent_customer" {
 			var grants []ResellerModelConfig
@@ -168,12 +175,17 @@ func PreviewRealtimePricing(operator int, subject string, id int, items []Realti
 				return ErrResellerDataCorrupt
 			}
 			var parent []ResellerModelConfig
-			if err := tx.Where("user_id = ? AND authorized = ?", identity.AgentUserID, true).Find(&parent).Error; err != nil {
+			if err := tx.Where("user_id = ?", identity.AgentUserID).Find(&parent).Error; err != nil {
 				return err
 			}
+			procurementScope := configuredResellerChannels(parent, true)
 			for _, row := range grants {
+				scope := procurementScope[row.Model]
+				if len(scope) > 0 && !scope[row.ChannelID] {
+					continue
+				}
 				for _, p := range parent {
-					if row.ChannelID == p.ChannelID && row.Model == p.Model {
+					if p.Authorized && row.ChannelID == p.ChannelID && row.Model == p.Model {
 						allowed[row.Model+":"+strconv.Itoa(row.ChannelID)] = true
 					}
 				}
@@ -187,14 +199,31 @@ func PreviewRealtimePricing(operator int, subject string, id int, items []Realti
 				if customer.ResellerKind == "agent_customer" && !allowed[name+":"+strconv.Itoa(ch.ID)] {
 					continue
 				}
-				price := resolveRealtimeChannel(personal, organization, name, ch.ID)
+				rule, price, err := effectiveRealtimeModelRule(personal, organization, name)
+				if err != nil {
+					return err
+				}
+				if rule.Model != "" && !slices.Contains(rule.ChannelIDs, ch.ID) {
+					continue
+				}
 				if subject == "organization" && price.Source != "organization" {
 					continue
 				}
-				result.Rows = append(result.Rows, RealtimePricingPreviewRow{Model: name, ChannelID: ch.ID, Ratio: formatPersonalRatio(price.CustomerRatio), Source: price.Source})
+				unavailable := !availability.includes(name, ch.ID)
+				if !unavailable {
+					delete(blocked, name)
+				}
+				result.Rows = append(result.Rows, RealtimePricingPreviewRow{Model: name, ChannelID: ch.ID, Ratio: formatPersonalRatio(price.CustomerRatio), Source: price.Source, Unavailable: unavailable})
 			}
 		}
-		return nil
+		for name := range blocked {
+			result.UnavailableModels = append(result.UnavailableModels, name)
+		}
+		slices.Sort(result.UnavailableModels)
+		if subject == "organization" {
+			result.GroupStatus, err = organizationPricingGroupStatus(tx, items, candidates)
+		}
+		return err
 	}, options)
 	return result, err
 }

@@ -616,7 +616,8 @@ export function splitBillingExprAndRequestRules(expr: string): {
   const trimmed = (expr || '').trim()
   if (!trimmed) return { billingExpr: '', requestRuleExpr: '' }
 
-  const parts = splitTopLevelMultiply(trimmed)
+  const version = trimmed.match(/^v\d+:/)?.[0] ?? ''
+  const parts = splitTopLevelMultiply(trimmed.slice(version.length))
   if (parts.length <= 1) return { billingExpr: trimmed, requestRuleExpr: '' }
 
   const ruleParts: string[] = []
@@ -643,7 +644,7 @@ export function splitBillingExprAndRequestRules(expr: string): {
   }
 
   return {
-    billingExpr: baseParts.map(unwrapOuterParens).join(' * '),
+    billingExpr: version + baseParts.map(unwrapOuterParens).join(' * '),
     requestRuleExpr: ruleParts.join(' * '),
   }
 }
@@ -656,7 +657,8 @@ export function combineBillingExpr(
   const rules = (requestRuleExpr || '').trim()
   if (!base) return ''
   if (!rules) return base
-  return `(${base}) * ${rules}`
+  const version = base.match(/^v\d+:/)?.[0] ?? ''
+  return `${version}(${base.slice(version.length)}) * ${rules}`
 }
 
 // ---------------------------------------------------------------------------

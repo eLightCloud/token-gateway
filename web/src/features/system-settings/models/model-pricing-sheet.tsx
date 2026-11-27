@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, Save } from 'lucide-react'
 import {
   forwardRef,
@@ -62,7 +62,6 @@ import {
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
-  previewModelPricing,
   previewModelPricingConversion,
   type ModelPricingPluginVariant,
 } from '@/features/model-pricing/api'
@@ -86,12 +85,12 @@ import {
   generateTaskExprFromConfig,
 } from '@/features/pricing/lib/task-expr'
 import type { BillingUsageSchema } from '@/features/pricing/types'
-import { useDebounce } from '@/hooks/use-debounce'
 import { handleServerError } from '@/lib/handle-server-error'
 import { cn } from '@/lib/utils'
 import { usePricingPreferencesStore } from '@/stores/pricing-preferences-store'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
+import { BillingExchangePreview } from './billing-exchange-preview'
 import {
   EMPTY_LANE_ENABLED,
   EMPTY_LANE_PRICES,
@@ -113,6 +112,7 @@ import { formatPricingNumber } from './pricing-format'
 import { TaskPluginPricingEditor } from './task-plugin-pricing-editor'
 import { TaskUsagePricingEditor } from './task-usage-pricing-editor'
 import { TieredPricingEditor } from './tiered-pricing-editor'
+import { useModelPricingPreview } from './use-model-pricing-preview'
 
 export type { ModelRatioData } from './model-pricing-core'
 
@@ -212,7 +212,11 @@ export const ModelPricingEditorPanel = forwardRef<
   const currencyConfig = useSystemConfigStore((state) => state.config.currency)
   const preference = usePricingPreferencesStore((state) => state.currency)
   const siteCurrency = useMemo(
-    () => getSitePricingCurrency(currencyConfig),
+    // CNY prices belong in v2 cny_to_usd() expressions, so visual inputs never offer them.
+    () =>
+      currencyConfig.quotaDisplayType === 'CNY'
+        ? null
+        : getSitePricingCurrency(currencyConfig),
     [currencyConfig]
   )
   const currency =
@@ -283,33 +287,14 @@ export const ModelPricingEditorPanel = forwardRef<
     },
   })
   const watchedValues = form.watch()
-  let previewRequest = ''
-  if (pricingMode === 'per-token' && watchedValues.name.trim()) {
-    try {
-      previewRequest = JSON.stringify({
-        model_name: watchedValues.name.trim(),
-        pricing: pricingFromDraft({
-          ...watchedValues,
-          billingMode: 'per-token',
-        }),
-      })
-    } catch {
-      // Incomplete numeric input is validated by the editor before saving.
-    }
-  }
-  const debouncedPreviewRequest = useDebounce(previewRequest, 250)
-  const pricePreview = useQuery({
-    queryKey: ['model-pricing-preview', debouncedPreviewRequest],
-    queryFn: () => previewModelPricing(JSON.parse(debouncedPreviewRequest)),
-    enabled:
-      Boolean(debouncedPreviewRequest) &&
-      debouncedPreviewRequest === previewRequest,
-    retry: false,
-    refetchOnWindowFocus: false,
-    meta: { errorToast: false },
+  const { effectivePreview, previewFailed } = useModelPricingPreview({
+    values: watchedValues,
+    pricingMode,
+    billingExpr,
+    requestRuleExpr,
+    pluginExpressions,
+    usdExchangeRate: currencyConfig.usdExchangeRate,
   })
-  const effectivePreview =
-    previewRequest === debouncedPreviewRequest ? pricePreview.data : undefined
   const usageSchemaByModel = useMemo(
     () =>
       new Map(
@@ -845,6 +830,7 @@ export const ModelPricingEditorPanel = forwardRef<
   const expressionEditor =
     usesTaskPricing && taskUsageSchema ? (
       <TaskUsagePricingEditor
+        exchangeRate={effectivePreview?.exchangePreview?.rate}
         currency={currency}
         key={`${editorReloadToken}:${watchedValues.name}`}
         billingExpr={resolvedBillingExpr}
@@ -856,6 +842,7 @@ export const ModelPricingEditorPanel = forwardRef<
       />
     ) : (
       <TieredPricingEditor
+        exchangeRate={effectivePreview?.exchangePreview?.rate}
         currency={currency}
         key={editorReloadToken}
         modelName={watchedValues.name}
@@ -950,6 +937,7 @@ export const ModelPricingEditorPanel = forwardRef<
                   key={`${editorReloadToken}:${watchedValues.name}`}
                   variants={pluginVariants ?? []}
                   expressions={pluginExpressions}
+                  exchangePreviews={effectivePreview?.pluginExchangePreviews}
                   onChange={setPluginExpressions}
                   modelExpression={combineBillingExpr(
                     resolvedBillingExpr,
@@ -1178,6 +1166,11 @@ export const ModelPricingEditorPanel = forwardRef<
                     <TabsContent value='tiered_expr' className='pt-0'>
                       <FieldGroup className='gap-5'>
                         {expressionEditor}
+                        {effectivePreview?.exchangePreview && (
+                          <BillingExchangePreview
+                            preview={effectivePreview.exchangePreview}
+                          />
+                        )}
                       </FieldGroup>
                     </TabsContent>
                   </Tabs>
@@ -1202,7 +1195,7 @@ export const ModelPricingEditorPanel = forwardRef<
                       className='text-muted-foreground px-3 py-2 text-xs'
                       role='status'
                     >
-                      {pricePreview.isError
+                      {previewFailed
                         ? t('Failed to load model pricing')
                         : t('Loading...')}
                     </p>

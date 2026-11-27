@@ -73,7 +73,7 @@ export function PricingCurrencySelector(props: {
         >
           <p className='text-sm'>
             {t(
-              'The system always bills in USD. Site currency makes entering and converting prices easier; amounts are converted to USD using the site exchange rate. Switching currencies does not change the actual price. Raw billing expressions always use USD.'
+              'The system bills in USD. Visual inputs are converted to USD when you edit them. Write CNY prices as cny_to_usd(...) in v2 expressions.'
             )}
           </p>
           {available && props.siteCurrency && (

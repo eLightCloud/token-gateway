@@ -1,5 +1,7 @@
 import { t } from 'i18next'
 
+import type { BillMoneySnapshot } from '@/components/billing/historical-bill-amount'
+import type { HistoricalAmounts } from '@/components/billing/historical-billing'
 import { api } from '@/lib/api'
 
 import { buildQuery } from './api'
@@ -32,6 +34,7 @@ export interface OrganizationUsageTrendPoint {
 }
 
 export interface OrganizationUsagePayload {
+  historical_amounts?: HistoricalAmounts
   total_quota: number
   request_count: number
   prompt_tokens: number
@@ -107,6 +110,7 @@ export async function getCurrentOrganizationBillingUsageSnapshot(
 }
 
 export interface OrganizationUsageLogItem {
+  money_snapshot?: BillMoneySnapshot
   id: number
   user_id: number
   created_at: number

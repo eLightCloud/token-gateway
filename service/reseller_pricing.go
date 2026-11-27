@@ -35,7 +35,7 @@ func LoadPersonalRequestPricing(c *gin.Context, userID int, modelName string) (*
 		return nil, err
 	}
 	c.Set(personalPricingContextKey, snapshot)
-	if snapshot != nil && snapshot.AgentUserID > 0 {
+	if snapshot.RestrictsChannels() {
 		ids := make([]int, 0, len(snapshot.Channels))
 		for id := range snapshot.Channels {
 			ids = append(ids, id)
@@ -56,7 +56,7 @@ func PreparePersonalRequestPricing(c *gin.Context, info *relaycommon.RelayInfo) 
 	}
 	info.PersonalPricing = snapshot
 	PinPersonalPricingChannel(c, info)
-	return nil
+	return checkPersonalPricingChannel(c, info)
 }
 
 // PreparePersonalChannelBilling reserves the selected group's estimate
@@ -70,10 +70,8 @@ func PreparePersonalChannelBilling(c *gin.Context, info *relaycommon.RelayInfo) 
 			c.Set(personalRealtimeReservationKey, &personalRealtimeReservation{})
 		}
 	}
-	if info.PersonalPricing.AgentUserID > 0 {
-		if _, ok := info.PersonalPricing.Channels[info.ChannelId]; !ok {
-			return relaytypes.NewErrorWithStatusCode(model.ErrResellerForbidden, relaytypes.ErrorCodeModelNotFound, http.StatusForbidden, relaytypes.ErrOptionWithSkipRetry())
-		}
+	if err := checkPersonalPricingChannel(c, info); err != nil {
+		return err
 	}
 	base := info.PriceData.QuotaToPreConsume
 	if info.TieredBillingSnapshot != nil {
@@ -95,7 +93,7 @@ func personalBillingFact(info *relaycommon.RelayInfo, base int, kind, operation 
 	}
 	price, ok := snapshot.Channels[info.ChannelId]
 	if !ok {
-		if snapshot.AgentUserID > 0 {
+		if snapshot.RestrictsChannels() {
 			return nil, model.ErrResellerForbidden
 		}
 		price = types.PersonalChannelPrice{CustomerRatio: model.ResellerRatioScale, AgentRatio: model.ResellerRatioScale}

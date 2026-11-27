@@ -8,7 +8,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -63,11 +62,6 @@ func exportOrganizationUsageSnapshot(c *gin.Context, organizationId int, filters
 		common.ApiErrorMsg(c, "usage dimensions are truncated; narrow the export range")
 		return
 	}
-	formatter, err := service.NewBillingExportAmountFormatter(6)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
 	data := organizationBillingExportData{
 		Summary: &model.OrganizationBillingSummary{TotalQuota: payload.TotalQuota, RequestCount: int(payload.RequestCount), PromptTokens: int(payload.PromptTokens), CompletionTokens: int(payload.CompletionTokens), MemberCount: payload.MemberCount, ActiveMemberCount: payload.ActiveMemberCount},
 		Members: payload.Members, Models: payload.Models, Channels: payload.Channels,
@@ -82,7 +76,13 @@ func exportOrganizationUsageSnapshot(c *gin.Context, organizationId int, filters
 	buffer.WriteString("\xEF\xBB\xBF")
 	writer := csv.NewWriter(&buffer)
 	_ = writer.Write([]string{"# 快照", strconv.FormatInt(snapshot.Id, 10), "代次", strconv.Itoa(generation), "范围[start,end)", strconv.FormatInt(payload.RangeStart, 10), strconv.FormatInt(payload.RangeEnd, 10), "状态", snapshot.Status})
-	writeOrganizationBillingCsv(writer, data, formatter)
+	writeOrganizationBillingSections(writer, data)
+	if payload.HistoricalAmounts != nil {
+		totals := payload.HistoricalAmounts
+		organizationHistoricalTotals{recorded: int(totals.Recorded), missing: int(totals.Missing), cny: totals.NetCNY()}.write(writer)
+	} else {
+		_ = writer.Write([]string{"历史金额", "不可用，请重新生成用量快照"})
+	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
 		common.ApiError(c, err)

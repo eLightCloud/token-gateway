@@ -8,7 +8,7 @@ The expression is the billing contract between the administrator and the system.
 
 ### Core Principles
 
-1. **Expression is self-contained** — The expression string alone determines billing. No external ratio tables, no implicit completion multipliers, no hidden conversion factors. Given the same token counts and request context, the same expression always produces the same cost.
+1. **Expression is self-contained** — The expression string alone determines billing. No external ratio tables, no implicit completion multipliers, no hidden conversion factors. Given the same token counts and request context, the same expression always produces the same cost. A v2 expression that uses `cny_to_usd()` includes the frozen exchange rate in that context.
 
 2. **Variables are opt-in** — `p` (prompt) and `c` (completion) are the base. Cache (`cr`, `cc`, `cc1h`, `cc12h`), image (`img`), and audio (`ai`, `ao`) variables are optional. If omitted, those tokens are included in `p`/`c` and priced at their rate; an omitted long-lived cache write keeps its fixed multiple of the short write price. The system automatically detects which variables the expression uses (via AST introspection) and adjusts token normalization accordingly.
 
@@ -16,7 +16,7 @@ The expression is the billing contract between the administrator and the system.
 
 4. **Upstream-agnostic** — The expression doesn't need to know whether the upstream API is OpenAI-format (prompt_tokens includes cache) or Claude-format (input_tokens excludes cache). The system normalizes token counts before evaluation based on the upstream response format.
 
-5. **Version-aware** — Expressions carry a version tag (`v1:`, default when omitted). The version controls the compile environment, token normalization, and quota conversion formula, enabling future evolution without breaking existing expressions.
+5. **Version-aware** — Expressions can use `v1:` (default when omitted) or `v2:`. The version controls the compile environment, token normalization, and quota conversion formula, enabling future evolution without breaking existing expressions.
 
 ---
 
@@ -169,6 +169,7 @@ OpenAI 已于 2026-05-12 下线 DALL·E 2/3；其校验、默认值和倍率保�
 |----------|-----------|---------|
 | `tier` | `tier(name, value) → float64` | Records which pricing tier matched; must wrap the cost expression |
 | `fixed` | `fixed(amount) → float64` | A USD price per request, used only as the complete price in `tier(name, fixed(amount))` |
+| `cny_to_usd` | `cny_to_usd(amount) → float64` | v2 only. Converts a finite, non-negative CNY literal to USD using the request’s frozen exchange rate |
 | `param` | `param(path) → any` | Reads a JSON path from the request body (uses ojson, gjson path syntax) |
 | `header` | `header(key) → string` | Reads a request header value |
 | `has` | `has(source, substr) → bool` | Substring check |
@@ -206,6 +207,25 @@ tier("base", p * 2 + c * 8 + img * 2.5)
 tier("base", p * 0.43 + c * 3.06 + img * 0.78 + ai * 3.81 + ao * 15.11)
 ```
 
+### CNY Price Conversion
+
+`USDExchangeRate` is the system setting for CNY per USD. When calculating a price,
+`cny_to_usd(amount)` divides the CNY original by the request's frozen exchange
+rate. The expression and the bill use USD. Changing the system rate affects
+new requests after the serving node applies the setting. Retries, settlement
+and historical billing records use the rate frozen for the request.
+The CUSTOM display rate is independent of CNY price conversion.
+
+```text
+v2:tier("base", p * cny_to_usd(7.30) + c * cny_to_usd(29.20))
+v2:tier("request", fixed(cny_to_usd(0.73)))
+v2:tier("image", fixed(cny_to_usd(0.73))) * image_count
+```
+
+For task usage expressions, use `v2:tier("request", cny_to_usd(0.73))`. Those
+expressions return USD directly. The fixed-price form follows its existing
+protocol restrictions.
+
 ### Fixed Request Prices
 
 `tier("request", fixed(0.01))` replaces all token charges in the selected leaf
@@ -215,8 +235,9 @@ existing tool surcharges are calculated separately and added as before. A stream
 does not incur a fixed fee per chunk. Realtime and task usage expressions reject
 `fixed()` before upstream submission or reservation.
 
-The amount must be a finite, non-negative numeric literal whose v1 scaled value
-is finite. Explicit `fixed(0)` is valid and stays free. Expressions using `fixed`
+The amount can be a finite, non-negative USD numeric literal. In v2, it can also
+be a `cny_to_usd()` call with a finite, non-negative CNY literal. The scaled USD
+value must be finite. Explicit `fixed(0)` is valid and stays free. Expressions using `fixed`
 must consist of a conditional pricing tree and the standard request multiplier
 factors described below, with each leaf wrapped in `tier()`. Adding fixed and
 token charges in one leaf, adding multiple tiers together, or multiplying a
@@ -549,7 +570,8 @@ This matches the per-call billing pattern: `quota = modelPrice * QuotaPerUnit * 
 
 ### Expression Versioning
 
-Expressions can carry a version prefix: `v1:tier(...)`. No prefix = v1.
+Expressions can carry a `v1:` or `v2:` prefix. Omitting the prefix selects v1.
+Both versions use the same quota conversion.
 
 Version controls:
 - Compile environment (available variables and functions)

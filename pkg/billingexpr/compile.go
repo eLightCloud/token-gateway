@@ -27,10 +27,7 @@ const (
 // Format: "v1:tier(...)" → version=1, body="tier(...)".
 // No prefix defaults to DefaultExprVersion.
 func ParseExprVersion(exprStr string) (version int, body string) {
-	if strings.HasPrefix(exprStr, "v1:") {
-		return 1, exprStr[3:]
-	}
-	return DefaultExprVersion, exprStr
+	return expressionVersion(exprStr)
 }
 
 // requestRulePatcher adds trace side effects to existing request multipliers
@@ -117,6 +114,7 @@ type cachedEntry struct {
 	requestRules  []RequestRuleTrace
 	version       int
 	fixedPricing  bool
+	cnyPrices     []cnyPriceLiteral
 }
 
 var (
@@ -161,6 +159,8 @@ var compileEnvPrototypeV1 = map[string]any{
 
 func getCompileEnv(version int) map[string]any {
 	switch version {
+	case 2:
+		return compileEnvPrototypeV2
 	default:
 		return compileEnvPrototypeV1
 	}
@@ -195,18 +195,37 @@ func compileEntryFromCacheByHash(exprStr, hash string) (*cachedEntry, error) {
 	cacheMu.RUnlock()
 
 	version, body := ParseExprVersion(exprStr)
+	if version != 1 && version != 2 {
+		return nil, fmt.Errorf("unsupported billing expression version v%d", version)
+	}
 	// Validate before optimization so unreachable fixed-price branches cannot
 	// bypass validation or a host's unsupported-protocol checks.
 	tree, err := parser.Parse(body)
 	if err != nil {
 		return nil, fmt.Errorf("expr compile error: %w", err)
 	}
+	var currency currencySyntax
+	if version == 2 {
+		ast.Walk(&tree.Node, &currency)
+		if currency.err != nil {
+			return nil, currency.err
+		}
+		if currency.references != currency.calls {
+			return nil, fmt.Errorf("%s must be called directly", cnyToUSD)
+		}
+	} else {
+		calls := make(v1UnboundCNYCalls)
+		ast.Walk(&tree.Node, calls)
+		if len(calls) > 0 {
+			return nil, fmt.Errorf("%s requires a v2 billing expression", cnyToUSD)
+		}
+	}
 	fixedPricing := ast.Find(tree.Node, func(node ast.Node) bool {
 		identifier, ok := node.(*ast.IdentifierNode)
 		return ok && identifier.Value == "fixed"
 	}) != nil
 	if fixedPricing {
-		if err := validateFixedPricingTree(tree.Node); err != nil {
+		if err := validateFixedPricingTree(tree.Node, version == 2); err != nil {
 			return nil, fmt.Errorf("expr compile error: %w", err)
 		}
 	}
@@ -227,6 +246,7 @@ func compileEntryFromCacheByHash(exprStr, hash string) (*cachedEntry, error) {
 		version:       version,
 		fixedPricing:  fixedPricing,
 	}
+	entry.cnyPrices = currency.prices
 	cacheMu.Lock()
 	if len(cache) >= maxCacheSize {
 		cache = make(map[string]*cachedEntry, 64)

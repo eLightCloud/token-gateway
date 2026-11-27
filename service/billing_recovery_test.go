@@ -7,8 +7,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -163,12 +165,16 @@ func TestTaskSubmissionPersistsTaskAndBillingFactTogether(t *testing.T) {
 
 func TestBillingRecoveryWritesMissingLogWithoutChargingAgain(t *testing.T) {
 	truncate(t)
+	previousRate := operation_setting.USDExchangeRate
+	t.Cleanup(func() { operation_setting.USDExchangeRate = previousRate })
+	operation_setting.USDExchangeRate = 8
 	const userID, tokenID = 90, 90
 	seedUser(t, userID, 10_000)
 	seedToken(t, tokenID, userID, "sk-log-recovery", 5_000)
 	info := &relaycommon.RelayInfo{
 		RequestId: "req-log-recovery", UserId: userID, TokenId: tokenID,
-		ChannelMeta: &relaycommon.ChannelMeta{},
+		ChannelMeta:           &relaycommon.ChannelMeta{},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{CNYExchangeRate: 7.3, QuotaPerUnit: 500_000},
 	}
 	ctx, _ := gin.CreateTestContext(nil)
 	workingLogDB := model.LOG_DB
@@ -184,11 +190,15 @@ func TestBillingRecoveryWritesMissingLogWithoutChargingAgain(t *testing.T) {
 	assert.EqualValues(t, 9_300, getUserQuota(t, userID))
 
 	model.LOG_DB = workingLogDB
+	operation_setting.USDExchangeRate = 9
 	assert.Equal(t, 1, SweepPendingTaskSettlements(context.Background()))
 	assert.EqualValues(t, 9_300, getUserQuota(t, userID))
-	var logCount int64
-	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("billing_operation_id = ?", "log-recovery:req-log-recovery").Count(&logCount).Error)
-	assert.EqualValues(t, 1, logCount)
+	var log model.Log
+	require.NoError(t, model.LOG_DB.Where("billing_operation_id = ?", "log-recovery:req-log-recovery").First(&log).Error)
+	historical := model.LogMoneySnapshot(log.Other)
+	require.NotNil(t, historical)
+	assert.Equal(t, "7.3", historical.ExchangeRate)
+	assert.Equal(t, "0.01022000", historical.Amount)
 	// Old persisted payloads lack a source; the journal still knows the actual
 	// funding path, and replay must use it without applying money again.
 	payload, err := common.Marshal(model.RecordTaskBillingLogParams{UserId: userID, LogType: model.LogTypeRefund, Quota: 7, Other: model.NewLogOther()})

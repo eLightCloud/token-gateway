@@ -68,7 +68,11 @@ function makeLog(other: LogOtherData): UsageLog {
   }
 }
 
-function renderDetails(other: LogOtherData, promptTokens = 0): QueryClient {
+function renderDetails(
+  other: LogOtherData,
+  promptTokens = 0,
+  type = 2
+): QueryClient {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -83,7 +87,7 @@ function renderDetails(other: LogOtherData, promptTokens = 0): QueryClient {
   render(
     <QueryClientProvider client={queryClient}>
       <DetailsDialog
-        log={{ ...makeLog(other), prompt_tokens: promptTokens }}
+        log={{ ...makeLog(other), prompt_tokens: promptTokens, type }}
         isAdmin={false}
         isRoot={false}
         open
@@ -414,4 +418,27 @@ test('enhancement details keep final cost pending until settlement finishes', as
   } finally {
     queryClient.clear()
   }
+})
+
+test('shows the frozen rate and signed CNY amount for a refund', () => {
+  const queryClient = renderDetails(
+    {
+      money_snapshot: {
+        exchange_rate: '7.3',
+        quota_per_unit: '500000',
+        amount: '-0.073',
+      },
+    },
+    0,
+    6
+  )
+  expect(screen.getByText('¥-0.073 · 1 USD = 7.3 CNY')).toBeVisible()
+  queryClient.clear()
+})
+
+test('shows original quota when a consumption log has no rate snapshot', () => {
+  const queryClient = renderDetails({})
+  expect(screen.getByText('5,000 quota')).toBeVisible()
+  expect(screen.getByText('Historical exchange rate unavailable')).toBeVisible()
+  queryClient.clear()
 })

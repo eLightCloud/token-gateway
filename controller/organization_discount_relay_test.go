@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	hostdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -543,4 +544,41 @@ func TestPersonalBillingHTTPAutoGroupRetryReservesSelectedGroup(t *testing.T) {
 			assert.Equal(t, tc.balance-1600*int64(tc.vipCalls), user.Quota)
 		})
 	}
+}
+
+func TestRealtimePricingRejectsWebSocketChannelAfterScopeChange(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	var received atomic.Int32
+	fixture := newResponsesWSBillingTest(t, `tier("request", fixed(0.002))`, func(ws *websocket.Conn, _ *http.Request) {
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				return
+			}
+			received.Add(1)
+			if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"scope-change","status":"completed","model":"ws-billing","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`)); err != nil {
+				return
+			}
+		}
+	})
+	db := model.DB
+	require.NoError(t, db.AutoMigrate(&model.ResellerIdentity{}, &model.ResellerRequest{}, &model.ResellerBillingReceipt{}, &model.ResellerFundingSnapshot{}, &model.ResellerEvent{}, &model.ResellerProjection{}))
+	root := model.User{Username: "scope-change-root", AffCode: "scope-change-root", Role: common.RoleRootUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&root).Error)
+	require.NoError(t, db.Create(&model.RealtimePricingState{ID: 1, Phase: "active"}).Error)
+	payload := []byte(`{"type":"response.create","model":"ws-billing","input":"synthetic"}`)
+	require.NoError(t, fixture.client.WriteMessage(websocket.TextMessage, payload))
+	require.Equal(t, "response.completed", readResponsesWSTestEvent(t, fixture.client)["type"])
+
+	alternate := model.Channel{Name: "new-pricing-scope", Models: "ws-billing", Group: "default", Status: common.ChannelStatusEnabled}
+	require.NoError(t, db.Create(&alternate).Error)
+	_, err := model.SaveRealtimePricing(root.Id, "user", fixture.user.Id, model.RealtimePricingInput{
+		Items: []model.RealtimePricingItem{{Model: "ws-billing", Ratio: "1", ChannelIDs: []int{alternate.Id}}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, fixture.client.WriteMessage(websocket.TextMessage, payload))
+	event := readResponsesWSTestEvent(t, fixture.client)
+	require.Equal(t, "error", event["type"])
+	require.Equal(t, "pricing_channel_unavailable", event["error"].(map[string]any)["code"])
+	fixture.closeAndWait(t)
+	assert.EqualValues(t, 1, received.Load())
 }

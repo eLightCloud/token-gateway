@@ -25,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -219,6 +220,62 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 				t.Skip("set " + dialect.env + " to run this database")
 			}
 			db := modelManagementDB(t, dialect.kind, os.Getenv(dialect.env))
+			t.Run("v2_cny_preview_and_persistence", func(t *testing.T) {
+				const name = "matrix-cny-fixed"
+				const expression = `v2:tier("request", fixed(cny_to_usd(0.73)))`
+				priorRate := operation_setting.USDExchangeRate
+				previousDisplay := *operation_setting.GetGeneralSetting()
+				t.Cleanup(func() {
+					operation_setting.USDExchangeRate = priorRate
+					*operation_setting.GetGeneralSetting() = previousDisplay
+				})
+				operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeCustom
+				require.NoError(t, db.AutoMigrate(&model.SystemTask{}))
+				require.NoError(t, model.UpdateOption("USDExchangeRate", "7.3"))
+				draft := model.PricingValues{
+					"billing_setting.billing_mode": "tiered_expr",
+					"billing_setting.billing_expr": expression,
+				}
+				before, err := model.GetModelPricingSnapshot([]string{name})
+				require.NoError(t, err)
+				require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{
+					{ModelName: name, ExpectedVersion: before.Entries[0].Version, Pricing: draft},
+				}))
+				for _, tc := range []struct {
+					rate float64
+					want string
+				}{{7.3, `tier("request", fixed(0.1))`}, {8, `tier("request", fixed(0.09125))`}} {
+					require.NoError(t, model.UpdateOption("USDExchangeRate", strconv.FormatFloat(tc.rate, 'f', -1, 64)))
+					operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate = tc.rate + 10
+					var response struct {
+						Success bool
+						Message string
+						Data    model.ModelPricingDescription
+					}
+					modelManagementRequest(t, PreviewModelPricing, http.MethodPost, "/api/option/model_pricing/preview",
+						map[string]any{"model_name": name, "pricing": draft}, &response)
+					require.True(t, response.Success, response.Message)
+					require.NotNil(t, response.Data.ExchangePreview)
+					assert.Equal(t, tc.rate, response.Data.ExchangePreview.Rate)
+					assert.Equal(t, tc.want, response.Data.ExchangePreview.USDExpression)
+				}
+				const failUpdate = "test:fail_exchange_rate_write"
+				require.NoError(t, db.Callback().Update().Before("gorm:update").Register(failUpdate, func(tx *gorm.DB) {
+					if tx.Statement.Table == "options" {
+						tx.AddError(fmt.Errorf("exchange rate write failed"))
+					}
+				}))
+				updateErr := model.UpdateOption("USDExchangeRate", "9")
+				require.NoError(t, db.Callback().Update().Remove(failUpdate))
+				require.ErrorContains(t, updateErr, "exchange rate write failed")
+				assert.Equal(t, 8.0, operation_setting.CurrentUSDExchangeRate())
+				var persisted model.Option
+				require.NoError(t, db.Where(map[string]any{"key": "USDExchangeRate"}).First(&persisted).Error)
+				assert.Equal(t, "8", persisted.Value)
+				saved, err := model.GetModelPricingSnapshot([]string{name})
+				require.NoError(t, err)
+				assert.Equal(t, expression, saved.Entries[0].Configured["billing_setting.billing_expr"])
+			})
 			contract, err := os.ReadFile("../pkg/billingexpr/testdata/frontend_simulation.json")
 			require.NoError(t, err)
 			var fixtures []struct {

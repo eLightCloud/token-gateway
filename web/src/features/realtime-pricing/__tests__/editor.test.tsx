@@ -384,7 +384,7 @@ it('deletes an explicit base-price rule only after confirmation and submits the 
   expect(put).not.toHaveBeenCalled()
   expect(
     await screen.findByText(
-      'Removing this rule restores organization or system pricing on its channels. Changes take effect after saving.'
+      'After saving, this model inherits the organization rule if one exists. Otherwise it uses default pricing and routing.'
     )
   ).toBeVisible()
   await userEvent.click(await screen.findByRole('button', { name: 'Continue' }))
@@ -784,7 +784,13 @@ it('does not describe an unknown preview source as system default', async () => 
       success: true,
       data: {
         rows: [
-          { model: 'A', channel_id: 1, ratio: '1', source: 'future-source' },
+          {
+            model: 'A',
+            channel_id: 1,
+            ratio: '1',
+            source: 'future-source',
+            unavailable: true,
+          },
         ],
         user_revision: 7,
         organization_revision: 1,
@@ -796,5 +802,71 @@ it('does not describe an unknown preview source as system default', async () => 
   })
   await client.invalidateQueries({ queryKey: ['realtime-preview'] })
   expect(await screen.findByText('Unknown pricing source')).toBeVisible()
+  expect(screen.getByText('Unavailable')).toBeVisible()
   expect(screen.queryByText('System default')).not.toBeInTheDocument()
+})
+
+it('requires confirmation before saving a draft with no eligible channels', async () => {
+  const { post } = mountWorkspace('user')
+  post.mockResolvedValue({
+    data: {
+      success: true,
+      data: { rows: [], unavailable_models: ['A'] },
+    },
+  })
+  const put = vi.spyOn(api, 'put').mockResolvedValue({
+    data: { success: true, data: { revision: 8, items: [] } },
+  })
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+  const ratio = screen.getByRole('textbox', { name: 'Ratio' })
+  await userEvent.clear(ratio)
+  await userEvent.type(ratio, '0.7')
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  const confirmation = await screen.findByRole('alertdialog')
+  expect(confirmation).toHaveTextContent('No eligible channels for A')
+  expect(put).not.toHaveBeenCalled()
+  await userEvent.click(
+    within(confirmation).getByRole('button', { name: 'Continue' })
+  )
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(1))
+})
+
+it('shows group availability and confirms a change that blocks one organization group', async () => {
+  const { post, client } = mountWorkspace('organization')
+  await screen.findByText('Organization revision 1')
+  post.mockResolvedValue({
+    data: {
+      success: true,
+      data: {
+        rows: [],
+        group_status: [
+          { model: 'A', group: 'default', available: true },
+          { model: 'A', group: 'partner', available: false },
+        ],
+        organization_revision: 1,
+        organization_id: 2,
+        generated_at: 1,
+      },
+    },
+  })
+  await client.invalidateQueries({ queryKey: ['realtime-preview'] })
+  expect(
+    await screen.findByRole('row', { name: /A partner Unavailable/ })
+  ).toBeVisible()
+  expect(screen.getByRole('row', { name: /A default Effective/ })).toBeVisible()
+
+  const put = vi.spyOn(api, 'put')
+  await userEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+  const dialog = screen.getByRole('dialog')
+  const ratio = within(dialog).getByLabelText('Ratio')
+  await userEvent.clear(ratio)
+  await userEvent.type(ratio, '0.8')
+  await userEvent.click(
+    within(dialog).getByRole('button', { name: 'Apply to draft' })
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  expect(await screen.findByRole('alertdialog')).toHaveTextContent(
+    'No eligible channels for A (partner)'
+  )
+  expect(put).not.toHaveBeenCalled()
 })

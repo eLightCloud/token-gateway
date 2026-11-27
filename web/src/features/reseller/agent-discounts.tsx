@@ -30,6 +30,7 @@ import { toIntlLocale } from '@/i18n/languages'
 
 import type { ConfigItem } from './api'
 import { formatPersonalRatio } from './format'
+import { hasProcurementRatio } from './lib/procurement-grant'
 
 function modelChannelKey(item: ConfigItem): string {
   return `${item.model}:${item.channel_id}`
@@ -88,7 +89,10 @@ export function ResellerProcurementRatioTable(props: {
         {
           id: 'ratio',
           header: t('Procurement ratio'),
-          cell: (row) => `×${formatPersonalRatio(row.ratio, locale)}`,
+          cell: (row) =>
+            hasProcurementRatio(row)
+              ? `×${formatPersonalRatio(row.ratio, locale)}`
+              : t('Default (1×)'),
         },
       ]}
     />

@@ -53,6 +53,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { HistoricalBillAmount } from '@/components/billing/historical-bill-amount'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
@@ -172,13 +173,9 @@ function quotaSaturationKindLabel(
   return t('Invalid (NaN)')
 }
 
-function BillingBreakdown(props: {
-  log: UsageLog
-  other: LogOtherData
-  isAdmin: boolean
-}) {
+function BillingBreakdown(props: { other: LogOtherData; isAdmin: boolean }) {
   const { t } = useTranslation()
-  const { log, other, isAdmin } = props
+  const { other, isAdmin } = props
   const isPerCall = isPerCallBilling(other.model_price)
   const isClaude = other.claude === true
   // OpenAI 12-hour cache writes have their own price, listed like Claude's.
@@ -400,11 +397,6 @@ function BillingBreakdown(props: {
           ))}
         </>
       )}
-      <DetailRow
-        label={t('Total Cost')}
-        value={formatLogQuota(log.quota)}
-        mono
-      />
     </DetailSection>
   )
 }
@@ -935,7 +927,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
             )}
             <DetailRow
               label={t('Fee Amount')}
-              value={formatLogQuota(other.fee_quota ?? props.log.quota)}
+              value={
+                <HistoricalBillAmount
+                  quota={other.fee_quota ?? props.log.quota}
+                  snapshot={other.money_snapshot}
+                />
+              }
               mono
             />
           </DetailSection>
@@ -1245,11 +1242,16 @@ export function DetailsDialog(props: DetailsDialogProps) {
 
         {/* Billing breakdown (consume type) */}
         {isConsume && other && !isViolation && (
-          <BillingBreakdown
-            log={props.log}
-            other={other}
-            isAdmin={props.isAdmin}
-          />
+          <BillingBreakdown other={other} isAdmin={props.isAdmin} />
+        )}
+
+        {(isConsume || isRefund) && !isViolation && (
+          <DetailSection label={t('Total Cost')}>
+            <HistoricalBillAmount
+              quota={isRefund ? -Math.abs(props.log.quota) : props.log.quota}
+              snapshot={other?.money_snapshot}
+            />
+          </DetailSection>
         )}
 
         {/* Tiered pricing breakdown (when billing_mode is tiered_expr) */}

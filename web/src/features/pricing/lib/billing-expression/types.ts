@@ -44,6 +44,7 @@ export type TimeFunction = (typeof TIME_FUNCTIONS)[number]
 export const BILLING_FUNCTIONS: Readonly<Record<string, number>> = {
   tier: 2,
   fixed: 1,
+  cny_to_usd: 1,
   param: 1,
   header: 1,
   has: 2,
@@ -109,7 +110,7 @@ export type BillingRequestRule = {
 export type CompiledBillingExpression = {
   status: 'ready'
   source: string
-  version: 1
+  version: 1 | 2
   ast: ExpressionNode
   variables: ReadonlySet<BillingVariable>
   functions: ReadonlySet<string>
@@ -126,6 +127,7 @@ export type ExpressionFailure = {
 }
 export type CompilationResult = CompiledBillingExpression | ExpressionFailure
 export type BillingSimulationContext = {
+  cnyExchangeRate?: number
   imageCount?: number
   /** Already normalized billable counts; no implicit cache subtraction. */
   tokens?: Partial<Record<TokenVariable, number>>

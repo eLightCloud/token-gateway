@@ -33,7 +33,14 @@ func ValidateBillingMoneySetting(value float64) error {
 }
 
 func CurrentBillingMoneySnapshot() (*BillingMoneySnapshot, error) {
+	common.OptionMapRWMutex.RLock()
 	rate, scale := operation_setting.USDExchangeRate, common.QuotaPerUnit
+	common.OptionMapRWMutex.RUnlock()
+	return BillingMoneySnapshotForPricing(rate, scale)
+}
+
+// BillingMoneySnapshotForPricing uses the rate and scale frozen by the price evaluator.
+func BillingMoneySnapshotForPricing(rate, scale float64) (*BillingMoneySnapshot, error) {
 	if ValidateBillingMoneySetting(rate) != nil || ValidateBillingMoneySetting(scale) != nil {
 		common.SysError("billing.money_snapshot unavailable reason=invalid_configuration")
 		return nil, errors.New("monetary conversion configuration is invalid")

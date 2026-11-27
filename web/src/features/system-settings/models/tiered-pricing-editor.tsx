@@ -96,6 +96,7 @@ import {
   generateExprFromVisualConfig,
 } from '@/features/pricing/lib/tier-expr'
 import { cn } from '@/lib/utils'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import {
   BillingTimeProbeFields,
@@ -324,12 +325,23 @@ function RawExprEditor({ exprString, onChange }: RawExprEditorProps) {
             <code>fixed(amount)</code>, <code>max</code>, <code>min</code>,{' '}
             <code>ceil</code>, <code>floor</code>, <code>abs</code>,{' '}
             <code>header(name)</code>, <code>param(path)</code>,{' '}
-            <code>has(source, text)</code>
+            <code>has(source, text)</code>, <code>cny_to_usd(amount)</code>
           </div>
           <div>
             {t(
               'Use tier(name, fixed(amount)) for a USD price per request. Group and request multipliers still apply.'
             )}
+          </div>
+          <div>
+            {t(
+              'Use cny_to_usd in v2 expressions to convert CNY prices at the system exchange rate.'
+            )}
+            <code className='block break-all'>
+              v2:tier("base", p * cny_to_usd(7.30))
+            </code>
+            <code className='block break-all'>
+              v2:tier("request", fixed(cny_to_usd(0.73)))
+            </code>
           </div>
         </AlertDescription>
       </Alert>
@@ -715,13 +727,23 @@ function PresetSection({ applyPreset }: PresetSectionProps) {
 // ---------------------------------------------------------------------------
 
 type EstimatorProps = {
+  exchangeRate?: number
   currency: PricingCurrency
   effectiveExpr: string
   fullExpr: string
 }
 
-function CostEstimator({ effectiveExpr, fullExpr, currency }: EstimatorProps) {
+function CostEstimator({
+  effectiveExpr,
+  fullExpr,
+  currency,
+  exchangeRate,
+}: EstimatorProps) {
   const { t } = useTranslation()
+  const statusRate = useSystemConfigStore(
+    (state) => state.config.currency.usdExchangeRate
+  )
+  const cnyExchangeRate = exchangeRate ?? statusRate
   const inputId = useId()
   const outputId = useId()
   const lengthId = useId()
@@ -761,9 +783,18 @@ function CostEstimator({ effectiveExpr, fullExpr, currency }: EstimatorProps) {
     () =>
       evalExprLocally(effectiveExpr, promptTokens, completionTokens, extras, {
         tokens,
+        cnyExchangeRate,
         now: billingTime === undefined ? undefined : new Date(billingTime),
       }),
-    [effectiveExpr, promptTokens, completionTokens, extras, tokens, billingTime]
+    [
+      effectiveExpr,
+      promptTokens,
+      completionTokens,
+      extras,
+      tokens,
+      billingTime,
+      cnyExchangeRate,
+    ]
   )
 
   if (result.error === 'task usage') {
@@ -885,6 +916,7 @@ function CostEstimator({ effectiveExpr, fullExpr, currency }: EstimatorProps) {
         expression={fullExpr}
         tokens={tokens}
         currency={currency}
+        exchangeRate={cnyExchangeRate}
         mode='token'
       />
     </div>
@@ -1047,6 +1079,7 @@ function LlmPromptHelper({ modelName }: LlmPromptHelperProps) {
 // ---------------------------------------------------------------------------
 
 export type TieredPricingEditorProps = {
+  exchangeRate?: number
   currency?: PricingCurrency
   modelName?: string
   billingExpr: string
@@ -1065,6 +1098,7 @@ function parseTierEditorDocument(source: string): VisualBillingDocument | null {
 
 export const TieredPricingEditor = memo(function TieredPricingEditor({
   currency = USD_PRICING_CURRENCY,
+  exchangeRate,
   modelName,
   billingExpr: currentExpr,
   requestRuleExpr: currentRequestRuleExpr,
@@ -1224,7 +1258,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
 
       <p className='text-muted-foreground text-xs'>
         {t(
-          'Raw expressions and presets use USD. Currency selection only converts visual price inputs and monetary previews.'
+          'Expressions calculate prices in USD. Currency selection controls visual price inputs and monetary previews.'
         )}
       </p>
       <PresetSection applyPreset={applyPreset} />
@@ -1311,6 +1345,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
       </div>
 
       <CostEstimator
+        exchangeRate={exchangeRate}
         effectiveExpr={effectiveExpr}
         fullExpr={
           editorMode === 'raw'

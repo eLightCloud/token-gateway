@@ -448,7 +448,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
-	moneySnapshot, err := model.CurrentBillingMoneySnapshot()
+	moneySnapshot, err := relayMoneySnapshot(relayInfo)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 	}

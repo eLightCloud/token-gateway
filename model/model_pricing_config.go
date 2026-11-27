@@ -565,6 +565,11 @@ func validateModelPricing(name string, values, previous PricingValues) error {
 			// its price after the plugin narrows its usage profile; relay checks
 			// shared models against each profile, so their prices must follow it.
 			unchanged := previous[key] == expression
+			if !unchanged {
+				if err := billingexpr.ValidateExpressionCNYPrices(expression, operation_setting.CurrentUSDExchangeRate()); err != nil {
+					return fmt.Errorf("model %s: %w", name, err)
+				}
+			}
 			if !unchanged && billingexpr.UsedVars(expression)["u"] && billingexpr.UsesChatQuantities(expression) {
 				return fmt.Errorf("model %s: an expression cannot read both u() usage facts and chat request quantities such as token counts or image_count", name)
 			}

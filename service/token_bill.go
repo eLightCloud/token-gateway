@@ -42,6 +42,9 @@ func WriteTokenBillCSV(writer *csv.Writer, filters model.TokenBillFilters, amoun
 		"计费额度（退款为负）",
 		"币种",
 		"原始计费额度（quota，退款为负）",
+		"历史汇率（1 USD 对应 CNY）",
+		"历史计费金额（CNY，退款为负）",
+		HistoricalBillAmountSourceColumn,
 	}); err != nil {
 		return err
 	}
@@ -52,6 +55,7 @@ func WriteTokenBillCSV(writer *csv.Writer, filters model.TokenBillFilters, amoun
 			return err
 		}
 		for _, entry := range entries.Items {
+			amount, rate, cny := amountFormatter.HistoricalRow(entry.MoneySnapshot, int64(entry.Quota))
 			if err := writer.Write([]string{
 				time.Unix(entry.CreatedAt, 0).Format("2006-01-02 15:04:05"),
 				model.TokenBillTypeLabel(entry.Type),
@@ -68,9 +72,12 @@ func WriteTokenBillCSV(writer *csv.Writer, filters model.TokenBillFilters, amoun
 				entry.ChannelAPIAddress,
 				strconv.Itoa(entry.PromptTokens),
 				strconv.Itoa(entry.CompletionTokens),
-				amountFormatter.Amount(int64(entry.Quota)),
+				amount,
 				amountFormatter.Currency,
 				strconv.Itoa(entry.Quota),
+				rate,
+				cny,
+				amountFormatter.HistoricalBillAmountSource(rate),
 			}); err != nil {
 				return err
 			}

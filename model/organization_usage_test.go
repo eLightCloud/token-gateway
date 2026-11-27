@@ -408,6 +408,20 @@ func TestOrganizationUsageBuildPublishesConservedRollup(t *testing.T) {
 	seedOrganizationUsageLog(t, 801, "gpt-4", 2, 50, 20, 8, monthStart+2*86400+12*3600)
 	seedOrganizationUsageLog(t, 802, "glm-4", 1, 200, 40, 30, monthStart+5*86400+12*3600)
 
+	for channelID, other := range map[int]string{
+		1: `{"money_snapshot":{"exchange_rate":"7.3","quota_per_unit":"500000","amount":"0.00146000"}}`,
+		2: `{"money_snapshot":{"exchange_rate":"8","quota_per_unit":"500000","amount":"0.00080000"}}`,
+	} {
+		require.NoError(t, LOG_DB.Model(&Log{}).Where("user_id = ? AND channel_id = ?", 801, channelID).Update("other", other).Error)
+	}
+	tokenSummary, err := GetTokenBillSummary(TokenBillFilters{
+		StartTimestamp: monthStart, EndTimestamp: monthStart + 10*86400, BillType: TokenBillTypeAll,
+		Perspective: TokenBillPerspectiveCustomer, OrganizationId: organizationId,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "0.00226", tokenSummary.HistoricalAmounts.NetCNY().String())
+	assert.EqualValues(t, 1, tokenSummary.HistoricalAmounts.Missing)
+
 	rangeEnd := monthStart + 10*86400
 	snapshot := runOrganizationUsageTestBuild(t, organizationId, monthStart, rangeEnd)
 	require.Equal(t, OrganizationUsageStatusReady, snapshot.Status)
@@ -415,6 +429,10 @@ func TestOrganizationUsageBuildPublishesConservedRollup(t *testing.T) {
 
 	var payload OrganizationUsageSummaryPayload
 	require.NoError(t, common.Unmarshal(snapshot.SummaryPayload, &payload))
+	require.NotNil(t, payload.HistoricalAmounts)
+	assert.Equal(t, "0.00226", payload.HistoricalAmounts.NetCNY().String())
+	assert.EqualValues(t, 2, payload.HistoricalAmounts.Recorded)
+	assert.EqualValues(t, 1, payload.HistoricalAmounts.Missing)
 	assert.Equal(t, int64(350), payload.TotalQuota)
 	assert.EqualValues(t, 3, payload.RequestCount)
 	assert.EqualValues(t, 70, payload.PromptTokens)
@@ -654,6 +672,8 @@ func TestOrganizationUsageLogPage(t *testing.T) {
 	seedOrganizationUsageLog(t, 851, "gpt-4", 1, 30, 3, 3, monthStart+2*86400)
 	seedOrganizationUsageLog(t, 852, "gpt-4", 1, 40, 4, 4, monthStart+3*86400)
 	seedOrganizationUsageLog(t, 851, "gpt-4", 1, 50, 5, 5, monthStart+4*86400)
+	require.NoError(t, LOG_DB.Model(&Log{}).Where("user_id = ? AND created_at = ?", 851, monthStart+4*86400).
+		Update("other", `{"money_snapshot":{"exchange_rate":"7.3","quota_per_unit":"500000","amount":"0.00073000"}}`).Error)
 	// Outside the requested range and outside the membership window.
 	seedOrganizationUsageLog(t, 851, "gpt-4", 1, 99, 9, 9, monthStart+6*86400)
 	seedOrganizationUsageLog(t, 852, "gpt-4", 1, 98, 8, 8, monthStart)
@@ -672,6 +692,13 @@ func TestOrganizationUsageLogPage(t *testing.T) {
 		require.NoError(t, err)
 		for _, item := range page.Items {
 			pagedIds = append(pagedIds, item.Id)
+			if item.CreatedAt == monthStart+4*86400 {
+				require.NotNil(t, item.MoneySnapshot)
+				assert.Equal(t, "7.3", item.MoneySnapshot.ExchangeRate)
+				assert.Equal(t, "0.00073000", item.MoneySnapshot.Amount)
+			} else {
+				assert.Nil(t, item.MoneySnapshot)
+			}
 		}
 		pages++
 		if !page.HasMore {

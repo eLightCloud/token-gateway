@@ -29,6 +29,7 @@ func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, re
 	if snap.TaskUsageBilling && UsesFixedPricingByHash(snap.ExprString, snap.ExprHash) {
 		return TieredResult{}, fmt.Errorf("fixed pricing is not supported for task usage expressions")
 	}
+	request.CNYExchangeRate = snap.CNYExchangeRate
 	cost, trace, err := RunExprByHashWithRequest(snap.ExprString, snap.ExprHash, params, request)
 	if err != nil {
 		return TieredResult{}, err

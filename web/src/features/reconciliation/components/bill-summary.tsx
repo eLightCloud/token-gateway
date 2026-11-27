@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 
+import { formatHistoricalCNY } from '@/components/billing/historical-billing'
 import { Skeleton } from '@/components/ui/skeleton'
-import { formatBillingAmountFromQuota } from '@/lib/format'
 
 import type { BillSummary } from '../types'
 
@@ -30,6 +30,9 @@ export function BillSummaryPanel(props: {
 
   const totalTokens =
     props.summary.prompt_tokens + props.summary.completion_tokens
+  const history = props.summary.historical_amounts
+  const hasHistory =
+    history && (history.recorded > 0 || props.summary.record_count === 0)
   const isCustomer = props.summary.perspective === 'customer'
   let description = t('Recorded consumption grouped by current API address')
   if (isCustomer) {
@@ -48,16 +51,20 @@ export function BillSummaryPanel(props: {
         {isCustomer ? (
           <p className='text-muted-foreground text-xs tabular-nums'>
             {t('Consumption')}:{' '}
-            {formatBillingAmountFromQuota(props.summary.consume_quota)} ·{' '}
+            {hasHistory ? formatHistoricalCNY(history.consume_cny) : '—'} ·{' '}
             {t('Refund')}:{' '}
-            {formatBillingAmountFromQuota(props.summary.refund_quota)}
+            {hasHistory ? formatHistoricalCNY(history.refund_cny) : '—'}
           </p>
         ) : null}
       </div>
       <div className='divide-border grid grid-cols-2 divide-x sm:grid-cols-3 xl:grid-cols-5'>
         <SummaryMetric
-          label={isCustomer ? t('Net billed quota') : t('Routed billed quota')}
-          value={formatBillingAmountFromQuota(props.summary.net_quota)}
+          label={t('Recorded historical amount')}
+          value={
+            hasHistory && history.net_cny !== undefined
+              ? formatHistoricalCNY(history.net_cny)
+              : '—'
+          }
         />
         <SummaryMetric
           label={isCustomer ? t('Bill records') : t('Consumption records')}
@@ -76,6 +83,13 @@ export function BillSummaryPanel(props: {
           value={numberFormatter.format(totalTokens)}
         />
       </div>
+      {Boolean(history?.missing) && (
+        <p className='text-muted-foreground px-4 pb-3 text-xs'>
+          {t('Records without a historical exchange rate: {{count}}', {
+            count: history?.missing ?? 0,
+          })}
+        </p>
+      )}
     </section>
   )
 }

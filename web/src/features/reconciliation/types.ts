@@ -1,3 +1,6 @@
+import type { BillMoneySnapshot } from '@/components/billing/historical-bill-amount'
+import type { HistoricalAmounts } from '@/components/billing/historical-billing'
+
 export type BillType = 'all' | 'consume' | 'refund'
 export type BillPerspective = 'customer' | 'upstream' | 'api_address'
 export type BillDimension =
@@ -31,6 +34,7 @@ export type BillFilterOption = {
 }
 
 export type BillSummary = {
+  historical_amounts?: HistoricalAmounts
   perspective: BillPerspective
   consume_logging_enabled: boolean
   net_quota: number
@@ -70,6 +74,7 @@ export type BillGroupsPage = {
 }
 
 export type BillEntry = {
+  money_snapshot?: BillMoneySnapshot
   id: number
   user_id: number
   token_id: number

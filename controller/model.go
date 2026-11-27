@@ -265,7 +265,7 @@ func ListModels(c *gin.Context, modelType int) {
 		userModelNames = append(userModelNames, modelName)
 	}
 
-	userModelNames, err = filterResellerModelNames(c.GetInt("id"), userModelNames)
+	userModelNames, err = model.FilterModelsByPricingScope(c.GetInt("id"), userModelNames, ownerGroups)
 	if err != nil {
 		resellerResponse(c, nil, err)
 		return
@@ -358,7 +358,12 @@ func EnabledListModels(c *gin.Context) {
 
 func RetrieveModel(c *gin.Context, modelType int) {
 	modelId := c.Param("model")
-	allowed, err := filterResellerModelNames(c.GetInt("id"), []string{modelId})
+	groups, err := getModelListGroups(c)
+	if err != nil {
+		resellerResponse(c, nil, err)
+		return
+	}
+	allowed, err := model.FilterModelsByPricingScope(c.GetInt("id"), []string{modelId}, groups.ownerGroups)
 	if err != nil {
 		resellerResponse(c, nil, err)
 		return

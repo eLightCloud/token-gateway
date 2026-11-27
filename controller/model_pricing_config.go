@@ -58,10 +58,17 @@ func PreviewModelPricing(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	exchange, pluginExchanges, err := model.PreviewModelPricingExchange(preview)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	common.ApiSuccess(c, model.ModelPricingDescription{
-		Effective:      preview,
-		CacheWriteMode: model.ResolveCacheWriteMode(request.ModelName, request.Pricing),
-		BillingDetails: model.ResolveLegacyBillingDetails(request.ModelName, preview, request.Pricing),
+		PluginExchangePreviews: pluginExchanges,
+		ExchangePreview:        exchange,
+		Effective:              preview,
+		CacheWriteMode:         model.ResolveCacheWriteMode(request.ModelName, request.Pricing),
+		BillingDetails:         model.ResolveLegacyBillingDetails(request.ModelName, preview, request.Pricing),
 	})
 }
 

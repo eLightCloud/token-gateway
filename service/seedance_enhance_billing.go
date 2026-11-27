@@ -46,7 +46,7 @@ func SeedanceEnhanceBillingSummary(task *model.Task, admin, root bool) map[strin
 			}
 			seconds := float64(execution.DurationMS) / 1000
 			facts := map[string]any{"seconds": seconds, "output_resolution": execution.TargetResolution, "fps_tier": tier, "video_input": execution.VideoInput}
-			cost, _, err := billingexpr.RunExprWithRequest(snap.ExprString, billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: facts})
+			cost, _, err := billingexpr.RunExprWithRequest(snap.ExprString, billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: facts, CNYExchangeRate: snap.CNYExchangeRate})
 			if err == nil && cost >= 0 && !math.IsNaN(cost) && !math.IsInf(cost, 0) {
 				summary["unit_price_usd"] = cost / seconds
 			}

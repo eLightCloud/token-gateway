@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -126,4 +127,78 @@ func TestCacheGetRandomSatisfiedChannelUsesTokenAutoGroupsWhenGlobalAutoIsEmpty(
 	assert.Equal(t, 2102, second.Id)
 	assert.Equal(t, "default", selectedGroup)
 	assert.Equal(t, "default", common.GetContextKeyString(ctx, constant.ContextKeyAutoGroup))
+}
+
+func TestSelectChannelForRequestRespectsModelPricingScope(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
+	oldLogDB, oldMaster := model.LOG_DB, common.IsMasterNode
+	t.Setenv("LOG_SQL_DSN", "")
+	common.IsMasterNode = false
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	require.NoError(t, model.InitLogDB())
+	t.Cleanup(func() {
+		model.LOG_DB, common.IsMasterNode = oldLogDB, oldMaster
+		common.SetDatabaseTypes(oldMain, oldLog)
+	})
+	require.NoError(t, db.AutoMigrate(
+		&model.User{}, &model.ResellerIdentity{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{},
+		&model.RealtimePricingState{}, &model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.OrganizationMember{},
+	))
+
+	user := model.User{Username: "scoped-pricing", Role: common.RoleRootUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.RealtimePricingState{ID: 1, Phase: "active"}).Error)
+	const discounted, regular = "discounted-model", "regular-model"
+	createChannelSelectAutoGroupsChannel(t, db, 2111, "default", discounted)
+	createChannelSelectAutoGroupsChannel(t, db, 2112, "default", discounted)
+	createChannelSelectAutoGroupsChannel(t, db, 2113, "default", regular)
+	require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", 2112).Update("priority", 1).Error)
+	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 2112).Update("priority", 1).Error)
+	_, err := model.SaveRealtimePricing(user.Id, "user", user.Id, model.RealtimePricingInput{
+		Items: []model.RealtimePricingItem{{Model: discounted, Ratio: "1", ChannelIDs: []int{2111}}},
+	})
+	require.NoError(t, err)
+	model.InitChannelCache()
+
+	for _, tc := range []struct {
+		name  string
+		cache bool
+	}{{"database", false}, {"memory", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			common.MemoryCacheEnabled = tc.cache
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+			ctx.Set("id", user.Id)
+			retry := &RetryParam{Ctx: ctx, TokenGroup: "default", ModelName: discounted}
+			channel, _, selectErr := SelectChannelForRequest(ctx, discounted, retry)
+			require.Nil(t, selectErr)
+			require.Equal(t, 2111, channel.Id)
+			require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", 2111).Update("enabled", false).Error)
+			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 2111).Update("status", common.ChannelStatusManuallyDisabled).Error)
+			if tc.cache {
+				model.InitChannelCache()
+			}
+			retry.IncreaseRetry()
+			channel, _, err := CacheGetRandomSatisfiedChannel(retry)
+			require.NoError(t, err)
+			assert.Nil(t, channel, "retry never falls back to a channel outside the scope")
+			require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", 2111).Update("enabled", true).Error)
+			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 2111).Update("status", common.ChannelStatusEnabled).Error)
+
+			GetChannelConstraints(ctx).AddPin(dto.ChannelPin{ChannelId: 2112})
+			channel, _, selectErr = SelectChannelForRequest(ctx, discounted, retry)
+			assert.Nil(t, channel)
+			require.NotNil(t, selectErr)
+			assert.Equal(t, dto.FilterPersonalAuthorization, selectErr.FilterKind)
+
+			ctx, _ = gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+			ctx.Set("id", user.Id)
+			retry = &RetryParam{Ctx: ctx, TokenGroup: "default", ModelName: regular}
+			channel, _, selectErr = SelectChannelForRequest(ctx, regular, retry)
+			require.Nil(t, selectErr)
+			require.Equal(t, 2113, channel.Id)
+		})
+	}
 }

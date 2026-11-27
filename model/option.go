@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -19,6 +20,9 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"gorm.io/gorm"
 )
+
+// Serializes local exchange-rate writes and option reloads through publication.
+var exchangeRateOptionMutex sync.Mutex
 
 type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
@@ -207,6 +211,8 @@ func LoadOptionsFromDatabase() error {
 	defer requestPolicyOptionMutex.Unlock()
 	passkeyOptionMutex.Lock()
 	defer passkeyOptionMutex.Unlock()
+	exchangeRateOptionMutex.Lock()
+	defer exchangeRateOptionMutex.Unlock()
 	options, err := AllOption()
 	if err != nil {
 		return err
@@ -310,6 +316,9 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if key == "USDExchangeRate" {
+		return UpdateOptionsBulk(map[string]string{key: value})
+	}
 	if IsRequestPolicyOption(key) {
 		return UpdateRequestPolicyOptions(map[string]string{key: value})
 	}
@@ -379,6 +388,10 @@ func UpdateOptionsBulk(values map[string]string) error {
 		}
 	}
 
+	if _, updatesRate := values["USDExchangeRate"]; updatesRate {
+		exchangeRateOptionMutex.Lock()
+		defer exchangeRateOptionMutex.Unlock()
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		for k, v := range values {
 			option := Option{Key: k}

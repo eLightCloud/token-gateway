@@ -334,7 +334,7 @@ var upgrader = websocket.Upgrader{
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
-	if info.ChannelMeta == nil {
+	if info.ChannelMeta == nil || (info.PersonalPricing.RestrictsChannels() && len(c.GetStringSlice("use_channel")) == 0) {
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
 		if !autoBan {
@@ -354,6 +354,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, types.NewError(errors.New(i18n.T(c, i18n.MsgRelayRetryGetChannelFailed, map[string]any{"Group": selectGroup, "Model": info.OriginModelName, "Error": err.Error()})), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
+		if info.PersonalPricing.RestrictsChannels() {
+			return nil, service.PricingChannelUnavailable(c, info.OriginModelName)
+		}
 		return nil, types.NewError(errors.New(i18n.T(c, i18n.MsgRelayRetryNoAvailableChannel, map[string]any{"Group": selectGroup, "Model": info.OriginModelName})), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 
@@ -602,6 +605,13 @@ func taskReportError(taskErr *taskdto.TaskError) *types.NewAPIError {
 // come from c.Request.Context: native task endpoints use the client context,
 // while the Responses bridge supplies an independently bounded context.
 func executeTaskSubmission(c *gin.Context, relayInfo *relaycommon.RelayInfo) (*taskSubmissionOutcome, *taskdto.TaskError) {
+	if relayInfo.TaskRelayInfo != nil {
+		if locked, ok := relayInfo.LockedChannel.(*model.Channel); ok && locked != nil {
+			if err := service.CheckLockedTaskPricing(c, relayInfo, locked.Id); err != nil {
+				return nil, service.TaskErrorFromAPIError(err)
+			}
+		}
+	}
 	return executeTaskSubmissionWith(c, relayInfo, relay.RelayTaskSubmit, func(c *gin.Context, info *relaycommon.RelayInfo, task *model.Task, quota int, confirmed bool) error {
 		return service.SettleOrganizationInvoiceTaskSubmission(c, info, task, quota, confirmed)
 	})
@@ -698,7 +708,11 @@ func executeTaskSubmissionWith(
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
 			if channelErr != nil {
 				logger.LogError(c, channelErr.Error())
-				taskErr = service.TaskErrorWrapperLocal(channelErr.Err, "get_channel_failed", channelErr.StatusCode)
+				if channelErr.GetErrorCode() == service.PricingChannelUnavailableCode {
+					taskErr = service.TaskErrorFromAPIError(channelErr)
+				} else {
+					taskErr = service.TaskErrorWrapperLocal(channelErr.Err, "get_channel_failed", channelErr.StatusCode)
+				}
 				break
 			}
 		}

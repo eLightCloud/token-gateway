@@ -229,8 +229,9 @@ func smokeTestExpr(exprStr string) error {
 		{Len: math.MaxInt32, ImgCR: math.MaxInt32},
 	}
 
+	requests := billingExprSmokeRequestsFor(exprStr)
 	for _, v := range vectors {
-		for _, request := range billingExprSmokeRequests() {
+		for _, request := range requests {
 			result, _, err := billingexpr.RunExprWithRequest(exprStr, v, request)
 			if err != nil {
 				return fmt.Errorf("vector {p=%g, c=%g}: run failed: %w", v.P, v.C, err)
@@ -262,8 +263,9 @@ func SmokeTestTaskExpr(exprStr string, schema map[string]jsplugin.UsageFieldSche
 		}
 	}
 
+	requests := billingExprSmokeRequestsFor(exprStr)
 	for _, usage := range taskUsageSmokeVectors(schema) {
-		for _, request := range billingExprSmokeRequests() {
+		for _, request := range requests {
 			request.Usage = usage
 			result, _, err := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{}, request)
 			if err != nil {

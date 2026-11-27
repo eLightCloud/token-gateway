@@ -54,30 +54,6 @@ func resellerVisibleTasks(userID int, tasks []*dto.TaskDto) (any, error) {
 	return rows, nil
 }
 
-// Model list responses retain the original protocol envelope, filtered by the
-// same effective model/channel intersection as actual consumption.
-func filterResellerModelNames(userID int, names []string) ([]string, error) {
-	kind, err := model.ResellerUserKind(model.DB, userID)
-	if err != nil {
-		return nil, err
-	}
-	if kind != "agent_customer" {
-		return names, nil
-	}
-	snapshots, err := model.LoadPersonalDisplayPricings(userID, names)
-	if err != nil {
-		return nil, err
-	}
-	allowed := make([]string, 0, len(names))
-	for _, name := range names {
-		snapshot := snapshots[name]
-		if snapshot != nil && len(snapshot.Channels) > 0 {
-			allowed = append(allowed, name)
-		}
-	}
-	return allowed, nil
-}
-
 func resellerVisiblePricing(userID int, pricing []model.Pricing) ([]model.Pricing, error) {
 	if userID <= 0 {
 		return pricing, nil

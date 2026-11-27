@@ -40,7 +40,15 @@ export type PricingWorkspace = {
   }[]
 }
 export type PricingPreview = {
-  rows: { model: string; channel_id: number; ratio: string; source: string }[]
+  rows: {
+    model: string
+    channel_id: number
+    ratio: string
+    source: string
+    unavailable?: boolean
+  }[]
+  unavailable_models?: string[]
+  group_status?: { model: string; group: string; available: boolean }[]
   user_revision: number
   organization_revision: number
   generated_at: number

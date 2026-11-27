@@ -642,7 +642,7 @@ func GetUserModels(c *gin.Context) {
 			groupsToQuery = []string{group}
 		}
 	}
-	names, err := filterResellerModelNames(id, service.GetGroupsEnabledModels(groupsToQuery))
+	names, err := model.FilterModelsByPricingScope(id, service.GetGroupsEnabledModels(groupsToQuery), groupsToQuery)
 	if err != nil {
 		common.ApiError(c, err)
 		return

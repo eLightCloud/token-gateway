@@ -103,11 +103,18 @@ export async function previewModelPricingConversion(request: {
   return response.data.data
 }
 
+export type ModelPricingExchangePreview = {
+  rate: number
+  usd_expression: string
+}
+
 export async function previewModelPricing(request: {
   model_name: string
   pricing: PricingValues
 }): Promise<{
   effective: PricingValues
+  exchangePreview?: ModelPricingExchangePreview
+  pluginExchangePreviews?: Record<string, ModelPricingExchangePreview>
   cacheWriteMode?: CacheWriteMode
   billingDetails?: LegacyBillingDetails
 }> {
@@ -117,6 +124,8 @@ export async function previewModelPricing(request: {
   }
   return {
     effective: response.data.data.effective,
+    exchangePreview: response.data.data.exchange_preview,
+    pluginExchangePreviews: response.data.data.plugin_exchange_previews,
     cacheWriteMode: response.data.data.cache_write_mode,
     billingDetails: response.data.data.billing_details,
   }

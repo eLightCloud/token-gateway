@@ -38,6 +38,11 @@ import {
 } from './api'
 import { ResellerConfigError } from './config-error'
 import { ResellerRatioField } from './config-ratio-field'
+import {
+  hasProcurementRatio,
+  normalizeProcurementItem,
+  procurementGrantKey,
+} from './lib/procurement-grant'
 
 const configItemKey = (item: ConfigItem) => `${item.model}:${item.channel_id}`
 
@@ -78,14 +83,18 @@ export function ResellerConfigEditor({
   const [items, setItems] = useState(config.items)
   const [filter, setFilter] = useState('')
   const [saved, setSaved] = useState(false)
-  const dirty = !saved && JSON.stringify(items) !== JSON.stringify(config.items)
+  const normalizedItems = procurement
+    ? items.map(normalizeProcurementItem)
+    : items.map((item) => ({ ...item, ratio: item.ratio || '1' }))
+  const dirty =
+    !saved &&
+    (procurement
+      ? JSON.stringify(normalizedItems) !==
+        JSON.stringify(config.items.map(normalizeProcurementItem))
+      : JSON.stringify(items) !== JSON.stringify(config.items))
   useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
-  const normalizedItems = items.map((item) => ({
-    ...item,
-    ratio: item.ratio || '1',
-  }))
   const maxRatio = procurement ? 5 : 2
   const invalidItems = items.filter(
     (item) => !isValidResellerRatio(item.ratio, maxRatio)
@@ -93,11 +102,13 @@ export function ResellerConfigEditor({
   const preview = useMutation({
     meta: { errorToast: false },
     mutationFn: () =>
-      resellerRequest<{ affected_customers: number }>(
-        `${resellerPath(admin)}/${userID}/config/preview`,
-        'post',
-        { expected_revision: config.revision, items: normalizedItems }
-      ),
+      resellerRequest<{
+        affected_customers: number
+        newly_blocked_customers?: number
+      }>(`${resellerPath(admin)}/${userID}/config/preview`, 'post', {
+        expected_revision: config.revision,
+        items: normalizedItems,
+      }),
   })
   const mutation = useMutation({
     meta: { errorToast: false },
@@ -112,19 +123,33 @@ export function ResellerConfigEditor({
     },
   })
   const affectedCustomers = preview.data?.affected_customers ?? 0
+  const blockedCustomers = preview.data?.newly_blocked_customers ?? 0
   const originalGrants = new Set(
     config.items
-      .filter((item) => item.authorized)
-      .map((item) => `${item.model}:${item.channel_id}`)
+      .filter(
+        (item) => item.authorized || (procurement && hasProcurementRatio(item))
+      )
+      .map((item) =>
+        procurement ? procurementGrantKey(item) : configItemKey(item)
+      )
   )
   const currentGrants = new Set(
     items
-      .filter((item) => item.authorized)
-      .map((item) => `${item.model}:${item.channel_id}`)
+      .filter(
+        (item) => item.authorized || (procurement && hasProcurementRatio(item))
+      )
+      .map((item) =>
+        procurement ? procurementGrantKey(item) : configItemKey(item)
+      )
   )
   const grantsChanged =
     originalGrants.size !== currentGrants.size ||
     [...originalGrants].some((key) => !currentGrants.has(key))
+  const scopedProcurementModels = new Set(
+    procurement
+      ? items.filter(hasProcurementRatio).map((item) => item.model)
+      : []
+  )
   const available = new Set(candidates.map(configItemKey))
   const configured = new Set(config.items.map(configItemKey))
   const drafts = new Map(items.map((item) => [configItemKey(item), item]))
@@ -163,6 +188,13 @@ export function ResellerConfigEditor({
               'Configure authorization here. Consumption ratios are managed in realtime model pricing.'
             )}
       </p>
+      {procurement && (
+        <p className='text-muted-foreground text-sm'>
+          {t(
+            'A model with configured procurement ratios can only use authorized channels with a ratio set. Enter 1 for an explicit base rate, or clear the field to use the default.'
+          )}
+        </p>
+      )}
       <div className='max-w-md space-y-2'>
         <Label htmlFor='config-model-search'>{t('Search models')}</Label>
         <Input
@@ -214,12 +246,20 @@ export function ResellerConfigEditor({
                 item={row}
                 invalid={!isValidResellerRatio(row.ratio, maxRatio)}
                 maxRatio={maxRatio}
+                procurement={procurement}
                 disabled={
                   !consumptionEditable ||
                   busy ||
                   (!admin && !available.has(configItemKey(row)))
                 }
-                onChange={(ratio) => update(row, { ratio })}
+                onChange={(ratio) =>
+                  update(
+                    row,
+                    procurement
+                      ? { ratio, ratio_configured: ratio !== '' }
+                      : { ratio }
+                  )
+                }
               />
             ),
           },
@@ -241,6 +281,13 @@ export function ResellerConfigEditor({
                 !isValidResellerRatio(row.ratio, maxRatio)
               ) {
                 return '—'
+              }
+              if (
+                row.authorized &&
+                scopedProcurementModels.has(row.model) &&
+                !hasProcurementRatio(row)
+              ) {
+                return t('Outside procurement channel scope')
               }
               return row.authorized ? t('Effective') : t('Not authorized')
             },
@@ -272,7 +319,19 @@ export function ResellerConfigEditor({
           preview.reset()
           mutation.mutate()
         }}
-      />
+      >
+        {blockedCustomers > 0 && (
+          <p role='alert' className='text-sm'>
+            {t(
+              '{{count}} customers will lose all eligible procurement channels for at least one model.',
+              {
+                count: blockedCustomers,
+                replace: { count: formatNumber(blockedCustomers, locale) },
+              }
+            )}
+          </p>
+        )}
+      </ConfirmDialog>
       <Button
         disabled={!dirty || invalidItems.length > 0 || busy}
         onClick={() =>
