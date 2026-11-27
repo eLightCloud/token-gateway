@@ -112,34 +112,13 @@ stop_port_listener() {
 }
 
 ensure_embed_assets() {
-  mkdir -p "${ROOT_DIR}/web/default/dist" "${ROOT_DIR}/web/classic/dist"
+  local dist_dir="${ROOT_DIR}/web/dist"
+  mkdir -p "${dist_dir}"
 
-  if [[ ! -f "${ROOT_DIR}/web/default/dist/index.html" ]] ||
+  if [[ ! -f "${dist_dir}/index.html" ]] ||
     grep -Eq '<body>use frontend dev server</body>|<!-- start.sh dev redirect -->' \
-      "${ROOT_DIR}/web/default/dist/index.html"; then
-    cat >"${ROOT_DIR}/web/default/dist/index.html" <<EOF
-<!doctype html>
-<!-- start.sh dev redirect -->
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <title>Opening frontend dev server</title>
-    <script>
-      window.location.replace(
-        window.location.protocol + '//' + window.location.hostname + ':${FRONTEND_PORT}' +
-          window.location.pathname + window.location.search + window.location.hash
-      )
-    </script>
-  </head>
-  <body>Opening frontend dev server...</body>
-</html>
-EOF
-  fi
-
-  if [[ ! -f "${ROOT_DIR}/web/classic/dist/index.html" ]] ||
-    grep -Eq '<body>use frontend dev server</body>|<!-- start.sh dev redirect -->' \
-      "${ROOT_DIR}/web/classic/dist/index.html"; then
-    cat >"${ROOT_DIR}/web/classic/dist/index.html" <<EOF
+      "${dist_dir}/index.html"; then
+    cat >"${dist_dir}/index.html" <<EOF
 <!doctype html>
 <!-- start.sh dev redirect -->
 <html>
