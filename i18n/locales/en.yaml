@@ -73,7 +73,7 @@ email.security_event.login_unlinked: "Login account unlinked"
 email.security_event.wechat_linked: "WeChat account linked"
 
 # Low-quota notices
-notify.quota_low_title: "Your quota is running low"
+notify.wallet_below_threshold: "Wallet balance below {{.Threshold}}"
 notify.subscription_quota_low_title: "Your subscription quota is running low"
 notify.quota_low_bark: "{{.Prompt}}, remaining quota: {{.Quota}}. Please top up soon"
 notify.quota_low_gotify: "{{.Prompt}}. Your remaining quota is {{.Quota}}. Please top up soon."

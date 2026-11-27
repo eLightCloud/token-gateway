@@ -72,6 +72,7 @@ func TestMain(m *testing.M) {
 		&QuotaData{},
 		&Ability{},
 		&TopUp{},
+		&WalletReminder{},
 		&SubscriptionPlan{},
 		&SubscriptionOrder{},
 		&UserSubscription{},
@@ -104,6 +105,7 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM organization_invoice_baselines")
 		DB.Exec("DELETE FROM user_quota_adjustments")
 		DB.Exec("DELETE FROM user_quota_adjustment_legacy_facts")
+		DB.Exec("DELETE FROM wallet_reminders")
 		DB.Exec("DELETE FROM checkins")
 		DB.Exec("DELETE FROM redemptions")
 		DB.Exec("DELETE FROM organization_members")

@@ -43,6 +43,7 @@ const profile: UserProfile = {
 }
 const settings = {
   notify_type: 'webhook',
+  quota_warning_mode: 'custom',
   quota_warning_threshold: 1200,
   notification_email: '',
   webhook_url: 'https://example.com/notify',
@@ -93,6 +94,7 @@ describe('user settings saves across profile and security', () => {
     expect(put.mock.calls[0][0]).toBe('/api/user/setting')
     expect(sentBody(put)).toEqual({
       notify_type: 'email',
+      quota_warning_mode: 'tiers',
       quota_warning_threshold: 0,
       notification_email: '',
       webhook_url: '',
@@ -284,19 +286,20 @@ describe('notifications a user receives', () => {
     expect(screen.getByText('Notification Method')).toBeInTheDocument()
   })
 
-  it('an empty threshold shows the site default and saves as the site default', async () => {
+  it('defaults to four wallet tiers and persists the optional $10 schedule', async () => {
     const put = mockSave(ROLE.USER, { notify_type: 'email' })
     const onUpdate = renderNotificationTab(ROLE.USER, { notify_type: 'email' })
-    const threshold = screen.getByRole('spinbutton', {
-      name: 'Reminder threshold (USD)',
-    })
-    expect(threshold).toHaveValue(null)
-    expect(threshold).toHaveAttribute('placeholder', '0.002')
     expect(
-      screen.getByText('Leave empty to use the site default ($0.002)')
+      screen.getByText('Wallet reminders at $100, $30, $10, and $2 USD')
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Every $10' }))
+    expect(
+      screen.getByText(
+        'Wallet reminders every $10 from $100 to $10 USD, plus $2 USD'
+      )
     ).toBeInTheDocument()
     await save(onUpdate)
-    expect(sentBody(put)).toMatchObject({ quota_warning_threshold: 0 })
+    expect(sentBody(put)).toMatchObject({ quota_warning_mode: 'step' })
   })
 
   it('an untouched threshold is saved as stored, in quota units', async () => {

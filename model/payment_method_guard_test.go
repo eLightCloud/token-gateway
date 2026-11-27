@@ -216,6 +216,23 @@ func TestRechargeEpayCreditsQuotaExactlyOnce(t *testing.T) {
 	assert.EqualValues(t, 2*500000, getUserQuotaForPaymentGuardTest(t, user.Id))
 }
 
+func TestRechargeStripeCreditsQuotaExactlyOnce(t *testing.T) {
+	truncateTables(t)
+	const userID = 501
+	const tradeNo = "STRIPEWALLETREMINDER"
+	user := insertUserForPaymentGuardTest(t, userID, 0)
+	require.NoError(t, (&TopUp{
+		UserId: userID, TradeNo: tradeNo, Money: 20, Amount: 20,
+		PaymentMethod: PaymentMethodStripe, PaymentProvider: PaymentProviderStripe,
+		Status: common.TopUpStatusPending,
+	}).Insert())
+
+	require.NoError(t, Recharge(tradeNo, "stripe-wallet-recipient", "127.0.0.1"))
+	assert.EqualValues(t, 20*common.QuotaPerUnit, getUserQuotaForPaymentGuardTest(t, user.Id))
+	require.Error(t, Recharge(tradeNo, "stripe-wallet-recipient", "127.0.0.1"))
+	assert.EqualValues(t, 20*common.QuotaPerUnit, getUserQuotaForPaymentGuardTest(t, user.Id))
+}
+
 func TestRechargeEpayKeepsRedisAndDatabaseCreditInSync(t *testing.T) {
 	truncateTables(t)
 	useUserCacheMiniRedis(t)

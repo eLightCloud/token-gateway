@@ -109,7 +109,7 @@ func creditTopUpQuota(tx *gorm.DB, userId int, creditedQuota int64, updates map[
 		return result.Error
 	}
 	if result.RowsAffected == 1 {
-		return nil
+		return rearmWalletReminderOnCredit(tx, userId)
 	}
 
 	var count int64
@@ -272,12 +272,6 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 			common.MaxWalletQuota,
 		)
 		if err != nil {
-			return err
-		}
-		if err := adjustUserWalletInTx(tx, topUp.UserId, quota); err != nil {
-			return err
-		}
-		if err := tx.Model(&User{}).Where("id = ?", topUp.UserId).Update("stripe_customer", customerId).Error; err != nil {
 			return err
 		}
 
@@ -526,7 +520,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		}
 
 		// 增加用户额度（立即写库，保持一致性）
-		if err := adjustUserWalletInTx(tx, topUp.UserId, quotaToAdd); err != nil {
+		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil); err != nil {
 			return err
 		}
 
@@ -588,7 +582,7 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 		if err != nil {
 			return err
 		}
-		if err := adjustUserWalletInTx(tx, topUp.UserId, quota); err != nil {
+		if err := creditTopUpQuota(tx, topUp.UserId, quota, nil); err != nil {
 			return err
 		}
 
@@ -680,7 +674,7 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 			return err
 		}
 
-		if err := adjustUserWalletInTx(tx, topUp.UserId, quotaToAdd); err != nil {
+		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil); err != nil {
 			return err
 		}
 
@@ -751,7 +745,7 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 			return err
 		}
 
-		if err := adjustUserWalletInTx(tx, topUp.UserId, quotaToAdd); err != nil {
+		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil); err != nil {
 			return err
 		}
 

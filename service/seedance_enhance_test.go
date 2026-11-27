@@ -148,7 +148,7 @@ func enhancementFixture(t *testing.T, dialect string) (*gorm.DB, model.SeedanceE
 	previousAddress := system_setting.TaskPublicAddress
 	system_setting.TaskPublicAddress = "https://gateway.example"
 	t.Cleanup(func() { system_setting.TaskPublicAddress = previousAddress })
-	tables := []any{&model.SeedanceEnhanceConfig{}, &model.SeedanceEnhanceExecution{}, &model.SeedanceEnhanceAttempt{}, &model.Option{}, &model.Task{}, &model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.Log{}, &model.TaskSettlementJournal{}, &model.UserSubscription{}}
+	tables := []any{&model.SeedanceEnhanceConfig{}, &model.SeedanceEnhanceExecution{}, &model.SeedanceEnhanceAttempt{}, &model.Option{}, &model.Task{}, &model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.Log{}, &model.TaskSettlementJournal{}, &model.WalletReminder{}, &model.UserSubscription{}}
 	// Test databases are dedicated to this suite. Fresh migration and restart
 	// are both exercised; released-schema upgrade is a separate acceptance run.
 	for _, table := range tables {

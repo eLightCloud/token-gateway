@@ -92,7 +92,7 @@ const (
 
 // Low-quota notices, in the recipient's saved language
 const (
-	MsgNotifyQuotaLowTitle             = "notify.quota_low_title"
+	MsgNotifyWalletBelowThreshold      = "notify.wallet_below_threshold"
 	MsgNotifySubscriptionQuotaLowTitle = "notify.subscription_quota_low_title"
 	MsgNotifyQuotaLowBark              = "notify.quota_low_bark"
 	MsgNotifyQuotaLowGotify            = "notify.quota_low_gotify"

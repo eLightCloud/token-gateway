@@ -448,7 +448,6 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 			relayInfo.SubscriptionPostDelta += delta
 		}
 	} else {
-		// Wallet
 		if quota > 0 {
 			err = model.DecreaseUserQuota(relayInfo.UserId, int64(quota), false)
 		} else {
@@ -472,32 +471,15 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 		result.TokenApplied = true
 	}
 
-	if sendEmail {
-		if (quota + preConsumedQuota) != 0 {
-			checkAndSendQuotaNotify(relayInfo, quota, preConsumedQuota)
+	if sendEmail && (quota+preConsumedQuota) > 0 {
+		if relayInfo.BillingSource == BillingSourceSubscription {
+			notifySubscriptionSettlement(relayInfo, quota+preConsumedQuota)
+		} else {
+			model.ObserveLegacyWalletSettlement(relayInfo.UserId, relayInfo.UserQuota, int64(quota+preConsumedQuota))
 		}
 	}
 
 	return result, nil
-}
-
-func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int) {
-	gopool.Go(func() {
-		userSetting := relayInfo.UserSetting
-		// UserQuota is the balance before this request; quota plus
-		// preConsumedQuota is what the request finally cost.
-		balanceAfter := relayInfo.UserQuota - (int64(quota) + int64(preConsumedQuota))
-		if !quotaReminderDue(userSetting, int64(relayInfo.UserQuota), int64(balanceAfter)) {
-			return
-		}
-		lang := userSetting.Language
-		prompt := i18n.Translate(lang, i18n.MsgNotifyQuotaLowTitle)
-		content, values := quotaNotifyContent(lang, userSetting.NotifyType, prompt, logger.FormatQuota(balanceAfter))
-		err := NotifyUser(relayInfo.UserId, relayInfo.UserEmail, relayInfo.UserSetting, dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values))
-		if err != nil {
-			common.SysError(common.LogText("failed to send quota notify to user %d: %s", relayInfo.UserId, err.Error()))
-		}
-	})
 }
 
 func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
@@ -526,12 +508,8 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 	})
 }
 
-// quotaReminderDue reports whether a charge that moved a balance (wallet or
-// subscription) from before to after earns a low-balance reminder. The site
-// and the user must both have reminders on, and the charge must cross the
-// user's threshold, or the site default when the user set none. A balance
-// already below the threshold earns nothing more until a top-up lifts it back
-// above, so a user gets one reminder per drop.
+// quotaReminderDue checks whether a subscription charge crossed the user's
+// threshold or the site default when the user set none.
 func quotaReminderDue(userSetting dto.UserSetting, before int64, after int64) bool {
 	if !common.QuotaRemindEnabled {
 		return false

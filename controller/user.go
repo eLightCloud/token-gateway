@@ -1346,6 +1346,7 @@ func TopUp(c *gin.Context) {
 }
 
 type UpdateUserSettingRequest struct {
+	QuotaWarningMode                 *string `json:"quota_warning_mode,omitempty"`
 	QuotaWarningType                 string  `json:"notify_type"`
 	QuotaWarningThreshold            float64 `json:"quota_warning_threshold"`
 	QuotaWarningEnabled              *bool   `json:"quota_warning_enabled,omitempty"`
@@ -1379,6 +1380,15 @@ func UpdateUserSetting(c *gin.Context) {
 	if req.QuotaWarningThreshold < 0 {
 		common.ApiErrorT(c, "Reminder threshold cannot be negative")
 		return
+	}
+
+	if req.QuotaWarningMode != nil {
+		switch *req.QuotaWarningMode {
+		case dto.QuotaWarningModeTiers, dto.QuotaWarningModeStep, dto.QuotaWarningModeCustom:
+		default:
+			common.ApiErrorT(c, "Invalid wallet reminder mode")
+			return
+		}
 	}
 
 	// 如果是webhook类型,验证webhook地址
@@ -1454,6 +1464,12 @@ func UpdateUserSetting(c *gin.Context) {
 	settings := user.GetSetting()
 	settings.NotifyType = req.QuotaWarningType
 	settings.QuotaWarningThreshold = req.QuotaWarningThreshold
+	if req.QuotaWarningMode != nil {
+		settings.QuotaWarningMode = *req.QuotaWarningMode
+		if settings.QuotaWarningMode == dto.QuotaWarningModeCustom && req.QuotaWarningThreshold == 0 {
+			settings.QuotaWarningMode = dto.QuotaWarningModeTiers
+		}
+	}
 	settings.AcceptUnsetRatioModel = req.AcceptUnsetModelRatioModel
 	settings.RecordIpLog = req.RecordIpLog
 	if req.QuotaWarningEnabled != nil {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -224,6 +225,36 @@ func TestSweepPendingTaskSettlementsUsesSameAtomicApplyPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 	assert.Equal(t, 0, SweepPendingTaskSettlements(ctx))
+}
+
+func TestSweepQueuesWalletReminderForRecoveredSettlement(t *testing.T) {
+	truncate(t)
+	previous := common.QuotaRemindEnabled
+	common.QuotaRemindEnabled = true
+	t.Cleanup(func() { common.QuotaRemindEnabled = previous })
+	const userID = 92
+	seedUser(t, userID, 12_000)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).
+		Update("setting", `{"quota_warning_mode":"custom","quota_warning_threshold":10000}`).Error)
+	_, err := model.EnsureTaskSettlementJournal(&model.TaskSettlementJournal{
+		RequestId: "settle:recover-wallet-reminder", Operation: model.TaskSettlementOperationSettle,
+		FinalQuota: 3_000, Delta: 3_000, UserId: userID, BillingSource: BillingSourceWallet, LogDone: true,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, SweepPendingTaskSettlements(t.Context()))
+	assert.EqualValues(t, 9_000, getUserQuota(t, userID))
+	due, err := model.ListDueWalletReminders(t.Context(), time.Now(), 10)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+	assert.EqualValues(t, 10_000, due[0].PendingThreshold)
+	claimed, err := model.ClaimWalletReminder(t.Context(), due[0], time.Now())
+	require.NoError(t, err)
+	require.True(t, claimed)
+	assert.Zero(t, SweepPendingTaskSettlements(t.Context()))
+	due, err = model.ListDueWalletReminders(t.Context(), time.Now(), 10)
+	require.NoError(t, err)
+	assert.Empty(t, due)
 }
 
 func TestSweepKeepsAtomicJournalWhenFundingCannotApply(t *testing.T) {

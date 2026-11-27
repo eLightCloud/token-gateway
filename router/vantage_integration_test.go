@@ -380,7 +380,7 @@ func TestVantageModelServiceConsumer(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "billing.db")), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Log{}, &model.Option{}, &model.VantageAccountBinding{}, &model.VantageCredentialBinding{}, &model.VantageCredentialRotation{}, &model.VantageTokenQuotaConfig{}, &model.VantageTokenQuotaOperation{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.TaskSettlementJournal{}, &model.SystemTask{}, &model.SystemTaskLock{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Log{}, &model.Option{}, &model.VantageAccountBinding{}, &model.VantageCredentialBinding{}, &model.VantageCredentialRotation{}, &model.VantageTokenQuotaConfig{}, &model.VantageTokenQuotaOperation{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.TaskSettlementJournal{}, &model.WalletReminder{}, &model.SystemTask{}, &model.SystemTaskLock{}))
 	require.NoError(t, model.MigrateVantageModelService(db))
 	priorDB, priorLog, redis := model.DB, model.LOG_DB, common.RedisEnabled
 	model.DB, model.LOG_DB, common.RedisEnabled = db, db, false

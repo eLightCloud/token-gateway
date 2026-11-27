@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -66,11 +67,6 @@ func notifyAdmins(notifyType string, receives func(role int, setting dto.UserSet
 }
 
 func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data dto.Notify) error {
-	notifyType := userSetting.NotifyType
-	if notifyType == "" {
-		notifyType = dto.NotifyTypeEmail
-	}
-
 	// Check notification limit
 	canSend, err := CheckNotificationLimit(userId, data.Type)
 	if err != nil {
@@ -78,10 +74,14 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 		return err
 	}
 	if !canSend {
-		return fmt.Errorf("notification limit exceeded for user %d with type %s", userId, notifyType)
+		return fmt.Errorf("notification limit exceeded for user %d with type %s", userId, cmp.Or(userSetting.NotifyType, dto.NotifyTypeEmail))
 	}
 
-	switch notifyType {
+	return deliverUserNotification(userId, userEmail, userSetting, data)
+}
+
+func deliverUserNotification(userId int, userEmail string, userSetting dto.UserSetting, data dto.Notify) error {
+	switch cmp.Or(userSetting.NotifyType, dto.NotifyTypeEmail) {
 	case dto.NotifyTypeEmail:
 		// 优先使用设置中的通知邮箱，如果为空则使用用户的默认邮箱
 		emailToUse := userSetting.NotificationEmail

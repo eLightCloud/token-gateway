@@ -70,7 +70,9 @@ test('the default threshold shows as an amount and is not saved again when remin
   const user = userEvent.setup()
   renderSettings()
   expect(
-    screen.getByRole('spinbutton', { name: 'Default reminder threshold (USD)' })
+    screen.getByRole('spinbutton', {
+      name: 'Default threshold for subscriptions and daily summaries (USD)',
+    })
   ).toHaveValue(0.002)
   await user.click(screen.getByRole('switch', { name: 'Low balance reminder' }))
   await user.click(screen.getByRole('button', { name: 'Save Changes' }))
@@ -87,7 +89,7 @@ test('an edited default threshold is saved in quota units', async () => {
   const user = userEvent.setup()
   renderSettings()
   const input = screen.getByRole('spinbutton', {
-    name: 'Default reminder threshold (USD)',
+    name: 'Default threshold for subscriptions and daily summaries (USD)',
   })
   await user.clear(input)
   await user.type(input, '1')
@@ -107,7 +109,7 @@ test('turning the reminder off hides the default threshold and saves the switch'
   await user.click(screen.getByRole('switch', { name: 'Low balance reminder' }))
   expect(
     screen.queryByRole('spinbutton', {
-      name: 'Default reminder threshold (USD)',
+      name: 'Default threshold for subscriptions and daily summaries (USD)',
     })
   ).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: 'Save Changes' }))

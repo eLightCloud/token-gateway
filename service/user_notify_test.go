@@ -22,11 +22,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// A low-balance reminder goes out once, on the charge that takes a wallet or
-// subscription balance below the threshold. A balance already below it earns
-// nothing more until a top-up lifts it back above the line. The site switch
-// and the user's switch both turn reminders off; a user who never chose gets
-// them.
+// A subscription reminder goes out when a charge takes the remaining quota
+// below the configured threshold. Site and user switches both apply.
 func TestQuotaReminderFiresOncePerDrop(t *testing.T) {
 	previousEnabled, previousThreshold := common.QuotaRemindEnabled, common.QuotaRemindThreshold
 	t.Cleanup(func() {

@@ -28,16 +28,10 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
-  SettingsControlChildren,
   SettingsControlGroup,
   SettingsSwitchField,
 } from '@/features/system-settings/components/settings-form-layout'
-import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
-import {
-  formatQuota,
-  parseQuotaFromDollars,
-  quotaUnitsToDollars,
-} from '@/lib/format'
+import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
 import { ROLE } from '@/lib/roles'
 
@@ -45,6 +39,7 @@ import { updateUserSettings } from '../../api'
 import { NOTIFICATION_METHODS } from '../../constants'
 import { normalizeUserSettings } from '../../lib/user-settings'
 import type { UserProfile, NotifyType } from '../../types'
+import { WalletReminderFields } from './wallet-reminder-fields'
 
 const NOTIFICATION_ICONS: Record<NotifyType, typeof Mail> = {
   email: Mail,
@@ -94,7 +89,6 @@ export function NotificationTab({
     if (profile?.setting) {
       const next = normalizeUserSettings(profile.setting)
       setSettings(next)
-      // 0 means the site default and shows as an empty input.
       setThresholdInput(
         next.quota_warning_threshold
           ? String(quotaUnitsToDollars(next.quota_warning_threshold))
@@ -128,7 +122,6 @@ export function NotificationTab({
   const quotaWarningEnabled = settings.quota_warning_enabled ?? true
   const channelNotifyEnabled =
     settings.channel_notify_enabled ?? role >= ROLE.SUPER_ADMIN
-  const tokensOnly = getCurrencyDisplay().meta.kind === 'tokens'
 
   return (
     <div className='space-y-4 sm:space-y-6'>
@@ -329,7 +322,7 @@ export function NotificationTab({
                     controlId='quotaWarningEnabled'
                     label={t('Low balance reminder')}
                     description={t(
-                      'Remind me once when my balance drops below the threshold'
+                      'Remind me when my balance crosses a reminder threshold'
                     )}
                     checked={quotaWarningEnabled}
                     onCheckedChange={(checked) =>
@@ -337,37 +330,21 @@ export function NotificationTab({
                     }
                   />
                   {quotaWarningEnabled && (
-                    <SettingsControlChildren className='space-y-1.5 pb-1'>
-                      <Label htmlFor='threshold'>
-                        {t('Reminder threshold')} ({getCurrencyLabel()})
-                      </Label>
-                      <Input
-                        id='threshold'
-                        type='number'
-                        className='h-9'
-                        min={0}
-                        step={tokensOnly ? 1 : 0.000001}
-                        value={thresholdInput}
-                        onChange={(e) => {
-                          const value = e.target.value
-                          setThresholdInput(value)
-                          updateField(
-                            'quota_warning_threshold',
-                            value.trim() === ''
-                              ? 0
-                              : parseQuotaFromDollars(Number(value))
-                          )
-                        }}
-                        placeholder={String(
-                          quotaUnitsToDollars(quotaRemindThreshold)
-                        )}
-                      />
-                      <p className='text-muted-foreground text-xs'>
-                        {t('Leave empty to use the site default ({{amount}})', {
-                          amount: formatQuota(quotaRemindThreshold),
-                        })}
-                      </p>
-                    </SettingsControlChildren>
+                    <WalletReminderFields
+                      mode={settings.quota_warning_mode}
+                      threshold={thresholdInput}
+                      subscriptionThreshold={quotaRemindThreshold}
+                      onModeChange={(mode) =>
+                        updateField('quota_warning_mode', mode)
+                      }
+                      onThresholdChange={(value) => {
+                        setThresholdInput(value)
+                        updateField(
+                          'quota_warning_threshold',
+                          parseQuotaFromDollars(Number(value))
+                        )
+                      }}
+                    />
                   )}
                 </>
               )}

@@ -258,6 +258,11 @@ func ApplyTaskSettlementJournal(requestId string, transaction ...*gorm.DB) (*Tas
 		if err := applyPersonalJournalTx(tx, &stored); err != nil {
 			return err
 		}
+		if appliedNow {
+			if err := observeSettlementWalletSpend(tx, &stored); err != nil {
+				return err
+			}
+		}
 		result := tx.Model(&TaskSettlementJournal{}).
 			Where("id = ? AND applied = ?", stored.Id, false).
 			Updates(map[string]interface{}{

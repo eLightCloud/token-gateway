@@ -191,6 +191,7 @@ func main() {
 	controller.RegisterScheduledSystemTasks()
 	service.StartSystemTaskRunner()
 	service.StartOperationsNotifications()
+	service.StartWalletReminders()
 
 	// Read-only structure check of the log indexes the organization invoice
 	// relies on: reports reversed-column drift instead of silently running on

@@ -98,7 +98,7 @@ func TestDeepSeekToolsHelper(t *testing.T) {
 	batch, logConsume, redis := common.BatchUpdateEnabled, common.LogConsumeEnabled, common.RedisEnabled
 	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/deepseek.db"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.TaskSettlementJournal{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.TaskSettlementJournal{}, &model.WalletReminder{}, &model.Log{}))
 	model.DB, model.LOG_DB = db, db
 	common.BatchUpdateEnabled, common.LogConsumeEnabled, common.RedisEnabled = false, false, false
 	t.Cleanup(func() {

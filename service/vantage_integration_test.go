@@ -966,7 +966,7 @@ func TestVantageDatabaseMatrix(t *testing.T) {
 // financial assertions read native User/Token fields, never metadata counters.
 func runVantageNativeTokenQuotaFlow(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	require.NoError(t, db.AutoMigrate(&model.TaskSettlementJournal{}))
+	require.NoError(t, db.AutoMigrate(&model.TaskSettlementJournal{}, &model.WalletReminder{}))
 	enterprise, err := VantageProvisionEnterpriseAccount("quota-enterprise", "Quota")
 	require.NoError(t, err)
 	first, err := VantageProvisionMemberCredential("quota-enterprise", "quota-one", "quota-one")

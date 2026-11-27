@@ -58,7 +58,8 @@ func (s *BillingSession) settle(ctx context.Context, actualQuota int, channelId 
 		return nil
 	}
 	delta := actualQuota - s.preConsumedQuota
-	if delta == 0 && !applyUsage && logParams == nil && s.relayInfo.PersonalPricing == nil {
+	if delta == 0 && !applyUsage && logParams == nil && s.relayInfo.PersonalPricing == nil &&
+		!(common.QuotaRemindEnabled && actualQuota > 0 && s.funding.Source() == BillingSourceWallet) {
 		s.settled = true
 		return nil
 	}

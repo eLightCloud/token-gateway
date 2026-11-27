@@ -137,7 +137,7 @@ func newRelayHarness(t *testing.T) *relayHarness {
 	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}, &model.Log{}, &model.Option{}, &model.Task{}, &model.QuotaData{},
 		&model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.UserAccessToken{},
 		&model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{},
-		&model.TaskSettlementJournal{}, &model.SystemTask{}))
+		&model.TaskSettlementJournal{}, &model.WalletReminder{}, &model.SystemTask{}))
 	previousMemory, previousLog, previousBatch, previousTimeout := common.MemoryCacheEnabled, common.LogConsumeEnabled, common.BatchUpdateEnabled, constant.StreamingTimeout
 	common.MemoryCacheEnabled, common.LogConsumeEnabled, common.BatchUpdateEnabled, constant.StreamingTimeout = true, true, false, 30
 	t.Cleanup(func() {

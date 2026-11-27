@@ -71,6 +71,7 @@ func TestMain(m *testing.M) {
 		&model.Task{},
 		&model.Midjourney{},
 		&model.User{},
+		&model.WalletReminder{},
 		&model.Token{},
 		&model.Log{},
 		&model.Channel{},
@@ -119,6 +120,7 @@ func truncate(t *testing.T) {
 		}
 		model.DB.Exec("DELETE FROM tasks")
 		model.DB.Exec("DELETE FROM midjourneys")
+		model.DB.Exec("DELETE FROM wallet_reminders")
 		model.DB.Exec("DELETE FROM users")
 		model.DB.Exec("DELETE FROM tokens")
 		model.DB.Exec("DELETE FROM logs")

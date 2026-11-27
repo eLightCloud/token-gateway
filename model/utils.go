@@ -66,7 +66,7 @@ func batchUpdate() {
 	hasData := false
 	for i := range BatchUpdateTypeCount {
 		batchUpdateLocks[i].Lock()
-		if len(batchUpdateStores[i]) > 0 {
+		if len(batchUpdateStores[i]) > 0 || (i == BatchUpdateTypeUserQuota && len(walletSettlementObservations) > 0) {
 			hasData = true
 			batchUpdateLocks[i].Unlock()
 			break
@@ -80,9 +80,14 @@ func batchUpdate() {
 
 	common.SysLog(common.LogText("batch update started"))
 	stores := make([]map[int]int64, BatchUpdateTypeCount)
+	var walletObservations map[int]walletSettlementObservation
 	for i := range BatchUpdateTypeCount {
 		batchUpdateLocks[i].Lock()
 		stores[i] = batchUpdateStores[i]
+		if i == BatchUpdateTypeUserQuota {
+			walletObservations = walletSettlementObservations
+			walletSettlementObservations = make(map[int]walletSettlementObservation)
+		}
 		batchUpdateStores[i] = make(map[int]int64)
 		batchUpdateLocks[i].Unlock()
 	}
@@ -119,7 +124,12 @@ func batchUpdate() {
 		userIDs[key] = struct{}{}
 	}
 	for key := range userIDs {
-		updateUserQuotaUsedQuotaAndRequestCount(key, userQuotaStore[key], usedQuotaStore[key], requestCountStore[key])
+		if !updateUserQuotaUsedQuotaAndRequestCount(key, userQuotaStore[key], usedQuotaStore[key], requestCountStore[key]) {
+			delete(walletObservations, key)
+		}
+	}
+	for key, observation := range walletObservations {
+		observeCommittedLegacyWallet(key, observation)
 	}
 	common.SysLog(common.LogText("batch update finished"))
 }

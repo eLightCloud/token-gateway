@@ -313,7 +313,7 @@ func TestOrganizationInvoiceWorkerDatabaseMatrix(t *testing.T) {
 			})
 			require.NoError(t, model.EnsureOrganizationInvoiceSummaryTables())
 			require.NoError(t, model.EnsureOrganizationUsageTables())
-			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.Midjourney{}, &model.User{}, &model.Token{}, &model.Log{}, &model.Channel{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.OrganizationBillingSettlementRule{}, &model.TaskSettlementJournal{}, &model.UserQuotaAdjustment{}, &model.UserQuotaAdjustmentLegacyFact{}, &model.Checkin{}, &model.Redemption{}, &model.TopUp{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.SystemTask{}, &model.SystemTaskLock{}))
+			require.NoError(t, db.AutoMigrate(&model.Task{}, &model.Midjourney{}, &model.User{}, &model.Token{}, &model.Log{}, &model.Channel{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.OrganizationBillingSettlementRule{}, &model.TaskSettlementJournal{}, &model.WalletReminder{}, &model.UserQuotaAdjustment{}, &model.UserQuotaAdjustmentLegacyFact{}, &model.Checkin{}, &model.Redemption{}, &model.TopUp{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.SystemTask{}, &model.SystemTaskLock{}))
 			require.NoError(t, db.AutoMigrate(
 				&model.Ability{}, &model.RealtimePricingHead{}, &model.RealtimePricingRule{},
 				&model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.ResellerIdentity{},

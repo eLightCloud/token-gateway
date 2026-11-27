@@ -314,8 +314,10 @@ export function EmailSettingsSection({
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>
-                          {t('Default reminder threshold')} (
-                          {getCurrencyLabel()})
+                          {t(
+                            'Default threshold for subscriptions and daily summaries'
+                          )}{' '}
+                          ({getCurrencyLabel()})
                         </FormLabel>
                         <FormControl>
                           <Input

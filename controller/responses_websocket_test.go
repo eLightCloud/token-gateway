@@ -88,7 +88,7 @@ func setupResponsesWSRequestTest(t *testing.T) (*model.User, *model.Token) {
 		setting.ModelRequestRateLimitMutex.Unlock()
 		require.NoError(t, sqlDB.Close())
 	})
-	require.NoError(t, db.AutoMigrate(&model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.User{}, &model.Token{}, &model.TaskSettlementJournal{}, &model.SystemTask{}, &model.SystemTaskLock{}))
+	require.NoError(t, db.AutoMigrate(&model.RealtimePricingHead{}, &model.RealtimePricingRule{}, &model.RealtimePricingHistory{}, &model.RealtimePricingState{}, &model.ResellerConfigHead{}, &model.ResellerModelConfig{}, &model.Organization{}, &model.OrganizationMember{}, &model.OrganizationDiscountSnapshot{}, &model.User{}, &model.Token{}, &model.TaskSettlementJournal{}, &model.WalletReminder{}, &model.SystemTask{}, &model.SystemTaskLock{}))
 	user := &model.User{Username: "responses-ws-user", Status: common.UserStatusEnabled, Group: "default", Quota: 1000, AuthVersion: 1}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		// Separate quota buckets across temporary databases: the in-memory

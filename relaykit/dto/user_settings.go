@@ -1,7 +1,8 @@
 package dto
 
 type UserSetting struct {
-	NotifyType                       string  `json:"notify_type,omitempty"`                          // QuotaWarningType 额度预警类型
+	NotifyType                       string  `json:"notify_type,omitempty"` // QuotaWarningType 额度预警类型
+	QuotaWarningMode                 string  `json:"quota_warning_mode,omitempty"`
 	QuotaWarningThreshold            float64 `json:"quota_warning_threshold,omitempty"`              // QuotaWarningThreshold 额度预警阈值
 	QuotaWarningEnabled              *bool   `json:"quota_warning_enabled,omitempty"`                // 是否接收余额不足提醒，未设置时接收
 	WebhookUrl                       string  `json:"webhook_url,omitempty"`                          // WebhookUrl webhook地址
@@ -19,6 +20,12 @@ type UserSetting struct {
 	BillingPreference                string  `json:"billing_preference,omitempty"`                   // BillingPreference 扣费策略（订阅/钱包）
 	Language                         string  `json:"language,omitempty"`                             // Language 用户语言偏好 (zh, en)
 }
+
+const (
+	QuotaWarningModeTiers  = "tiers"
+	QuotaWarningModeStep   = "step"
+	QuotaWarningModeCustom = "custom"
+)
 
 var (
 	NotifyTypeEmail   = "email"   // Email 邮件

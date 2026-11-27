@@ -154,7 +154,6 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		logger.LogError(ctx, fmt.Sprintf("failed to charge violation fee: %s", err.Error()))
 		return false
 	}
-	checkAndSendQuotaNotify(relayInfo, feeQuota, 0)
 
 	return true
 }

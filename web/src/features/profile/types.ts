@@ -94,6 +94,7 @@ export interface UserProfile {
  * Notification type
  */
 export type NotifyType = 'email' | 'webhook' | 'bark' | 'gotify'
+export type WalletReminderMode = 'tiers' | 'step' | 'custom'
 
 /**
  * Parsed user settings
@@ -102,6 +103,7 @@ export interface UserSettings {
   /** Notification type */
   notify_type?: NotifyType
   /** Quota warning threshold in quota units; 0 or absent uses the site default */
+  quota_warning_mode?: WalletReminderMode
   quota_warning_threshold?: number
   /** Receive low balance reminders; absent means on */
   quota_warning_enabled?: boolean
@@ -159,6 +161,7 @@ export interface EmailBindingFlow extends AccountSecurityResult {
  */
 export interface UpdateUserSettingsRequest {
   notify_type?: string
+  quota_warning_mode?: WalletReminderMode
   quota_warning_threshold?: number
   quota_warning_enabled?: boolean
   webhook_url?: string

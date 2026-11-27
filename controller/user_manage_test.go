@@ -1519,6 +1519,22 @@ func TestUpdateUserSettingKeepsWhatTheRequestLeavesOut(t *testing.T) {
 			want:        kept(dto.UserSetting{NotifyType: dto.NotifyTypeEmail, QuotaWarningEnabled: &on, ChannelNotifyEnabled: &on, UpstreamModelUpdateNotifyEnabled: true}),
 		},
 		{
+			name:        "user selects wallet reminders every ten dollars",
+			role:        common.RoleCommonUser,
+			body:        `{"notify_type":"email","quota_warning_mode":"step","quota_warning_enabled":true}`,
+			wantSuccess: true,
+			want: kept(dto.UserSetting{
+				NotifyType: dto.NotifyTypeEmail, QuotaWarningMode: dto.QuotaWarningModeStep, QuotaWarningEnabled: &on,
+				ChannelNotifyEnabled: &on, UpstreamModelUpdateNotifyEnabled: true,
+			}),
+		},
+		{
+			name: "invalid wallet reminder mode",
+			role: common.RoleCommonUser,
+			body: `{"notify_type":"email","quota_warning_mode":"weekly"}`,
+			want: stored,
+		},
+		{
 			name: "negative threshold",
 			role: common.RoleCommonUser,
 			body: `{"notify_type":"email","quota_warning_threshold":-1}`,

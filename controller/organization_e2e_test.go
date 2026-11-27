@@ -147,6 +147,7 @@ func setupOrganizationE2E(t *testing.T) (organizationE2EFixture, *gin.Engine) {
 		&model.HeavyStatsPermit{},
 		&model.OrganizationInvoiceLogRetention{},
 		&model.TaskSettlementJournal{},
+		&model.WalletReminder{},
 		&model.SystemTask{},
 		&model.SystemTaskLock{},
 		&model.UserQuotaAdjustment{},

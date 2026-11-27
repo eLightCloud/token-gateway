@@ -93,11 +93,10 @@ func settleBillingAndRecordConsumeLog(ctx *gin.Context, relayInfo *relaycommon.R
 		requestCtx = ctx.Request.Context()
 	}
 	if session, ok := relayInfo.Billing.(*BillingSession); ok {
-		expectedQuota := session.GetPreConsumedQuota()
 		if err := session.settle(requestCtx, actualQuota, relayInfo.ChannelId, applyUsage, &logParams); err != nil {
 			return err
 		}
-		notifyBillingSettlement(relayInfo, actualQuota, expectedQuota)
+		notifySubscriptionSettlement(relayInfo, actualQuota)
 		if ctx != nil {
 			common.SetContextKey(ctx, constant.ContextKeyConsumeLog, &params)
 		}
@@ -131,7 +130,7 @@ func settleBillingAndRecordConsumeLog(ctx *gin.Context, relayInfo *relaycommon.R
 	}, &logParams); err != nil {
 		return err
 	}
-	notifyBillingSettlement(relayInfo, actualQuota, expectedQuota)
+	notifySubscriptionSettlement(relayInfo, actualQuota)
 	if ctx != nil {
 		common.SetContextKey(ctx, constant.ContextKeyConsumeLog, &params)
 	}
@@ -158,11 +157,10 @@ func SettleTaskSubmissionBilling(ctx *gin.Context, relayInfo *relaycommon.RelayI
 		requestCtx = ctx.Request.Context()
 	}
 	if session, ok := relayInfo.Billing.(*BillingSession); ok {
-		expectedQuota := session.GetPreConsumedQuota()
 		if err := session.settleTaskSubmission(requestCtx, actualQuota, task, &logParams); err != nil {
 			return err
 		}
-		notifyBillingSettlement(relayInfo, actualQuota, expectedQuota)
+		notifySubscriptionSettlement(relayInfo, actualQuota)
 		return nil
 	}
 	if relayInfo.Billing != nil {
@@ -198,7 +196,7 @@ func SettleTaskSubmissionBilling(ctx *gin.Context, relayInfo *relaycommon.RelayI
 		return err
 	}
 	task.Quota = actualQuota
-	notifyBillingSettlement(relayInfo, actualQuota, 0)
+	notifySubscriptionSettlement(relayInfo, actualQuota)
 	return nil
 }
 
@@ -251,19 +249,14 @@ func SettleMidjourneySubmissionBilling(ctx *gin.Context, relayInfo *relaycommon.
 		return err
 	}
 	task.Quota = actualQuota
-	notifyBillingSettlement(relayInfo, actualQuota, relayInfo.FinalPreConsumedQuota)
+	notifySubscriptionSettlement(relayInfo, actualQuota)
 	return nil
 }
 
-func notifyBillingSettlement(relayInfo *relaycommon.RelayInfo, actualQuota int, preConsumedQuota int) {
-	if relayInfo == nil || actualQuota == 0 {
-		return
-	}
-	if relayInfo.BillingSource == BillingSourceSubscription {
+func notifySubscriptionSettlement(relayInfo *relaycommon.RelayInfo, actualQuota int) {
+	if relayInfo != nil && actualQuota > 0 && relayInfo.BillingSource == BillingSourceSubscription {
 		checkAndSendSubscriptionQuotaNotify(relayInfo)
-		return
 	}
-	checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumedQuota, preConsumedQuota)
 }
 
 // ApplyOneShotBillingAndRecordConsumeLog durably charges a request which did
@@ -340,14 +333,7 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 			return err
 		}
 
-		// 发送额度通知（订阅计费使用订阅剩余额度）
-		if actualQuota != 0 {
-			if relayInfo.BillingSource == BillingSourceSubscription {
-				checkAndSendSubscriptionQuotaNotify(relayInfo)
-			} else {
-				checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumed, preConsumed)
-			}
-		}
+		notifySubscriptionSettlement(relayInfo, actualQuota)
 		return nil
 	}
 

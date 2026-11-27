@@ -107,7 +107,7 @@ func TestTaskPluginDeleteBusinessLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			sqlDB.SetMaxOpenConns(1)
 			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-			require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Log{}, &model.TaskSettlementJournal{}, &model.Organization{}, &model.OrganizationMember{}))
+			require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Log{}, &model.TaskSettlementJournal{}, &model.WalletReminder{}, &model.Organization{}, &model.OrganizationMember{}))
 			oldLogDB, oldRedis, oldMemory, oldBatch, oldLogs := model.LOG_DB, common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled
 			model.LOG_DB, common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled = model.DB, false, false, false, true
 			t.Cleanup(func() {

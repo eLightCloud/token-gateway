@@ -74,7 +74,7 @@ email.security_event.login_unlinked: "已解綁登入帳號"
 email.security_event.wechat_linked: "已綁定微信帳號"
 
 # Low-quota notices
-notify.quota_low_title: "您的額度即將用盡"
+notify.wallet_below_threshold: "錢包餘額低於 {{.Threshold}}"
 notify.subscription_quota_low_title: "您的訂閱額度即將用盡"
 notify.quota_low_bark: "{{.Prompt}}，剩餘額度：{{.Quota}}，請及時儲值"
 notify.quota_low_gotify: "{{.Prompt}}，目前剩餘額度為 {{.Quota}}，請及時儲值。"

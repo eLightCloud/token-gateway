@@ -42,6 +42,9 @@ export function normalizeUserSettings(
       ?.value ?? 'email'
   return {
     notify_type: notifyType,
+    quota_warning_mode:
+      parsed.quota_warning_mode ??
+      ((parsed.quota_warning_threshold ?? 0) > 0 ? 'custom' : 'tiers'),
     quota_warning_threshold: parsed.quota_warning_threshold ?? 0,
     quota_warning_enabled: parsed.quota_warning_enabled,
     notification_email: parsed.notification_email ?? '',
