@@ -39,6 +39,7 @@ func SetApiRouter(router *gin.Engine) {
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
 		apiRouter.GET("/pricing", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricing)
+		apiRouter.GET("/pricing/catalog", middleware.ModelCatalogNoStore, middleware.HeaderNavModuleAuth("pricing"), controller.GetModelCatalog)
 		perfMetricsRoute := apiRouter.Group("/perf-metrics")
 		perfMetricsRoute.Use(middleware.HeaderNavModulePublicOrUserAuth("pricing"))
 		{
@@ -472,6 +473,8 @@ func SetApiRouter(router *gin.Engine) {
 			vendorRoute.POST("/operations", controller.ApplyVendorOperation)
 			vendorRoute.GET("/", controller.GetAllVendors)
 			vendorRoute.GET("/search", controller.SearchVendors)
+			vendorRoute.GET("/catalog-regions", controller.GetVendorCatalogRegions)
+			vendorRoute.PUT("/catalog-regions", controller.UpdateVendorCatalogRegion)
 			vendorRoute.GET("/:id", controller.GetVendorMeta)
 			vendorRoute.POST("/", controller.CreateVendorMeta)
 			vendorRoute.PUT("/", controller.UpdateVendorMeta)

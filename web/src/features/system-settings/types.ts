@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { ModelVisibilityOptions } from './general/model-visibility-options'
+
 export type SystemOption = {
   key: string
   value: string
@@ -398,7 +400,7 @@ export type OperationsSettings = {
   'perf_metrics_setting.flush_interval': number
   'perf_metrics_setting.bucket_time': 'hour' | 'minute' | '5min'
   'perf_metrics_setting.retention_days': number
-}
+} & ModelVisibilityOptions
 
 export type SecuritySettings = {
   ModelRequestRateLimitEnabled: boolean

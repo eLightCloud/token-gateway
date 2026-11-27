@@ -75,9 +75,8 @@ func ResellerDashboardAllowed(userID int, path string) error {
 		if !account.Enabled || user.Status != common.UserStatusEnabled {
 			return ErrResellerOperatorDisabled
 		}
-		// A receives only dedicated own-customer management, never ordinary admin,
-		// credentials, personal wallet, organization or log endpoints.
-		if strings.HasPrefix(path, "/api/reseller/self/") || path == "/api/security/factor/replace" {
+		// Active agents can also view the read-only model catalog.
+		if strings.HasPrefix(path, "/api/reseller/self/") || path == "/api/security/factor/replace" || path == "/api/pricing/catalog" {
 			return nil
 		}
 	}

@@ -24,6 +24,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { api, type ApiRequestConfig } from '@/lib/api'
 
+import { VendorCatalogRegionsDialog } from '../components/dialogs/vendor-catalog-regions-dialog'
 import { VendorMutateDialog } from '../components/dialogs/vendor-mutate-dialog'
 import { VendorOperationDialog } from '../components/dialogs/vendor-operation-dialog'
 import { VendorLinkedModels } from '../components/vendor-linked-models'
@@ -330,5 +331,74 @@ describe('vendor management', () => {
     expect(
       screen.queryByRole('button', { name: 'Apply changes' })
     ).not.toBeInTheDocument()
+  })
+})
+
+it('previews, saves, and restores the automatic vendor region', async () => {
+  const endpoint = '/api/vendors/catalog-regions'
+  let region = 'overseas'
+  let source = 'built_in'
+  const load = vi.spyOn(api, 'get').mockImplementation(async () => ({
+    data: {
+      success: true,
+      data: [
+        {
+          name: 'Google',
+          region,
+          automatic_region: 'overseas',
+          source,
+          models: ['gemini-example'],
+        },
+      ],
+    },
+  }))
+  const save = vi.spyOn(api, 'put').mockImplementation(async (_, input) => {
+    const restore = (input as { region: string }).region === 'auto'
+    region = restore ? 'overseas' : 'domestic'
+    source = restore ? 'built_in' : 'override'
+    return { data: { success: true } }
+  })
+  renderWithClient(<VendorCatalogRegionsDialog />)
+  expect(load).not.toHaveBeenCalled()
+
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('button', { name: 'Vendor regions' }))
+  await user.click(await screen.findByRole('combobox', { name: 'Vendor' }))
+  await user.click(await screen.findByRole('option', { name: 'Google' }))
+  const classification = screen.getByLabelText('Classification')
+  const saveButton = screen.getByRole('button', { name: 'Save changes' })
+  expect(classification).toHaveValue('auto')
+  expect(saveButton).toBeDisabled()
+
+  await user.selectOptions(classification, 'domestic')
+  expect(
+    screen.getByText('These models will appear in the visitor catalog.')
+  ).toBeVisible()
+  expect(screen.getByText('gemini-example')).toBeVisible()
+  expect(save).not.toHaveBeenCalled()
+  await user.click(saveButton)
+  expect(
+    await screen.findByText(
+      'Current classification: Domestic (Administrator override)'
+    )
+  ).toBeVisible()
+  expect(save).toHaveBeenNthCalledWith(1, endpoint, {
+    name: 'Google',
+    region: 'domestic',
+  })
+
+  await user.selectOptions(classification, 'auto')
+  expect(
+    screen.getByText('These models will be removed from the visitor catalog.')
+  ).toBeVisible()
+  await user.click(saveButton)
+  expect(
+    await screen.findByText(
+      'Current classification: Overseas (Built-in classification)'
+    )
+  ).toBeVisible()
+  expect(save).toHaveBeenNthCalledWith(2, endpoint, {
+    name: 'Google',
+    region: 'auto',
   })
 })

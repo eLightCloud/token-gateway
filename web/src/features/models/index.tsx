@@ -31,6 +31,7 @@ import { listDeployments } from './api'
 import { DeploymentAccessGuard } from './components/deployment-access-guard'
 import { DeploymentsTable } from './components/deployments-table'
 import { CreateDeploymentDrawer } from './components/dialogs/create-deployment-drawer'
+import { VendorCatalogRegionsDialog } from './components/dialogs/vendor-catalog-regions-dialog'
 import { ModelsDialogs } from './components/models-dialogs'
 import { ModelsPrimaryButtons } from './components/models-primary-buttons'
 import { ModelsProvider, useModels } from './components/models-provider'
@@ -96,16 +97,19 @@ function ModelsContent() {
   let content = <ModelsTable />
   if (activeSection === 'vendors') {
     actions = (
-      <Button
-        size='sm'
-        onClick={() => {
-          setCurrentVendor(null)
-          setOpen('create-vendor')
-        }}
-      >
-        <Plus className='size-4' />
-        {t('Add Vendor')}
-      </Button>
+      <>
+        <VendorCatalogRegionsDialog />
+        <Button
+          size='sm'
+          onClick={() => {
+            setCurrentVendor(null)
+            setOpen('create-vendor')
+          }}
+        >
+          <Plus className='size-4' />
+          {t('Add Vendor')}
+        </Button>
+      </>
     )
     content = <VendorsTable />
   } else if (activeSection === 'deployments') {
@@ -122,7 +126,7 @@ function ModelsContent() {
     <>
       <SectionPageLayout
         fixedContent
-        stackActionsOnMobile={activeSection === 'metadata'}
+        stackActionsOnMobile={activeSection !== 'deployments'}
       >
         <SectionPageLayout.Title>{t(meta.titleKey)}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>{actions}</SectionPageLayout.Actions>

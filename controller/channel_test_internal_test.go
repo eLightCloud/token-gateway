@@ -284,8 +284,10 @@ func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 
 	info := &relaycommon.RelayInfo{
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode: "tiered_expr",
-			ExprString:  `tier("base", p * 2)`,
+			BillingMode:     "tiered_expr",
+			ExprString:      `v2:tier("base", p * cny_to_usd(7.30))`,
+			CNYExchangeRate: 7.3,
+			QuotaPerUnit:    500000,
 		},
 		ChannelMeta: &relaycommon.ChannelMeta{},
 	}
@@ -304,8 +306,9 @@ func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 		Matched:    true,
 	}}
 	other := buildTestLogOther(ctx, info, priceData, usage, &billingexpr.TieredResult{
-		MatchedTier:  "base",
-		RequestRules: requestRules,
+		MatchedTier:           "base",
+		RequestRules:          requestRules,
+		ActualQuotaAfterGroup: 50000,
 	})
 
 	fields := other.Snapshot()
@@ -313,6 +316,7 @@ func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 	require.Equal(t, "base", fields["matched_tier"])
 	require.Equal(t, requestRules, fields["request_rules"])
 	require.NotEmpty(t, fields["expr_b64"])
+	require.Nil(t, model.LogMoneySnapshot(other.JSONString()), "channel tests do not debit the wallet")
 }
 
 func TestResolveChannelTestUserIDUsesRequestUser(t *testing.T) {

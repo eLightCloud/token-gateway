@@ -37,15 +37,32 @@ export type OperationsDelivery = {
 }
 export type OperationsResponse = {
   settings: OperationsSettings
-  deliveries: OperationsDelivery[]
   runtime: { mail_ready: boolean; paused: boolean }
 }
 type Response<T> = { success: boolean; data: T; message?: string }
 export const operationsQueryKey = ['operations-notifications']
 export async function getOperations() {
   const response = await api.get<Response<OperationsResponse>>(
-    '/api/option/operations'
+    '/api/option/operations',
+    { params: { scope: 'settings' } }
   )
+  return requireServerSuccess(response.data).data
+}
+export const operationsDeliveriesQueryKey = [
+  'operations-notification-deliveries',
+]
+export async function getOperationsDeliveries(
+  page: number,
+  pageSize: number,
+  signal: AbortSignal
+) {
+  const response = await api.get<
+    Response<{ items: OperationsDelivery[]; total: number }>
+  >('/api/option/operations', {
+    params: { scope: 'deliveries', p: page, page_size: pageSize },
+    signal,
+    disableDuplicate: true,
+  })
   return requireServerSuccess(response.data).data
 }
 export async function saveOperations(settings: OperationsSettings) {

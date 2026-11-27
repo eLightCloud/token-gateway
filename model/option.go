@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/model_visibility"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -205,6 +206,8 @@ func InitOptionMap() {
 // the options in memory as they are.
 func LoadOptionsFromDatabase() error {
 	defer RefreshEmailDeliveryConfig()
+	modelVisibilityOptionMutex.Lock()
+	defer modelVisibilityOptionMutex.Unlock()
 	resendDeliveryOptionsMu.Lock()
 	defer resendDeliveryOptionsMu.Unlock()
 	requestPolicyOptionMutex.Lock()
@@ -265,6 +268,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if _, managed, err := model_visibility.NormalizeOption(key, value); managed {
+		return err
+	}
 	if key == legacyAccessTokenRetireAtKey {
 		return errLegacyRetireAtReadOnly
 	}
@@ -316,6 +322,12 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if normalized, managed, err := model_visibility.NormalizeOption(key, value); managed {
+		if err != nil {
+			return err
+		}
+		return UpdateOptionsBulk(map[string]string{key: normalized})
+	}
 	if key == "USDExchangeRate" {
 		return UpdateOptionsBulk(map[string]string{key: value})
 	}
@@ -356,6 +368,16 @@ func UpdateOption(key string, value string) error {
 func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
+	}
+	if _, exists := values[model_visibility.VendorRegionsOption]; exists {
+		return common.NewMessage("Manage vendor regions from Vendor management")
+	}
+	for key := range values {
+		if model_visibility.IsOption(key) {
+			modelVisibilityOptionMutex.Lock()
+			defer modelVisibilityOptionMutex.Unlock()
+			break
+		}
 	}
 	for key := range values {
 		if IsPasskeyDomainOption(key) {

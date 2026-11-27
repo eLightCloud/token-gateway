@@ -36,6 +36,7 @@ import { useTranslation } from 'react-i18next'
 import { CopyButton } from '@/components/copy-button'
 import { StaticDataTable } from '@/components/data-table'
 import { sideDrawerContentClassName } from '@/components/drawer-layout'
+import { ErrorState } from '@/components/error-state'
 import { GroupBadge } from '@/components/group-badge'
 import { PublicLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
@@ -59,12 +60,12 @@ import { PluginIcon } from '@/features/task-plugins/components/plugin-icon'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { DEFAULT_TOKEN_UNIT } from '../constants'
 import { useBillingTime } from '../hooks/use-billing-time'
-import { usePricingData } from '../hooks/use-pricing-data'
+import { useCanViewModelPerformance } from '../hooks/use-can-view-model-performance'
+import { useModelCatalog } from '../hooks/use-model-catalog'
 import type { ParsedTaskTier } from '../lib/billing-expr'
 import { formatBillingCondition } from '../lib/billing-expression/condition-display'
 import {
@@ -1496,9 +1497,7 @@ export interface ModelDetailsContentProps {
 
 export function ModelDetailsContent(props: ModelDetailsContentProps) {
   const { t } = useTranslation()
-  const isCustomer = useAuthStore(
-    (s) => s.auth.user?.reseller_kind === 'agent_customer'
-  )
+  const canViewPerformance = useCanViewModelPerformance()
   const showRechargePrice = props.showRechargePrice ?? false
   // The group pricing tabs list a model-level base price beside the plugin
   // prices.
@@ -1525,11 +1524,11 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
         <TabsList
           className={cn(
             'bg-muted/60 grid w-full gap-1 rounded-lg p-1 group-data-horizontal/tabs:h-auto',
-            isCustomer ? 'grid-cols-2' : 'grid-cols-3'
+            canViewPerformance ? 'grid-cols-3' : 'grid-cols-2'
           )}
         >
           {TAB_VALUES.map((value) => {
-            if (isCustomer && value === 'performance') return null
+            if (!canViewPerformance && value === 'performance') return null
             const Icon = TAB_META[value].icon
             return (
               <TabsTrigger
@@ -1545,7 +1544,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
         </TabsList>
 
         <TabsContent value='overview' className='space-y-6 outline-none'>
-          {!isCustomer && <OverviewSummaryGrid model={props.model} />}
+          {canViewPerformance && <OverviewSummaryGrid model={props.model} />}
 
           <section className='bg-card/60 space-y-5 rounded-xl border p-4 shadow-sm'>
             <SectionTitle>{t('Pricing')}</SectionTitle>
@@ -1585,7 +1584,9 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
         </TabsContent>
 
         <TabsContent value='performance' className='outline-none'>
-          {!isCustomer && <ModelDetailsPerformance model={props.model} />}
+          {canViewPerformance && (
+            <ModelDetailsPerformance model={props.model} />
+          )}
         </TabsContent>
 
         <TabsContent value='api' className='outline-none'>
@@ -1645,9 +1646,11 @@ export function ModelDetails() {
     endpointMap,
     autoGroups,
     isLoading,
+    error,
+    refetch,
     priceRate,
     usdExchangeRate,
-  } = usePricingData()
+  } = useModelCatalog()
 
   const tokenUnit: TokenUnit =
     search.tokenUnit === 'K' ? 'K' : DEFAULT_TOKEN_UNIT
@@ -1682,6 +1685,17 @@ export function ModelDetails() {
             ))}
           </div>
         </div>
+      </PublicLayout>
+    )
+  }
+
+  if (!model && error) {
+    return (
+      <PublicLayout>
+        <ErrorState
+          title={t('Failed to load models')}
+          onRetry={() => void refetch()}
+        />
       </PublicLayout>
     )
   }

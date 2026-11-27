@@ -20,6 +20,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 
+import { MODEL_CATALOG_QUERY_KEY } from '@/features/pricing/hooks/use-model-catalog'
 import { handleServerError } from '@/lib/handle-server-error'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
@@ -61,6 +62,11 @@ export function useUpdateOption() {
       if (data.success) {
         // Always refresh system-options
         queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        if (variables.key.startsWith('model_visibility.')) {
+          void queryClient.invalidateQueries({
+            queryKey: MODEL_CATALOG_QUERY_KEY,
+          })
+        }
 
         // If updating frontend-display-related config, also refresh status
         if (STATUS_RELATED_KEYS.has(variables.key)) {

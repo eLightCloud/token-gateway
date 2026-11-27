@@ -39,11 +39,17 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { ModelVisibilityFields } from './model-visibility-fields'
+import {
+  modelVisibilitySchema,
+  modelVisibilityOptionKeys,
+} from './model-visibility-options'
 
 const behaviorSchema = z.object({
   DefaultCollapseSidebar: z.boolean(),
   DemoSiteEnabled: z.boolean(),
   SelfUseModeEnabled: z.boolean(),
+  ...modelVisibilitySchema.shape,
 })
 
 type BehaviorFormValues = z.infer<typeof behaviorSchema>
@@ -71,7 +77,11 @@ export function SystemBehaviorSection({
     )
 
     for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value })
+      const optionKey =
+        modelVisibilityOptionKeys[
+          key as keyof typeof modelVisibilityOptionKeys
+        ] ?? key
+      await updateOption.mutateAsync({ key: optionKey, value })
     }
   }
 
@@ -145,6 +155,7 @@ export function SystemBehaviorSection({
               </SettingsSwitchItem>
             )}
           />
+          <ModelVisibilityFields />
         </SettingsForm>
       </Form>
     </SettingsSection>

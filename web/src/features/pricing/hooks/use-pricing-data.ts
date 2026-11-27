@@ -23,16 +23,21 @@ import { useStatus } from '@/hooks/use-status'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getPricing } from '../api'
+import type { PricingData } from '../types'
 
 export function usePricingData(enabled = true) {
-  const { status } = useStatus()
-
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['pricing'],
     queryFn: async () => requireServerSuccess(await getPricing()),
     staleTime: 5 * 60 * 1000,
     enabled,
   })
+
+  return { ...usePricingView(data), isLoading, error, refetch }
+}
+
+export function usePricingView(data: PricingData | undefined) {
+  const { status } = useStatus()
 
   // Ensure rates never reach zero to prevent division errors
   const priceRate = useMemo(
@@ -71,9 +76,6 @@ export function usePricingData(enabled = true) {
     usableGroup: data?.usable_group ?? {},
     endpointMap: data?.supported_endpoint ?? {},
     autoGroups: data?.auto_groups ?? [],
-    isLoading,
-    error,
-    refetch,
     priceRate,
     usdExchangeRate,
   }

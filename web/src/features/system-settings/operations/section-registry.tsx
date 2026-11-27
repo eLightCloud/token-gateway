@@ -48,6 +48,8 @@ const OPERATIONS_SECTIONS = [
           DefaultCollapseSidebar: settings.DefaultCollapseSidebar,
           DemoSiteEnabled: settings.DemoSiteEnabled,
           SelfUseModeEnabled: settings.SelfUseModeEnabled,
+          domesticModelsOnly: settings['model_visibility.domestic_only'],
+          discountedModelsOnly: settings['model_visibility.discounted_only'],
         }}
       />
     ),

@@ -18,14 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { z } from 'zod'
 
-import { ConfirmDialog } from '@/components/confirm-dialog'
-import { StaticDataTable } from '@/components/data-table'
-import { Dialog } from '@/components/dialog'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
@@ -38,13 +34,6 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import {
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import {
@@ -53,13 +42,12 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsSection } from '../components/settings-section'
 import {
-  type OperationsDelivery,
   type OperationsResponse,
   getOperations,
   operationsQueryKey,
-  retryOperationsDelivery,
   saveOperations,
 } from './api'
+import { OperationsDeliveries } from './operations-deliveries'
 
 const schema = z.object({
   daily_enabled: z.boolean(),
@@ -98,8 +86,6 @@ function OperationsForm(props: { data: OperationsResponse }) {
     resolver: zodResolver(schema),
     defaultValues: props.data.settings,
   })
-  const [selected, setSelected] = useState<OperationsDelivery | null>(null)
-  const [retry, setRetry] = useState<OperationsDelivery | null>(null)
   const save = useMutation({
     mutationFn: saveOperations,
     onSuccess: async (settings) => {
@@ -108,29 +94,6 @@ function OperationsForm(props: { data: OperationsResponse }) {
     },
     onError: (error) => handleServerError(error),
   })
-  const resend = useMutation({
-    mutationFn: retryOperationsDelivery,
-    onSuccess: async () => {
-      setRetry(null)
-      await client.invalidateQueries({ queryKey: operationsQueryKey })
-    },
-    onError: (error) => handleServerError(error),
-  })
-  const statusLabels: Record<string, string> = {
-    pending: t('Notification status: pending'),
-    preview: t('Notification status: preview'),
-    sending: t('Notification status: sending'),
-    accepted: t('Notification status: accepted'),
-    failed: t('Notification status: failed'),
-    unknown: t('Notification status: unknown'),
-    skipped: t('Notification status: skipped'),
-  }
-  const preview = selected
-    ? new DOMParser().parseFromString(
-        selected.body.replaceAll(/<\/(p|h2)>/g, '\n'),
-        'text/html'
-      ).body.textContent
-    : ''
   return (
     <SettingsSection title={t('Operations notifications')}>
       <p className='text-muted-foreground text-sm'>
@@ -223,102 +186,7 @@ function OperationsForm(props: { data: OperationsResponse }) {
           </Button>
         </SettingsForm>
       </Form>
-      <div className='flex items-center justify-between gap-3'>
-        <h4 className='text-sm font-medium'>
-          {t('Recent notification deliveries')}
-        </h4>
-        <Button
-          variant='outline'
-          size='sm'
-          onClick={() =>
-            void client.invalidateQueries({ queryKey: operationsQueryKey })
-          }
-        >
-          {t('Refresh')}
-        </Button>
-      </div>
-      <StaticDataTable tableClassName='min-w-[600px]'>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{t('Date')}</TableHead>
-            <TableHead>{t('Recipient')}</TableHead>
-            <TableHead>{t('Status')}</TableHead>
-            <TableHead>{t('Actions')}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {props.data.deliveries.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={4}>
-                {t('No notification deliveries yet.')}
-              </TableCell>
-            </TableRow>
-          )}
-          {props.data.deliveries.map((delivery) => (
-            <TableRow key={delivery.key}>
-              <TableCell>{delivery.day}</TableCell>
-              <TableCell className='max-w-56 truncate'>
-                {delivery.recipient || t('Unavailable')}
-              </TableCell>
-              <TableCell>
-                {statusLabels[delivery.status] ?? t('Unavailable')}
-                {delivery.reason && (
-                  <p className='text-muted-foreground text-xs'>
-                    {delivery.reason}
-                  </p>
-                )}
-              </TableCell>
-              <TableCell>
-                <div className='flex gap-2'>
-                  <Button
-                    variant='outline'
-                    size='sm'
-                    onClick={() => setSelected(delivery)}
-                  >
-                    {t('Preview')}
-                  </Button>
-                  {delivery.kind !== 'emergency' &&
-                    ['failed', 'unknown', 'preview'].includes(
-                      delivery.status
-                    ) && (
-                      <Button
-                        variant='outline'
-                        size='sm'
-                        onClick={() => setRetry(delivery)}
-                        disabled={resend.isPending}
-                      >
-                        {t('Retry')}
-                      </Button>
-                    )}
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </StaticDataTable>
-      <Dialog
-        open={selected !== null}
-        onOpenChange={(open) => {
-          if (!open) setSelected(null)
-        }}
-        title={selected?.subject ?? t('Preview')}
-      >
-        <pre className='text-sm break-words whitespace-pre-wrap'>{preview}</pre>
-      </Dialog>
-      <ConfirmDialog
-        open={retry !== null}
-        onOpenChange={(open) => {
-          if (!open) setRetry(null)
-        }}
-        title={t('Retry notification')}
-        desc={t(
-          'An unknown delivery may already have reached the recipient. Retry only after checking. Preview mode never sends daily email.'
-        )}
-        isLoading={resend.isPending}
-        handleConfirm={() => {
-          if (retry) resend.mutate(retry.key)
-        }}
-      />
+      <OperationsDeliveries />
     </SettingsSection>
   )
 }

@@ -24,9 +24,9 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
-import { useAuthStore } from '@/stores/auth-store'
 
 import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
+import { useCanViewModelPerformance } from '../hooks/use-can-view-model-performance'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelCard } from './model-card'
 import type { ModelPerfBadgeData } from './model-perf-badge'
@@ -45,9 +45,7 @@ export const ModelCardGrid = memo(function ModelCardGrid(
   props: ModelCardGridProps
 ) {
   const { t } = useTranslation()
-  const isCustomer = useAuthStore(
-    (s) => s.auth.user?.reseller_kind === 'agent_customer'
-  )
+  const canViewPerformance = useCanViewModelPerformance()
   const [page, setPage] = useState(1)
   const pageSize = DEFAULT_PRICING_PAGE_SIZE
   const tokenUnit = props.tokenUnit ?? DEFAULT_TOKEN_UNIT
@@ -63,7 +61,7 @@ export const ModelCardGrid = memo(function ModelCardGrid(
     queryKey: ['perf-metrics-summary', 24, recentModels],
     queryFn: async () =>
       requireServerSuccess(await getPerfMetricsSummary(24, recentModels)),
-    enabled: !isCustomer && recentModels.length > 0,
+    enabled: canViewPerformance && recentModels.length > 0,
     staleTime: 60 * 1000,
     retry: false,
   })
@@ -107,7 +105,11 @@ export const ModelCardGrid = memo(function ModelCardGrid(
             usdExchangeRate={props.usdExchangeRate}
             showRechargePrice={props.showRechargePrice}
             selectedGroup={props.selectedGroup}
-            perf={isCustomer ? undefined : perfMap.get(model.model_name || '')}
+            perf={
+              canViewPerformance
+                ? perfMap.get(model.model_name || '')
+                : undefined
+            }
             onClick={props.onModelClick}
           />
         ))}

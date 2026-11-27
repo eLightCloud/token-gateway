@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useStatus } from '@/hooks/use-status'
 
 import { SettingsPage } from '../components/settings-page'
+import { modelVisibilityDefaults } from '../general/model-visibility-options'
 import type { OperationsSettings } from '../types'
 import {
   OPERATIONS_DEFAULT_SECTION,
@@ -27,6 +28,7 @@ import {
 } from './section-registry.tsx'
 
 const defaultOperationsSettings: OperationsSettings = {
+  ...modelVisibilityDefaults,
   DefaultCollapseSidebar: false,
   DemoSiteEnabled: false,
   SelfUseModeEnabled: false,

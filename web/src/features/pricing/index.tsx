@@ -19,6 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { EmptyState as CatalogEmptyState } from '@/components/empty-state'
+import { ErrorState } from '@/components/error-state'
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
 
@@ -34,7 +36,7 @@ import {
 } from './components'
 import { EXCLUDED_GROUPS, VIEW_MODES } from './constants'
 import { useFilters } from './hooks/use-filters'
-import { usePricingData } from './hooks/use-pricing-data'
+import { useModelCatalog } from './hooks/use-model-catalog'
 
 export function Pricing() {
   const { t } = useTranslation()
@@ -50,9 +52,12 @@ export function Pricing() {
     endpointMap,
     autoGroups,
     isLoading,
+    discountedOnly,
+    error,
+    refetch,
     priceRate,
     usdExchangeRate,
-  } = usePricingData()
+  } = useModelCatalog()
 
   const {
     searchInput,
@@ -111,6 +116,24 @@ export function Pricing() {
   }, [clearFilters, clearSearch])
 
   const renderPricingContent = () => {
+    if (error && models.length === 0) {
+      return (
+        <ErrorState
+          title={t('Failed to load models')}
+          onRetry={() => void refetch()}
+        />
+      )
+    }
+
+    if (discountedOnly && models.length === 0) {
+      return (
+        <CatalogEmptyState
+          title={t('No discounted models available')}
+          bordered
+        />
+      )
+    }
+
     if (filteredModels.length === 0) {
       return (
         <EmptyState

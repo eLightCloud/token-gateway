@@ -10,19 +10,27 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm/clause"
 )
 
 func GetOperationsNotifications(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 	defer cancel()
+	scope := c.Query("scope")
+	if scope == "deliveries" {
+		getOperationsDeliveryPage(c, ctx)
+		return
+	}
 	settings, err := model.LoadOperationsSettings(ctx)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	if scope == "settings" {
+		common.ApiSuccess(c, gin.H{"settings": settings, "runtime": service.OperationsNotificationStatus()})
+		return
+	}
 	var deliveries []model.OperationsDelivery
-	if err = model.DB.WithContext(ctx).Order("created_at DESC").Order(clause.OrderByColumn{Column: clause.Column{Name: "key"}, Desc: true}).Limit(50).Find(&deliveries).Error; err != nil {
+	if err = operationsDeliveriesQuery(ctx).Limit(50).Find(&deliveries).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
