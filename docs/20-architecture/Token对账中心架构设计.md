@@ -1,7 +1,7 @@
 ---
 status: current
 owner: Dev Team
-last-reviewed: 2026-11-12
+last-reviewed: 2026-11-28
 ---
 
 # Token 账单与人工对账中心架构设计
@@ -168,6 +168,8 @@ completion_tokens = sum(log.completion_tokens)
 CSV 导出复用明细查询的过滤器和行投影，分批读取并通过 HTTP 响应输出，不落库导出任务、不保存 artifact、不创建快照。
 
 导出前再次执行 Root 权限检查。CSV 字段使用明确白名单，不输出 `Log.Other` 原始 JSON、IP、密钥或业务正文。
+
+明细使用各笔消费或退款的换算快照输出历史汇率、历史人民币金额和金额来源。主金额在 USD 或 CNY 展示模式且有快照时使用历史值。CUSTOM 主金额继续按导出时的显示配置折算，仍保留可用的历史人民币列。无快照的明细按导出时显示配置折算主金额，历史两列留空。历史人民币汇总只累计有有效快照的明细，退款冲减消费，并单独统计缺少快照的明细数。原始额度继续用于对账。参见[金额来源投影](../../service/historical_bill_amount.go)。
 
 ## 9. 数据库兼容与性能
 
